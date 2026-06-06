@@ -1,0 +1,27 @@
+# Secrets — never commit real env files.
+.env
+.env.*
+# ...but DO keep the documented template.
+!.env.example
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Node / Vite
+node_modules/
+dist/
+.vite/
+coverage/
+
+# pipeline `make index` artifacts
+pipeline/build/
+
+# OS
+.DS_Store

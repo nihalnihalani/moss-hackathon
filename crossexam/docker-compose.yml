@@ -1,0 +1,40 @@
+# =============================================================================
+# CrossExam — local/dev compose stack
+#   docker compose up --build
+# Runs entirely in mock mode when .env has no Moss/LiveKit keys.
+# =============================================================================
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: crossexam-backend:local
+    # The voice worker. With keys present it connects to LiveKit; without keys
+    # it boots the mock retrieval index and prints guidance (does not crash).
+    env_file:
+      # Optional: the stack runs in mock mode if .env is absent. Copy
+      # .env.example -> .env to provide real Moss/LiveKit credentials.
+      - path: .env
+        required: false
+    environment:
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      # VITE_* are compile-time; forward them so a `docker compose build` bakes
+      # the right config into the static bundle.
+      args:
+        VITE_LIVEKIT_URL: ${VITE_LIVEKIT_URL:-}
+        VITE_LIVEKIT_TOKEN: ${VITE_LIVEKIT_TOKEN:-}
+        VITE_PDF_URL: ${VITE_PDF_URL:-}
+        VITE_MOCK_MODE: ${VITE_MOCK_MODE:-}
+    image: crossexam-frontend:local
+    ports:
+      - "5173:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
