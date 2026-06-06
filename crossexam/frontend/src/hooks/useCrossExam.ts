@@ -27,6 +27,7 @@ import {
   CONTRADICTION_CITATION,
   CONTRADICTION_HOPS,
   CONTRADICTION_TRANSCRIPT,
+  DEMO_CONTRADICTION_QUESTION,
   DEMO_QUESTION,
   DEMO_TOTAL_PAGES,
   MEMORY_RECALL,
@@ -171,6 +172,10 @@ const MOCK_SCRIPT: ScriptStep[] = [
     at: 6200,
     apply: (s) => {
       s.agentState = 'thinking';
+      // The CANONICAL contradiction follow-up: the exact string the live backend
+      // routes multi-hop and resolves to the pdf-p12-l1 + visitor-log cross-doc
+      // pair (mock == live). The first ask stays single-hop above.
+      s.question = DEMO_CONTRADICTION_QUESTION;
       s.caption = ANSWER_TRANSCRIPT;
       // Jump into the SEPARATE exhibit document.
       s.targetPage = CONTRADICTION_CITATION.bbox.page;

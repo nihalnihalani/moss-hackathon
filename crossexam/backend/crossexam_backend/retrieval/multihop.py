@@ -19,9 +19,12 @@ check: two high-confidence citations contradict when they (a) share a temporal
 anchor (the same date/time reference, e.g. "the 14th" / "night of the 14th")
 and (b) assert INCOMPATIBLE locations for the subject at that time (e.g.
 "Harbor Street warehouse" vs. "downtown ... two miles from the warehouse").
-Cross-document conflicting pairs are preferred over same-document ones, so a
-deposition alibi colliding with an independent exhibit is surfaced ahead of an
-in-document inconsistency.
+The selected pair's PRIMARY is the CLEAN presence claim under examination — a
+non-scanned, single-location, non-recant citation in the largest document (the
+deposition alibi) — and its COUNTER is the cross-document separating evidence
+(the exhibit). A scanned corroborating exhibit can only ever be the counter,
+never the anchor, so the page-jump deterministically lands on the deposition
+claim across many phrasings rather than on whichever passage scored highest.
 """
 
 from __future__ import annotations
@@ -49,18 +52,28 @@ _TOKEN_RE = re.compile(r"[a-z0-9]+")
 _CONTRADICTION_CUES = frozenset(
     {
         "contradict",
+        "contradicts",
         "contradicted",
+        "contradicting",
         "contradiction",
+        "contradictions",
         "conflict",
+        "conflicts",
+        "conflicted",
         "conflicting",
         "inconsistent",
         "inconsistency",
+        "inconsistencies",
         "discrepancy",
+        "discrepancies",
         "change",
+        "changes",
         "changed",
         "recant",
+        "recants",
         "recanted",
         "differ",
+        "differs",
         "different",
         "versus",
     }
@@ -157,6 +170,33 @@ _SEPARATION_CUES: tuple[str, ...] = (
     "nowhere near",
     "blocks from",
 )
+
+# Cues that a citation's OWN TEXT narrates a conflict / recant / uncertainty
+# rather than making a clean, first-order presence assertion. A chunk that says
+# "contrary to his earlier testimony", "when confronted with the inconsistency"
+# or "could no longer recall" is describing the dispute, not asserting where the
+# subject was — so it is a poor PRIMARY anchor (the page-jump should land on the
+# clean claim under examination, not on the narration of the clash). General,
+# not pinned to a fixture: any of these framings demotes a citation as anchor.
+_CONFLICT_NARRATION_CUES: tuple[str, ...] = (
+    "contrary to",
+    "inconsistency",
+    "inconsistent",
+    "recant",
+    "no longer recall",
+    "could not recall",
+    "confused",
+    "changed his",
+    "earlier testimony",
+    "contradicts",
+    "contradicted",
+)
+
+
+def _narrates_conflict(text: str) -> bool:
+    """Whether ``text`` narrates a conflict/recant rather than a clean claim."""
+    lowered = text.lower()
+    return any(cue in lowered for cue in _CONFLICT_NARRATION_CUES)
 
 
 def _content_tokens(text: str) -> list[str]:
@@ -372,19 +412,23 @@ def detect_contradiction(
        (warehouse vs. downtown), per :func:`_locations_incompatible`.
 
     SELECTION among all eligible conflicting pairs is a strict, principled
-    priority:
+    priority (see :func:`contradiction_pair`):
 
-    1. pairs with an explicit **separation cue** (one side places the subject a
-       measured distance from a place the other puts them at — the strongest,
-       least-ambiguous "both cannot be true") rank above plain class-difference
-       pairs;
-    2. **cross-document** pairs (an alibi colliding with an independent exhibit)
-       rank above same-document inconsistencies;
-    3. then the highest combined citation score; ties break on chunk id.
+    1. pairs whose PRIMARY is the under-examination presence claim — a CLEAN
+       presence assertion (NOT scanned, no separation cue, a single location
+       class, not narrating a recant) in the largest/under-examination document
+       — rank first, so the anchor is the deposition alibi, never a scanned
+       corroborating exhibit;
+    2. then pairs whose COUNTER carries an explicit **separation cue** (the
+       strongest, least-ambiguous "both cannot be true");
+    3. then **cross-document** pairs (an alibi colliding with an independent
+       exhibit) over same-document inconsistencies;
+    4. then the highest combined citation score; ties break on chunk id.
 
-    The PRIMARY is the *presence-asserting* side — the citation that places the
-    subject AT a location (no separation cue) — so the page-jump lands on the
-    claim under examination, with the separating evidence as the other side.
+    The PRIMARY is the presence claim under examination; the COUNTER is the
+    contradicting evidence (the cross-document separation-cue exhibit), so the
+    page-jump lands on the claim being challenged and a scanned field-note can
+    only ever be the counter.
 
     Args:
         citations: Candidate citations (already fused / ranked).
@@ -408,27 +452,92 @@ def detect_contradiction(
     return True, primary_id, cross_doc
 
 
+def _under_examination_doc(citations: Sequence[Citation]) -> str | None:
+    """The document *under examination* among ``citations``.
+
+    Deterministic and general (no hardcoded ids): the document contributing the
+    MOST citations to the pool is treated as the one being cross-examined (the
+    large deposition, in the canonical case, rather than a one-page exhibit).
+    Ties break on the document id for stability. ``None`` for an empty pool.
+    """
+    counts: dict[str, int] = {}
+    for c in citations:
+        counts[c.documentId] = counts.get(c.documentId, 0) + 1
+    if not counts:
+        return None
+    # Most citations first; ties on documentId for determinism.
+    return min(counts, key=lambda d: (-counts[d], d))
+
+
 def contradiction_pair(
     citations: Sequence[Citation],
 ) -> tuple[str, str, bool] | None:
     """Return the selected conflicting pair ``(primary_id, other_id, cross)``.
 
     Collects all eligible conflicting pairs (shared subject + shared temporal
-    anchor + incompatible locations), then applies the strict selection
-    priority described on :func:`detect_contradiction`:
+    anchor + incompatible locations), assigns each pair a PRIMARY (the presence
+    assertion under examination) and a COUNTER (the contradicting evidence),
+    then selects deterministically.
 
-    1. separation-cue pairs (strongest "both cannot be true") first,
-    2. then cross-document pairs,
-    3. then highest combined score, ties on chunk id.
+    PRIMARY assignment within a pair is principled, not score-greedy: the
+    presence-asserting side (places the subject AT a location — no separation
+    cue) is preferred, and between two presence-asserting sides the anchor is
+    the one that is (a) NOT scanned and (b) from the document under examination
+    (the largest in the pool). A scanned corroborating exhibit is NEVER the
+    anchor — it can only ever be the counter. This keeps the page-jump on the
+    claim being challenged (the deposition alibi) rather than on a scanned
+    field-note that merely happens to score high.
 
-    ``primary_id`` is the presence-asserting (non-separating) side — the claim
-    being challenged — and ``other_id`` is the contradicting evidence, so a
-    caller can keep BOTH in a truncated result. Returns ``None`` when no
-    contradiction is found.
+    SELECTION among pairs, in strict priority:
+
+    1. pairs whose PRIMARY is the under-examination presence claim
+       (non-scanned, in the largest document) rank first, so the anchor is the
+       deposition alibi rather than an exhibit;
+    2. then pairs with an explicit separation cue on the counter (the
+       strongest, least-ambiguous "both cannot be true");
+    3. then cross-document pairs (an alibi colliding with an independent
+       exhibit) over same-document inconsistencies;
+    4. then highest combined score; ties break on chunk id.
+
+    ``primary_id`` is the anchor (claim under examination) and ``other_id`` is
+    the contradicting evidence, so a caller can keep BOTH in a truncated result.
+    Returns ``None`` when no contradiction is found.
     """
     eligible = [c for c in citations if c.score >= _CONTRADICTION_MIN_SCORE]
-    # (separation, cross_document, combined_score, primary_id, other_id).
-    candidates: list[tuple[bool, bool, float, str, str]] = []
+    exam_doc = _under_examination_doc(eligible)
+
+    def presence_rank(c: Citation) -> tuple[int, int, float]:
+        """How good an anchor ``c`` is (smaller is better).
+
+        Tiers, in order:
+
+        1. ``anchorable`` — a CLEAN presence assertion: NOT scanned, NO
+           separation cue, asserts exactly ONE location class (the subject is
+           AT one place, not transitioning "left X for Y"), and does NOT narrate
+           a conflict/recant ("contrary to his earlier testimony", "confused",
+           "could no longer recall"). A scanned exhibit, a separating statement,
+           a transition, or a recant narration is NOT anchorable and sinks so it
+           is used as the counter, never the primary.
+        2. ``in_exam_doc`` — belongs to the under-examination (largest in pool)
+           document, so the anchor is the deposition claim rather than an
+           exhibit.
+        3. highest confidence; ties on chunk id (applied by the caller).
+        """
+        clean_presence = (
+            not c.scanned
+            and not _has_separation_cue(c.chunk.text)
+            and not _narrates_conflict(c.chunk.text)
+            and len(_location_classes(c.chunk.text)) == 1
+        )
+        anchorable = 0 if clean_presence else 1
+        in_exam_doc = 0 if (exam_doc is not None and c.documentId == exam_doc) else 1
+        return (anchorable, in_exam_doc, -c.score)
+
+    # (primary_rank, separation, cross_document, combined_score,
+    #  primary_id, other_id, cross_bool).
+    candidates: list[
+        tuple[tuple[int, int, float], int, int, float, str, str, bool]
+    ] = []
     for i, left in enumerate(eligible):
         left_tokens = set(_content_tokens(left.chunk.text))
         left_times = _temporal_anchors(left.chunk.text)
@@ -448,36 +557,39 @@ def contradiction_pair(
             # (c) incompatible locations for the subject at that time.
             if not _locations_incompatible(left.chunk.text, right.chunk.text):
                 continue
-            left_sep = _has_separation_cue(left.chunk.text)
-            right_sep = _has_separation_cue(right.chunk.text)
-            # Primary = the presence-asserting side (the one WITHOUT a
-            # separation cue), so the jump lands on the claim being challenged.
-            if right_sep and not left_sep:
+            # PRIMARY = the better anchor of the two (the presence claim under
+            # examination); COUNTER = the other (the contradicting evidence).
+            # presence_rank deterministically prefers a non-scanned,
+            # under-examination, non-separating citation; ties on chunk id.
+            if (presence_rank(left), left.chunk.id) <= (
+                presence_rank(right),
+                right.chunk.id,
+            ):
                 primary, other = left, right
-            elif left_sep and not right_sep:
-                primary, other = right, left
             else:
-                # No (or symmetric) separation cue: anchor on the higher-scored.
-                primary, other = (
-                    (left, right) if left.score >= right.score else (right, left)
-                )
+                primary, other = right, left
+            sep = _has_separation_cue(left.chunk.text) or _has_separation_cue(
+                right.chunk.text
+            )
+            cross = left.documentId != right.documentId
             candidates.append(
                 (
-                    left_sep or right_sep,
-                    left.documentId != right.documentId,
+                    presence_rank(primary),
+                    0 if sep else 1,
+                    0 if cross else 1,
                     left.score + right.score,
                     primary.chunk.id,
                     other.chunk.id,
+                    cross,
                 )
             )
     if not candidates:
         return None
-    # ``True`` sorts first via the 0/1 key in each tier.
     best = min(
         candidates,
-        key=lambda c: (0 if c[0] else 1, 0 if c[1] else 1, -c[2], c[3], c[4]),
+        key=lambda c: (c[0], c[1], c[2], -c[3], c[4], c[5]),
     )
-    return best[3], best[4], best[1]
+    return best[4], best[5], best[6]
 
 
 class MultiHopRetriever:

@@ -12,6 +12,8 @@ import {
   CONTRADICTION_CITATION,
   PROACTIVE_CITATION,
   CONTRADICTION_HOPS,
+  DEMO_QUESTION,
+  DEMO_CONTRADICTION_QUESTION,
   DOC_DEPOSITION,
   DOC_EXHIBIT,
   DOC_FIELD_NOTES,
@@ -70,6 +72,24 @@ describe('mock citations mirror the real fixture', () => {
     expect(CONTRADICTION_HOPS).toHaveLength(2);
     expect(CONTRADICTION_HOPS[0]?.citationIds).toEqual([ANSWER_CITATION.id]);
     expect(CONTRADICTION_HOPS[1]?.citationIds).toEqual([CONTRADICTION_CITATION.id]);
+  });
+
+  it('hops mirror the backend decompose() output verbatim (mock == live)', () => {
+    // The backend QueryDecomposer strips the contradiction framing from
+    // DEMO_CONTRADICTION_QUESTION down to the temporal-anchor topic and prefixes
+    // "evidence that contradicts " for the second hop. These are the EXACT
+    // strings test_published_hops_equal_decompose_output asserts the live trail
+    // equals — no hand-written natural-language fiction.
+    expect(CONTRADICTION_HOPS[0]?.subQuery).toBe('night 14th');
+    expect(CONTRADICTION_HOPS[1]?.subQuery).toBe('evidence that contradicts night 14th');
+  });
+
+  it('the canonical contradiction question carries a contradiction cue (routes multi-hop)', () => {
+    // The live backend routes this multi-hop because it contains "contradict";
+    // it deliberately does NOT echo "Harbor Street" (robustness is principled).
+    expect(DEMO_CONTRADICTION_QUESTION.toLowerCase()).toContain('contradict');
+    expect(DEMO_CONTRADICTION_QUESTION).not.toContain('Harbor Street');
+    expect(DEMO_CONTRADICTION_QUESTION).not.toBe(DEMO_QUESTION);
   });
 
   it('doc titles + urls map the demo documents correctly', () => {

@@ -254,18 +254,23 @@ export const SPEAKER_COUNSEL: Speaker = { id: 'spk_1', label: 'Counsel' };
 export const SPEAKER_WITNESS: Speaker = { id: 'spk_2', label: 'Witness' };
 
 /**
- * The hops trail (feat 1): the principled decomposition the backend emits for a
- * contradiction check — the core claim, then "evidence that contradicts it".
- * Kept to the two real sub-questions whose citationIds resolve to real chunks; we
- * do not hand-write fictional sub-questions.
+ * The hops trail (feat 1). These are the EXACT sub-queries the backend's
+ * QueryDecomposer.decompose() emits for DEMO_CONTRADICTION_QUESTION — the
+ * principled (core-claim, contradicting-evidence) pair derived from the
+ * question's subject+predicate, NOT hand-written natural-language fiction. The
+ * backend strips the contradiction framing down to the temporal-anchor topic
+ * ("night 14th") and prefixes "evidence that contradicts " for the second hop;
+ * the test `test_published_hops_equal_decompose_output` asserts the live trail
+ * equals this. The citationIds show how each hop resolves: the core claim to the
+ * deposition admission (primary), the contradicting hop to the cross-doc exhibit.
  */
 export const CONTRADICTION_HOPS: HopTrace[] = [
   {
-    subQuery: 'Core claim: where does the witness place himself on the night of the 14th?',
+    subQuery: 'night 14th',
     citationIds: [ANSWER_CITATION.id],
   },
   {
-    subQuery: 'Evidence that contradicts it: any record placing him elsewhere that night?',
+    subQuery: 'evidence that contradicts night 14th',
     citationIds: [CONTRADICTION_CITATION.id],
   },
 ];
@@ -287,9 +292,27 @@ export const ANSWER_TRANSCRIPT =
   `Yes — on page ${warehouseBBox.page} the witness admits being at the warehouse on the night of ` +
   'the 14th, staying until well past midnight.';
 
-/** The user question that kicks off the demo sequence. */
+/**
+ * The user question that kicks off the demo sequence. This FIRST ask is a plain
+ * single-hop admission question — it snaps the deposition warehouse admission
+ * (pdf-p12-l1) with no contradiction yet.
+ */
 export const DEMO_QUESTION =
   'Did the witness admit they were at the warehouse on the night of the 14th?';
+
+/**
+ * The CANONICAL contradiction follow-up — the EXACT string the backend test
+ * (tests/test_multihop.py DEMO_CONTRADICTION_Q) and eval query
+ * (q-contradiction-cross-doc) use, so mock == live. On the live backend this
+ * string (a) routes multi-hop (is_multihop_question == True via the
+ * "contradict" cue), (b) decomposes to CONTRADICTION_HOPS verbatim, and
+ * (c) selects primary == pdf-p12-l1 (deposition) with the cross-document counter
+ * exhibit-visitor-log-p2-l1 — contradiction:true, crossDocument:true. It does
+ * NOT echo "Harbor Street": robustness comes from the principled detector, not a
+ * string match. Asking this against the live agent reproduces the scripted beat.
+ */
+export const DEMO_CONTRADICTION_QUESTION =
+  'Did the witness contradict himself about the night of the 14th?';
 
 /** The contradiction follow-up caption. */
 export const CONTRADICTION_TRANSCRIPT =

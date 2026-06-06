@@ -23,17 +23,26 @@ from crossexam_backend.retrieval.multihop import (
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "sample_chunks.json"
 
-# The canonical demo question: a witness whose deposition alibi (page 12, the
-# deposition document) collides with an independent exhibit (the downtown
-# visitor log, a DIFFERENT document) placing him two miles away at the same
-# time. Mentions the warehouse so retrieval pulls the deposition alibi and the
-# exhibit that references it.
-DEMO_CONTRADICTION_Q = (
-    "Did the witness contradict his testimony about being at the Harbor Street "
-    "warehouse on the night of the 14th?"
+# The CANONICAL demo contradiction question — the exact string the frontend mock
+# uses (mockData.DEMO_CONTRADICTION_QUESTION) so mock == live. It does NOT echo
+# "Harbor Street": robustness must come from the principled detector, not from
+# the question literally repeating the location. A witness whose deposition alibi
+# (page 12, the deposition document) collides with an independent exhibit (the
+# downtown visitor log, a DIFFERENT document) placing him two miles away that
+# same night.
+DEMO_CONTRADICTION_Q = "Did the witness contradict himself about the night of the 14th?"
+DEMO_PRIMARY_ID = "pdf-p12-l1"  # deposition alibi (clean presence claim)
+DEMO_OTHER_ID = "exhibit-visitor-log-p2-l1"  # cross-doc separating exhibit
+DEMO_FIELD_NOTES_DOC = "exhibit-field-notes"  # scanned exhibit — never the anchor
+
+# Alternate phrasings of the same contradiction. None of these echoes "Harbor
+# Street"; all must STILL anchor on the deposition (never the scanned
+# field-notes), proving the selection is principled, not overfit to a string.
+ALT_CONTRADICTION_QS = (
+    "Did his account of the night of the 14th conflict with the other exhibits?",
+    "Is there anything that conflicts with his warehouse alibi on the night of "
+    "the 14th?",
 )
-DEMO_PRIMARY_ID = "pdf-p12-l1"  # deposition alibi (claim under examination)
-DEMO_OTHER_ID = "exhibit-visitor-log-p2-l1"  # exhibit that contradicts it
 
 
 def _chunk(
@@ -317,6 +326,74 @@ async def test_demo_selects_cross_doc_pair_on_real_fixture(
     assert by_id[DEMO_PRIMARY_ID].documentId != by_id[DEMO_OTHER_ID].documentId
     assert by_id[DEMO_PRIMARY_ID].documentId == "deposition-holloway"
     assert by_id[DEMO_OTHER_ID].documentId == "exhibit-visitor-log"
+    # The scanned field-notes exhibit is NEVER the anchor — it can only ever be
+    # the counter/evidence, so the page-jump never lands on a scanned source.
+    assert by_id[DEMO_PRIMARY_ID].documentId != DEMO_FIELD_NOTES_DOC
+
+
+async def test_canonical_question_build_frame_anchors_deposition(
+    real_index: MockIndex,
+) -> None:
+    """The CANONICAL demo question (the exact string the frontend uses) anchors.
+
+    Mirrors the live agent path: route the canonical contradiction question
+    through the multi-hop retriever, then :func:`build_frame` with a real
+    drafted answer. The published frame must carry ``contradiction: True``,
+    ``crossDocument: True``, ``primaryId == 'pdf-p12-l1'`` (the deposition
+    presence claim), and the counter citations must include
+    ``exhibit-visitor-log-p2-l1`` from a DIFFERENT document.
+    """
+    from crossexam_backend.agent import build_frame
+
+    retriever = MultiHopRetriever(real_index)
+    result = await retriever.retrieve(DEMO_CONTRADICTION_Q, top_k=5, per_hop_k=5)
+    # An answer that echoes ONLY the deposition side — the contradiction exempts
+    # both sides from the answer-faithfulness gate, so the counter still
+    # survives.
+    frame = build_frame(
+        result,
+        answer_text="The witness testified he was at the Harbor Street warehouse.",
+    )
+    assert frame["contradiction"] is True
+    assert frame["crossDocument"] is True
+    assert frame["primaryId"] == DEMO_PRIMARY_ID
+    by_id = {c["id"]: c for c in frame["citations"]}
+    assert DEMO_PRIMARY_ID in by_id
+    assert DEMO_OTHER_ID in by_id  # the counter survives into the frame
+    assert by_id[DEMO_PRIMARY_ID]["documentId"] == "deposition-holloway"
+    # Counter is a DIFFERENT document (cross-document conflict).
+    assert by_id[DEMO_OTHER_ID]["documentId"] != by_id[DEMO_PRIMARY_ID]["documentId"]
+    assert by_id[DEMO_PRIMARY_ID]["documentId"] != DEMO_FIELD_NOTES_DOC
+
+
+@pytest.mark.parametrize("question", ALT_CONTRADICTION_QS)
+async def test_alternate_phrasings_anchor_deposition_not_field_notes(
+    real_index: MockIndex,
+    question: str,
+) -> None:
+    """Alternate phrasings still anchor on the deposition, never the field-notes.
+
+    None of these echoes "Harbor Street". The selection must be principled (the
+    clean presence claim in the under-examination document wins the anchor), so
+    the primary is always a deposition citation and NEVER the scanned,
+    high-scoring field-notes exhibit. This is the anti-overfit guarantee.
+    """
+    retriever = MultiHopRetriever(real_index)
+    result = await retriever.retrieve(question, top_k=5, per_hop_k=5)
+    assert result.contradiction is True
+    assert result.cross_document is True
+    assert result.primary_id is not None
+    by_id = {c.chunk.id: c for c in result.citations}
+    primary = by_id[result.primary_id]
+    # Anchor lives in the deposition (under examination), not a scanned exhibit.
+    assert primary.documentId == "deposition-holloway"
+    assert primary.documentId != DEMO_FIELD_NOTES_DOC
+    assert primary.scanned is False
+    # In fact the anchor is the same clean presence claim as the canonical
+    # question, and the cross-doc counter exhibit is present — proving the
+    # selection is robust to phrasing, not pinned to a string.
+    assert result.primary_id == DEMO_PRIMARY_ID
+    assert DEMO_OTHER_ID in by_id
 
 
 async def test_published_hops_equal_decompose_output(
@@ -343,11 +420,13 @@ def test_decompose_emits_sensible_subqueries_not_conjunction_fragments() -> None
     )
     assert all(len(s.split()) >= 2 for s in subs)
     assert not any(s.strip().lower() == "did the supplier" for s in subs)
-    # The contradiction question yields the principled (claim, contradicting)
-    # pair derived from subject+predicate, not a literal "and" split.
+    # The canonical contradiction question yields the principled (claim,
+    # contradicting) pair derived from subject+predicate, not a literal "and"
+    # split.
     subs = dec.decompose(DEMO_CONTRADICTION_Q)
     assert len(subs) == 2
-    assert "warehouse" in subs[0].lower()
+    # The core-claim sub-query carries the temporal anchor (the night under
+    # examination), with the contradiction framing stripped out.
     assert "14th" in subs[0].lower()
     assert subs[1].lower().startswith("evidence that contradicts")
     # No contradiction-framing word leaks into the located-claim sub-query.
