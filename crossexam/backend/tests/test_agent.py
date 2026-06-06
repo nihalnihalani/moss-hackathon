@@ -9,7 +9,9 @@ from pathlib import Path
 
 import pytest
 
-from crossexam_backend.agent import CrossExamAgent, ShimChatContext
+from crossexam_backend.agent import REASON_NOT_FOUND, CrossExamAgent, ShimChatContext
+from crossexam_backend.models import BBox, Chunk
+from crossexam_backend.models import Speaker as SpeakerModel
 from crossexam_backend.retrieval.mock_index import MockIndex
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "sample_chunks.json"
@@ -20,6 +22,42 @@ def agent() -> CrossExamAgent:
     """A CrossExamAgent wired to the mock index."""
     index = MockIndex.from_fixture(FIXTURE)
     return CrossExamAgent(index, top_k=3, alpha=0.8)
+
+
+def _two_doc_index() -> MockIndex:
+    """A small two-document corpus with a built-in cross-page contradiction."""
+
+    def chunk(cid: str, text: str, page: int, doc: str) -> Chunk:
+        bbox = BBox(page=page, x0=72.0, y0=100.0, x1=540.0, y1=136.0)
+        return Chunk(id=cid, text=text, page=page, bbox=bbox, documentId=doc)
+
+    return MockIndex(
+        [
+            chunk(
+                "depo-p12",
+                "Q. Where were you on the night of the 14th? A. I remained at the "
+                "Harbor Street warehouse from 9 p.m. well past midnight conducting "
+                "the inventory count.",
+                12,
+                "deposition",
+            ),
+            chunk(
+                "depo-p41",
+                "Contrary to his earlier testimony, on the night of the 14th the "
+                "witness had actually left the Harbor Street warehouse before 8 "
+                "p.m. and departed for home.",
+                41,
+                "deposition",
+            ),
+            chunk(
+                "exhibit-p1",
+                "Exhibit 7, the keycard access log, records entries to the Harbor "
+                "Street warehouse on the night of the 14th.",
+                1,
+                "exhibit",
+            ),
+        ]
+    )
 
 
 class FakeChatMessage:
@@ -126,7 +164,8 @@ async def test_proactive_publishes_unprompted_on_claim(
     assert room.frames, "expected a proactive citation frame to be published"
     frame = room.frames[-1]
     assert frame.get("proactive") is True
-    assert frame["citation"] is not None
+    assert frame["citations"]
+    assert frame.get("primaryId") == frame["citations"][0]["id"]
     assert "latencyMs" in frame
 
 
@@ -140,3 +179,79 @@ async def test_question_does_not_trigger_proactive(agent: CrossExamAgent) -> Non
     assert room.frames
     frame = room.frames[-1]
     assert frame.get("proactive") is None
+    assert isinstance(frame["citations"], list)
+
+
+async def test_contradiction_question_publishes_multi_citation_frame() -> None:
+    """A contradiction question publishes >1 citation + contradiction + hops."""
+    agent = CrossExamAgent(_two_doc_index(), top_k=6)
+    room = _RecordingRoom()
+    agent.room = room
+    await agent.on_user_turn_completed(
+        ShimChatContext(),
+        "did the witness contradict himself about the warehouse on the night of "
+        "the 14th?",
+    )
+    assert room.frames
+    frame = room.frames[-1]
+    assert len(frame["citations"]) > 1
+    pages = {c["bbox"]["page"] for c in frame["citations"]}
+    assert 12 in pages and 41 in pages
+    assert frame.get("contradiction") is True
+    assert frame.get("hops")
+    assert len(frame["hops"]) > 1
+    assert frame.get("primaryId") is not None
+
+
+async def test_repeat_citation_recalled_as_memory_not_resnapped() -> None:
+    """A citation seen twice in a session publishes as memory[] recall, not a box."""
+    agent = CrossExamAgent(_two_doc_index(), top_k=3, proactive_enabled=False)
+    room = _RecordingRoom()
+    agent.room = room
+    q = "where were you on the night of the 14th warehouse inventory count"
+
+    await agent.on_user_turn_completed(ShimChatContext(), q)
+    first = room.frames[-1]
+    assert first["citations"], "first turn surfaces a fresh citation"
+    first_id = first["citations"][0]["id"]
+    assert "memory" not in first
+
+    # Same question again -> the same citation is now a recall, not re-snapped.
+    await agent.on_user_turn_completed(ShimChatContext(), q)
+    second = room.frames[-1]
+    surfaced_ids = {c["id"] for c in second["citations"]}
+    assert first_id not in surfaced_ids
+    recalled_ids = {r["citationId"] for r in second.get("memory", [])}
+    assert first_id in recalled_ids
+
+
+async def test_speaker_passes_through_on_turn() -> None:
+    """A speaker passed to the hook is threaded onto the published frame."""
+    agent = CrossExamAgent(_two_doc_index(), top_k=3, proactive_enabled=False)
+    room = _RecordingRoom()
+    agent.room = room
+    await agent.on_user_turn_completed(
+        ShimChatContext(),
+        "where were you on the night of the 14th warehouse",
+        speaker=SpeakerModel(id="spk_2", label="Witness"),
+    )
+    assert room.frames
+    assert room.frames[-1]["speaker"] == {"id": "spk_2", "label": "Witness"}
+
+
+async def test_not_found_publishes_empty_citations_with_reason(
+    agent: CrossExamAgent,
+) -> None:
+    """An answer unsupported by the chunk publishes citations:[] + reason."""
+    room = _RecordingRoom()
+    agent.room = room
+    # publish_frame directly with an answer that shares no content with any chunk.
+    result = await agent.retrieve("warehouse keys access on the night of the 14th")
+    published = await agent.publish_frame(
+        result,
+        answer_text="Quarterly revenue forecasts exceeded analyst expectations.",
+    )
+    assert published is True
+    frame = room.frames[-1]
+    assert frame["citations"] == []
+    assert frame["reason"] == REASON_NOT_FOUND

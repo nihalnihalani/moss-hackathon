@@ -88,6 +88,8 @@ const LIVE_CITATION: Citation = {
   confidence: 0.91,
   latencyMs: 8,
   pagesSearched: 912,
+  documentId: 'deposition-holloway',
+  documentTitle: 'Holloway Deposition',
   bbox: {
     page: 42,
     x0: 96,
@@ -125,7 +127,7 @@ describe('live citation path (LiveKit DataReceived -> PdfCanvas)', () => {
 
     // Feed a citation frame through the SAME callback the hook uses in prod.
     act(() => {
-      capturedOnData?.(encodeFrame({ citation: LIVE_CITATION }));
+      capturedOnData?.(encodeFrame({ citations: [LIVE_CITATION], primaryId: LIVE_CITATION.id }));
     });
 
     // The hook navigated to the citation's page and set it speaking.
@@ -161,7 +163,8 @@ describe('live citation path (LiveKit DataReceived -> PdfCanvas)', () => {
     act(() => {
       capturedOnData?.(
         encodeFrame({
-          citation: proactiveCite,
+          citations: [proactiveCite],
+          primaryId: proactiveCite.id,
           proactive: true,
           latencyMs: 11,
           caption: 'Flagging this unprompted.',
@@ -187,13 +190,13 @@ describe('live citation path (LiveKit DataReceived -> PdfCanvas)', () => {
 
     // First land a normal citation so we can prove the box gets CLEARED.
     act(() => {
-      capturedOnData?.(encodeFrame({ citation: LIVE_CITATION, latencyMs: 7 }));
+      capturedOnData?.(encodeFrame({ citations: [LIVE_CITATION], latencyMs: 7 }));
     });
     await screen.findByTestId('bbox-highlight');
 
-    // Now a null citation with the silence reason.
+    // Now an empty citations array with the silence reason.
     act(() => {
-      capturedOnData?.(encodeFrame({ citation: null, reason: 'not_found_in_document', latencyMs: 5 }));
+      capturedOnData?.(encodeFrame({ citations: [], reason: 'not_found_in_document', latencyMs: 5 }));
     });
 
     await waitFor(() =>
@@ -210,14 +213,14 @@ describe('live citation path (LiveKit DataReceived -> PdfCanvas)', () => {
     await waitFor(() => expect(capturedOnData).toBeDefined());
 
     act(() => {
-      capturedOnData?.(encodeFrame({ citation: null, reason: 'not_found_in_document' }));
+      capturedOnData?.(encodeFrame({ citations: [], reason: 'not_found_in_document' }));
     });
     await waitFor(() =>
       expect(screen.getByTestId('silence').textContent).toBe('not_found_in_document'),
     );
 
     act(() => {
-      capturedOnData?.(encodeFrame({ citation: LIVE_CITATION }));
+      capturedOnData?.(encodeFrame({ citations: [LIVE_CITATION] }));
     });
     await waitFor(() => expect(screen.getByTestId('silence').textContent).toBe('none'));
     expect(screen.queryByTestId('not-found-state')).toBeNull();

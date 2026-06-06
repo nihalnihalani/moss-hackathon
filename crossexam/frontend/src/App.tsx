@@ -1,4 +1,4 @@
-import { useCallback, useState, useEffect, useRef } from 'react';
+import { useCallback, useState, useEffect, useMemo, useRef } from 'react';
 import { useCrossExam } from './hooks/useCrossExam';
 import { useBackendSession } from './hooks/useBackendSession';
 import { Atmosphere } from './components/Atmosphere';
@@ -10,10 +10,14 @@ import { LatencyChip } from './components/LatencyChip';
 import { LiveLatencyBadge } from './components/LiveLatencyBadge';
 import { PageJump } from './components/PageJump';
 import { DocumentUpload } from './components/DocumentUpload';
+import { DocSwitcher } from './components/DocSwitcher';
+import type { DocSwitcherDoc } from './components/DocSwitcher';
+import { ContradictionBanner } from './components/ContradictionBanner';
 import { useToast } from './components/ToastContext';
 import { Play, RotateCcw } from 'lucide-react';
+import { DOC_TITLES, DOC_URLS } from './lib/mockData';
 import type { UploadResponse } from './lib/api';
-import type { Citation } from './types';
+import type { Citation, MemoryRef } from './types';
 
 const ENV = import.meta.env as Record<string, string | undefined>;
 
@@ -24,6 +28,12 @@ const ENV = import.meta.env as Record<string, string | undefined>;
  * the placeholder page, so the demo never hard-fails.
  */
 const PDF_URL = ENV.VITE_PDF_URL ?? '/sample-deposition.pdf';
+
+/** documentId -> human title, merged from the contract mapping + any citation titles. */
+function titleFor(documentId: string, citations: Citation[]): string {
+  const fromCite = citations.find((c) => c.documentId === documentId)?.documentTitle;
+  return fromCite ?? DOC_TITLES[documentId] ?? documentId;
+}
 
 export function App(): JSX.Element {
   const envForceMock = ENV.VITE_MOCK_MODE === 'true';
@@ -62,13 +72,74 @@ export function App(): JSX.Element {
 
   // After an upload, render the freshly-ingested PDF and update corpus info.
   const [docInfo, setDocInfo] = useState<UploadResponse | null>(null);
-  const [pdfUrl, setPdfUrl] = useState<string>(PDF_URL);
+  const [uploadedUrl, setUploadedUrl] = useState<string | null>(null);
 
   const onUploaded = useCallback((result: UploadResponse, file: File): void => {
     setDocInfo(result);
     // Render the uploaded file locally so the canvas reflects the new document.
-    setPdfUrl(URL.createObjectURL(file));
+    setUploadedUrl(URL.createObjectURL(file));
   }, []);
+
+  // ---- FEATURE 1: multi-doc. Derive the set of documents from the citations.
+  const docs: DocSwitcherDoc[] = useMemo(() => {
+    const byId = new Map<string, DocSwitcherDoc>();
+    for (const c of cx.citations) {
+      const existing = byId.get(c.documentId);
+      if (existing) {
+        existing.count += 1;
+        existing.scanned = existing.scanned || c.scanned === true;
+      } else {
+        byId.set(c.documentId, {
+          id: c.documentId,
+          title: titleFor(c.documentId, cx.citations),
+          count: 1,
+          scanned: c.scanned === true,
+        });
+      }
+    }
+    return [...byId.values()];
+  }, [cx.citations]);
+
+  // Selected document: follows the primary citation's doc by default, but a
+  // manual tab/chip selection sticks until the agent surfaces a new primary.
+  const primaryDocId = cx.activeCitation?.documentId ?? null;
+  const [manualDocId, setManualDocId] = useState<string | null>(null);
+  const lastPrimaryId = useRef<string | null>(null);
+
+  useEffect(() => {
+    // A NEW primary citation (new snap) overrides any manual doc selection.
+    if (cx.primaryId && cx.primaryId !== lastPrimaryId.current) {
+      lastPrimaryId.current = cx.primaryId;
+      setManualDocId(null);
+    }
+  }, [cx.primaryId]);
+
+  const activeDocId = manualDocId ?? primaryDocId ?? docs[0]?.id ?? null;
+
+  // Resolve the PDF url for the active doc: an uploaded file wins, else the
+  // contract mapping, else the default sample.
+  const pdfUrl = useMemo(() => {
+    if (uploadedUrl) return uploadedUrl;
+    if (activeDocId && DOC_URLS[activeDocId]) return DOC_URLS[activeDocId];
+    return PDF_URL;
+  }, [uploadedUrl, activeDocId]);
+
+  // Citations to render on the canvas: only those in the active document.
+  const docCitations = useMemo(
+    () => cx.citations.filter((c) => c.documentId === activeDocId),
+    [cx.citations, activeDocId],
+  );
+
+  // The box to focus/label: the primary if it's in the active doc, else the
+  // first citation of the active doc (so switching docs keeps a visible box).
+  const activeForDoc: Citation | null = useMemo(() => {
+    if (cx.activeCitation && cx.activeCitation.documentId === activeDocId) {
+      return cx.activeCitation;
+    }
+    return docCitations[0] ?? null;
+  }, [cx.activeCitation, activeDocId, docCitations]);
+
+  const targetPage = activeForDoc?.bbox.page ?? cx.targetPage;
 
   const searching = cx.agentState === 'thinking';
   const hasResult = cx.activeCitation !== null;
@@ -78,8 +149,31 @@ export function App(): JSX.Element {
 
   // Re-fire the snap (re-center + focus the box) when a page-ref chip is clicked.
   const [refocus, setRefocus] = useState(0);
-  const onJump = useCallback((_citation: Citation): void => {
+  const onJump = useCallback((citation: Citation): void => {
+    setManualDocId(citation.documentId);
     setRefocus((n) => n + 1);
+  }, []);
+
+  // Flip to a conflicting citation from the contradiction banner.
+  const onSelectConflict = useCallback((citation: Citation): void => {
+    setManualDocId(citation.documentId);
+    setRefocus((n) => n + 1);
+  }, []);
+
+  // FEATURE 5: a memory recall chip jumps back to the recalled citation.
+  const onRecall = useCallback(
+    (ref: MemoryRef): void => {
+      const target = cx.citations.find((c) => c.id === ref.citationId);
+      if (target) {
+        setManualDocId(target.documentId);
+        setRefocus((n) => n + 1);
+      }
+    },
+    [cx.citations],
+  );
+
+  const onSelectDoc = useCallback((id: string): void => {
+    setManualDocId(id);
   }, []);
 
   const onClearCitation = useCallback((): void => {
@@ -140,7 +234,7 @@ export function App(): JSX.Element {
 
       <main className="stage">
         <section className="rail" aria-label="Voice interface">
-          <VoiceOrb state={cx.agentState} />
+          <VoiceOrb state={cx.agentState} audioReactive={!cx.isMock} />
           <StatePill state={cx.agentState} proactive={cx.proactive} />
           <Captions
             text={cx.caption}
@@ -149,12 +243,22 @@ export function App(): JSX.Element {
             onJump={onJump}
             proactive={cx.proactive}
             silenceReason={cx.silenceReason}
+            speaker={cx.speaker}
+            memory={cx.memory}
+            onRecall={onRecall}
+          />
+          <ContradictionBanner
+            citations={cx.contradiction ? cx.citations : []}
+            hops={cx.hops}
+            activeId={activeForDoc?.id ?? null}
+            onSelect={onSelectConflict}
           />
         </section>
 
         <section className="docstage" aria-label="Document">
           <div className="docstage__hud">
-            <PageJump active={searching} targetPage={cx.targetPage} totalPages={corpusPages} />
+            <DocSwitcher docs={docs} activeId={activeDocId} onSelect={onSelectDoc} />
+            <PageJump active={searching} targetPage={targetPage} totalPages={corpusPages} />
             <LatencyChip
               pages={cx.activeCitation?.pagesSearched ?? corpusPages}
               latencyMs={cx.activeCitation?.latencyMs ?? 7}
@@ -162,12 +266,13 @@ export function App(): JSX.Element {
             />
           </div>
           <PdfCanvas
-            page={cx.targetPage}
-            citation={cx.activeCitation}
+            page={targetPage}
+            citation={activeForDoc}
+            citations={docCitations}
             pdfUrl={pdfUrl}
             onClearCitation={onClearCitation}
             refocusSignal={refocus}
-            proactive={cx.proactive}
+            proactive={cx.proactive && activeForDoc?.id === cx.activeCitation?.id}
           />
         </section>
       </main>

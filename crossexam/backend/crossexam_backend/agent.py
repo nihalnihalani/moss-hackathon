@@ -23,109 +23,189 @@ import json
 import logging
 from typing import Any, Protocol, runtime_checkable
 
-from crossexam_backend.models import Citation, RetrievalResult
+from crossexam_backend.memory import ConversationMemory
+from crossexam_backend.models import (
+    BBox,
+    Citation,
+    HopTrace,
+    MemoryRef,
+    MultiHopResult,
+    RetrievalResult,
+    Speaker,
+)
 from crossexam_backend.proactive import (
     ClaimDetector,
     SurfaceThresholds,
     should_surface,
 )
 from crossexam_backend.retrieval.base import RetrievalIndex
+from crossexam_backend.retrieval.multihop import MultiHopRetriever, QueryDecomposer
 from crossexam_backend.speculative import SpeculativeRetriever
 from crossexam_backend.tracing import NoOpTracer, OTelTracer
-from crossexam_backend.verify import verify_faithfulness
+from crossexam_backend.verify import FaithfulnessVerdict, verify_faithfulness
 
 logger = logging.getLogger(__name__)
 
-# Reason code published (with ``citation: null``) when the cited chunk does not
-# support the agent's answer — the faithfulness gate refuses to highlight.
+# Reason code published (with ``citations: []``) when no cited chunk supports
+# the agent's answer — the faithfulness gate refuses to highlight.
 REASON_NOT_FOUND = "not_found_in_document"
 
 
 # --------------------------------------------------------------------------- #
-# Frontend bridge: structured citation payload                                #
+# Frontend bridge: structured multi-citation wire frame (depth-v2 contract)   #
 # --------------------------------------------------------------------------- #
-def build_citation_payload(
-    result: RetrievalResult,
-    answer_text: str | None = None,
+def _bbox_dict(bbox: BBox) -> dict[str, Any]:
+    """Serialise a :class:`BBox` to the snake_case wire shape the frontend reads."""
+    return {
+        "page": bbox.page,
+        "x0": bbox.x0,
+        "y0": bbox.y0,
+        "x1": bbox.x1,
+        "y1": bbox.y1,
+        "page_width": bbox.page_width,
+        "page_height": bbox.page_height,
+    }
+
+
+def _citation_dict(citation: Citation, verdict: FaithfulnessVerdict) -> dict[str, Any]:
+    """Serialise one (faithfulness-checked) :class:`Citation` to the wire shape.
+
+    Carries the depth-v2 fields through verbatim: ``quads`` (per-line boxes),
+    ``documentId``/``documentTitle`` (multi-doc switcher) and ``scanned`` (OCR
+    badge), plus the attached ``faithfulness`` verdict.
+    """
+    chunk = citation.chunk
+    payload: dict[str, Any] = {
+        "id": chunk.id,
+        "text": chunk.text,
+        "bbox": _bbox_dict(chunk.bbox),
+        "confidence": chunk.confidence,
+        "score": citation.score,
+        "documentId": citation.documentId,
+        "faithfulness": {
+            "supported": verdict.supported,
+            "score": verdict.score,
+            "method": verdict.method,
+        },
+    }
+    if citation.documentTitle is not None:
+        payload["documentTitle"] = citation.documentTitle
+    if citation.quads:
+        payload["quads"] = [_bbox_dict(q) for q in citation.quads]
+    if citation.scanned:
+        payload["scanned"] = True
+    return payload
+
+
+def _memory_dict(ref: MemoryRef) -> dict[str, Any]:
+    """Serialise a :class:`MemoryRef` recall to the wire shape (feat 5)."""
+    return {
+        "kind": ref.kind,
+        "citationId": ref.citationId,
+        "documentId": ref.documentId,
+        "page": ref.page,
+        "note": ref.note,
+    }
+
+
+def _hop_dict(hop: HopTrace) -> dict[str, Any]:
+    """Serialise a :class:`HopTrace` decomposition step to the wire shape."""
+    return {"subQuery": hop.subQuery, "citationIds": list(hop.citationIds)}
+
+
+def _speaker_dict(speaker: Speaker) -> dict[str, Any]:
+    """Serialise a :class:`Speaker` (meeting mode) to the wire shape (feat 4)."""
+    return {"id": speaker.id, "label": speaker.label}
+
+
+def build_frame(
+    result: RetrievalResult | MultiHopResult,
     *,
+    answer_text: str | None = None,
     proactive: bool = False,
+    speaker: Speaker | None = None,
+    memory_refs: list[MemoryRef] | None = None,
     faithfulness_threshold: float = 0.5,
-) -> dict[str, Any] | None:
-    """Build the JSON citation frame the frontend consumes, with a faithful gate.
+) -> dict[str, Any]:
+    """Build the depth-v2 multi-citation wire frame the frontend consumes.
 
-    The returned dict matches the EXACT shape ``frontend/src/hooks/useCrossExam.ts``
-    (``isCitation``) parses off the LiveKit data channel: a top-level ``citation``
-    object whose ``bbox`` carries ``page, x0, y0, x1, y1`` plus
-    ``page_width``/``page_height`` (snake_case, matching ``BBox`` in
-    ``frontend/src/types.ts``), and whose top level carries ``id``, ``text``,
-    ``confidence`` and ``score`` — now plus a ``faithfulness`` object
-    ``{supported, score, method}``.
+    Produces the contract frame::
 
-    The FAITHFULNESS GATE: before highlighting, the answer (``answer_text`` or,
-    as a fallback, the top chunk's own text) is verified against the cited chunk
-    via :func:`verify_faithfulness`. If the chunk does NOT support the answer the
-    function returns ``{"citation": null, "reason": "not_found_in_document"}``
-    instead of pointing the user at a wrong box. The top-level ``latencyMs`` is
-    always carried (from the retrieval result).
+        { citations: Citation[], primaryId?, contradiction?, hops?, memory?,
+          speaker?, proactive?, latencyMs?, reason?, ... }
 
-    This is a pure function (no LiveKit dependency) so it can be unit-tested
-    without ``livekit-agents`` installed.
+    Every candidate citation is faithfulness-checked against ``answer_text`` (or,
+    when ``None``, against its own chunk text, i.e. vacuously supported). The
+    FAITHFULNESS GATE drops any citation the answer is not supported by; if none
+    survive the gate the frame is the honest-silence
+    ``{citations: [], reason: "not_found_in_document", latencyMs}`` rather than a
+    wrong box. Surviving citations carry ``quads``/``documentId``/``scanned`` and
+    an attached ``faithfulness`` verdict (feats 1-3). ``primaryId`` is the id to
+    page-jump to first; for a :class:`MultiHopResult` it comes from the
+    contradiction pair (when flagged) and the ``hops``/``contradiction`` trail is
+    carried through (feat 1). ``memory_refs`` are emitted as ``memory[]`` recalls
+    (feat 5) and ``speaker`` is threaded through for meeting mode (feat 4).
+
+    This is a pure function (no LiveKit dependency), unit-testable without
+    ``livekit-agents`` installed.
 
     Args:
-        result: The retrieval result for the just-completed user turn.
-        answer_text: The agent's drafted answer to verify against the chunk; when
-            ``None`` the top chunk's own text is used (vacuously supported).
-        proactive: When ``True`` mark the frame as an unprompted surfacing.
-        faithfulness_threshold: Support threshold for the gate.
+        result: The (single-hop or multi-hop) retrieval result for the turn.
+        answer_text: The agent's drafted answer to faithfulness-check each
+            citation against; ``None`` uses each chunk's own text.
+        proactive: Mark the frame as an unprompted (ambient) surfacing.
+        speaker: Who triggered the turn (meeting mode), threaded onto the frame.
+        memory_refs: Recalls of citations already surfaced this session, emitted
+            as ``memory[]`` instead of re-snapping the box.
+        faithfulness_threshold: Support threshold for the highlight gate.
 
     Returns:
-        A wire-frame dict ready to ``json.dumps`` and publish, or ``None`` when
-        the result has no citations at all (nothing to consider).
+        A wire-frame dict ready to ``json.dumps`` and publish.
     """
-    if not result.citations:
-        return None
+    candidates: list[Citation] = list(result.citations)
+    latency_ms = result.latency_ms
 
-    top = result.citations[0]
-    chunk = top.chunk
-    bbox = chunk.bbox
-
-    verdict = verify_faithfulness(
-        answer_text if answer_text is not None else chunk.text,
-        chunk.text,
-        threshold=faithfulness_threshold,
-    )
-
-    if not verdict.supported:
-        # Refuse to highlight a box that does not back up what was said.
-        return {
-            "citation": None,
-            "reason": REASON_NOT_FOUND,
-            "latencyMs": result.latency_ms,
-        }
+    kept: list[dict[str, Any]] = []
+    kept_ids: list[str] = []
+    for citation in candidates:
+        chunk_text = citation.chunk.text
+        verdict = verify_faithfulness(
+            answer_text if answer_text is not None else chunk_text,
+            chunk_text,
+            threshold=faithfulness_threshold,
+        )
+        if not verdict.supported:
+            # Drop a box that does not back up what was said.
+            continue
+        kept.append(_citation_dict(citation, verdict))
+        kept_ids.append(citation.chunk.id)
 
     frame: dict[str, Any] = {
-        "citation": {
-            "id": chunk.id,
-            "text": chunk.text,
-            "bbox": {
-                "page": bbox.page,
-                "x0": bbox.x0,
-                "y0": bbox.y0,
-                "x1": bbox.x1,
-                "y1": bbox.y1,
-                "page_width": bbox.page_width,
-                "page_height": bbox.page_height,
-            },
-            "confidence": chunk.confidence,
-            "score": top.score,
-            "faithfulness": {
-                "supported": verdict.supported,
-                "score": verdict.score,
-                "method": verdict.method,
-            },
-        },
-        "latencyMs": result.latency_ms,
+        "citations": kept,
+        "latencyMs": latency_ms,
     }
+
+    # primaryId: prefer the multi-hop primary (e.g. the contradiction anchor)
+    # when it survived the gate, else the best surviving citation.
+    multihop_primary: str | None = None
+    if isinstance(result, MultiHopResult):
+        if result.primary_id is not None and result.primary_id in kept_ids:
+            multihop_primary = result.primary_id
+        if result.contradiction and len(kept) > 1:
+            frame["contradiction"] = True
+        if result.hops:
+            frame["hops"] = [_hop_dict(h) for h in result.hops]
+
+    if not kept:
+        # Honest silence: no supported citation to highlight this turn.
+        frame["reason"] = REASON_NOT_FOUND
+    else:
+        frame["primaryId"] = multihop_primary or kept_ids[0]
+
+    if memory_refs:
+        frame["memory"] = [_memory_dict(r) for r in memory_refs]
+    if speaker is not None:
+        frame["speaker"] = _speaker_dict(speaker)
     if proactive:
         frame["proactive"] = True
     return frame
@@ -208,8 +288,10 @@ class CrossExamAgent(_agent_base()):  # type: ignore[misc]
         instructions: str = _DEFAULT_INSTRUCTIONS,
         speculative_enabled: bool = True,
         proactive_enabled: bool = True,
+        multihop_enabled: bool = True,
         faithfulness_threshold: float = 0.5,
         surface_thresholds: SurfaceThresholds | None = None,
+        session_id: str = "default",
         tracer: NoOpTracer | OTelTracer | None = None,
         # ANN401: forwarded verbatim to LiveKit's Agent.__init__, whose kwargs
         # are untyped here without the optional ``livekit-agents`` dep.
@@ -224,8 +306,14 @@ class CrossExamAgent(_agent_base()):  # type: ignore[misc]
             instructions: System prompt / persona for the LLM.
             speculative_enabled: Enable prefetch-on-ASR-partials caching.
             proactive_enabled: Enable unprompted citation surfacing on claims.
+            multihop_enabled: Route contradiction/multi-hop questions through the
+                :class:`MultiHopRetriever` (decompose -> per-hop retrieve ->
+                fuse -> flag contradiction). When ``False`` every turn uses the
+                single-query path.
             faithfulness_threshold: Support threshold for the highlight gate.
             surface_thresholds: Confidence gates for proactive surfacing.
+            session_id: Scopes :class:`ConversationMemory` so a repeated citation
+                in the same session is recalled rather than re-snapped.
             tracer: Optional observability tracer; defaults to a no-op tracer
                 so retrieve/publish spans cost nothing unless obs is configured.
             **agent_kwargs: Forwarded to LiveKit's ``Agent.__init__`` when
@@ -244,6 +332,18 @@ class CrossExamAgent(_agent_base()):  # type: ignore[misc]
         self._faithfulness_threshold = faithfulness_threshold
         self._proactive_enabled = proactive_enabled
         self._latest_result: RetrievalResult | None = None
+
+        # Multi-hop routing (feat 1): a QueryDecomposer signals whether a turn is
+        # a contradiction/multi-hop question; if so the MultiHopRetriever
+        # decomposes, retrieves per sub-query across documents, fuses and flags
+        # contradictions. Otherwise the cheaper single-query path is used.
+        self._multihop_enabled = multihop_enabled
+        self._decomposer = QueryDecomposer()
+        self._multihop = MultiHopRetriever(index, self._decomposer)
+
+        # Conversation memory (feat 5): tracks citations surfaced this session so
+        # a repeat is recalled ("as we saw on page N") instead of re-snapped.
+        self._memory = ConversationMemory(session_id=session_id)
         # Optional LiveKit room handle, set by the session entrypoint, used to
         # publish structured citations to the frontend over the data channel.
         # Typed ``Any`` so this module imports without ``livekit`` installed.
@@ -288,6 +388,24 @@ class CrossExamAgent(_agent_base()):  # type: ignore[misc]
         if self._latest_result is None:
             return []
         return self._latest_result.citations
+
+    @property
+    def memory(self) -> ConversationMemory:
+        """The per-session :class:`ConversationMemory` (feat 5 dedupe/recall)."""
+        return self._memory
+
+    @property
+    def multihop_enabled(self) -> bool:
+        """Whether contradiction/multi-hop routing is active for this agent."""
+        return self._multihop_enabled
+
+    def is_multihop_question(self, text: str) -> bool:
+        """Whether ``text`` should route through the multi-hop retriever.
+
+        Uses the :class:`QueryDecomposer` signal (contradiction/multi-hop cues),
+        gated on :attr:`multihop_enabled`.
+        """
+        return self._multihop_enabled and self._decomposer.is_multihop(text)
 
     # -- speculative retrieval on ASR partials ------------------------------
     async def prefetch_partial(self, partial_text: str) -> None:
@@ -341,72 +459,155 @@ class CrossExamAgent(_agent_base()):  # type: ignore[misc]
         )
         return result
 
+    async def retrieve_multihop(self, text: str) -> MultiHopResult:
+        """Decompose ``text`` into hops, retrieve across docs and fuse (feat 1).
+
+        Used for contradiction/multi-hop questions (see
+        :meth:`is_multihop_question`). Records the decomposition trail (``hops``)
+        and the cross-document ``contradiction`` flag, and caches the projected
+        single-hop view as :attr:`latest_result` so the rest of the agent (and
+        the frontend accessors) keep working unchanged.
+        """
+        with self._tracer.span("retrieve_multihop", query=text) as span:
+            result = await self._multihop.retrieve(
+                text, top_k=self._top_k, per_hop_k=self._top_k, alpha=self._alpha
+            )
+            span.set_attribute("latency_ms", result.latency_ms)
+            span.set_attribute("hops", len(result.hops))
+            span.set_attribute("contradiction", result.contradiction)
+        self._latest_result = result.to_retrieval_result()
+        logger.info(
+            "agent.retrieve_multihop query=%r hops=%d citations=%d contradiction=%s",
+            text,
+            len(result.hops),
+            len(result.citations),
+            result.contradiction,
+        )
+        return result
+
     # -- frontend publishing -------------------------------------------------
-    async def publish_citation(
+    def _dedupe_for_publish(
+        self, result: RetrievalResult | MultiHopResult
+    ) -> tuple[RetrievalResult | MultiHopResult, list[MemoryRef]]:
+        """Split ``result``'s citations into fresh ones and session recalls.
+
+        Runs :meth:`ConversationMemory.dedupe`: a citation already surfaced this
+        session becomes a :class:`MemoryRef` recall (so the UI says "as we saw on
+        page N" instead of re-snapping), the rest pass through fresh and are
+        recorded as surfaced. Returns a copy of ``result`` carrying only the fresh
+        citations (preserving hops/contradiction/primary on a multi-hop result)
+        plus the recalls to emit as ``memory[]``.
+        """
+        fresh, recalls = self._memory.dedupe(list(result.citations))
+        scoped: RetrievalResult | MultiHopResult
+        if isinstance(result, MultiHopResult):
+            fresh_ids = {c.chunk.id for c in fresh}
+            primary = result.primary_id if result.primary_id in fresh_ids else (
+                fresh[0].chunk.id if fresh else None
+            )
+            scoped = result.model_copy(
+                update={"citations": fresh, "primary_id": primary}
+            )
+        else:
+            scoped = result.model_copy(update={"citations": fresh})
+        return scoped, recalls
+
+    async def publish_frame(
         self,
-        result: RetrievalResult,
+        result: RetrievalResult | MultiHopResult,
         room: Any | None = None,  # noqa: ANN401 - LiveKit Room type is optional
         *,
         answer_text: str | None = None,
         proactive: bool = False,
+        speaker: Speaker | None = None,
+        dedupe: bool = True,
     ) -> bool:
-        """Publish the (faithfulness-gated) top citation to the data channel.
+        """Publish the depth-v2 multi-citation wire frame to the data channel.
 
-        Builds the JSON frame via :func:`build_citation_payload` — which runs the
-        faithfulness gate against ``answer_text`` (or the chunk's own text) — and
-        writes it to the room's local-participant data channel as a UTF-8 JSON
-        frame, exactly the shape ``useCrossExam.ts`` parses. When the cited chunk
-        does not support the answer, the published frame is
-        ``{citation:null, reason:"not_found_in_document"}`` rather than a wrong
-        box. All LiveKit usage is guarded so the method is a safe no-op
-        (returning ``False``) when no room is wired or LiveKit is unavailable.
+        Before building the frame, runs the session :class:`ConversationMemory`
+        dedupe (when ``dedupe`` is set): citations already surfaced this session
+        are emitted as ``memory[]`` recalls rather than re-snapped, and fresh ones
+        pass through and are recorded as surfaced. The frame is then built by
+        :func:`build_frame`, which runs the faithfulness gate per citation (drops
+        unsupported ones; emits ``{citations:[], reason:"not_found_in_document"}``
+        when none survive) and threads through ``hops``/``contradiction``/
+        ``primaryId`` (multi-hop), ``speaker`` (meeting mode) and ``proactive``.
+
+        All LiveKit usage is guarded so the method is a safe no-op (returning
+        ``False``) when no room is wired or LiveKit is unavailable.
 
         Args:
-            result: The retrieval result whose top citation to publish.
+            result: The single-hop or multi-hop retrieval result for the turn.
             room: Optional explicit room handle; falls back to ``self.room``.
             answer_text: The agent's drafted answer to faithfulness-check.
             proactive: Mark the frame as unprompted (ambient) surfacing.
+            speaker: Who triggered the turn (meeting mode), threaded onto frame.
+            dedupe: Run conversation-memory dedupe (recall repeats). Disable to
+                publish every citation as fresh (e.g. a forced re-surface).
 
         Returns:
             ``True`` if a frame was published, ``False`` otherwise.
         """
         target_room = room if room is not None else self._room
         if target_room is None:
-            logger.debug("agent.publish_citation no room wired; skipping")
+            logger.debug("agent.publish_frame no room wired; skipping")
             return False
 
+        recalls: list[MemoryRef] = []
+        scoped: RetrievalResult | MultiHopResult = result
+        if dedupe:
+            scoped, recalls = self._dedupe_for_publish(result)
+
         with self._tracer.span("publish", proactive=proactive) as span:
-            payload = build_citation_payload(
-                result,
-                answer_text,
+            payload = build_frame(
+                scoped,
+                answer_text=answer_text,
                 proactive=proactive,
+                speaker=speaker,
+                memory_refs=recalls,
                 faithfulness_threshold=self._faithfulness_threshold,
             )
-            if payload is None:
-                logger.debug("agent.publish_citation no citations; skipping")
-                return False
-
-            cit = payload.get("citation")
-            if isinstance(cit, dict):
-                fth = cit.get("faithfulness")
-                if isinstance(fth, dict):
-                    span.set_attribute("faithfulness.score", fth.get("score"))
+            span.set_attribute("citations", len(payload.get("citations", [])))
+            span.set_attribute("recalls", len(recalls))
             span.set_attribute("latency_ms", payload.get("latencyMs"))
 
             data = json.dumps(payload).encode("utf-8")
             try:
                 await target_room.local_participant.publish_data(data)
             except Exception:  # noqa: BLE001 - never break the turn on publish failure
-                logger.exception("agent.publish_citation failed; turn continues")
+                logger.exception("agent.publish_frame failed; turn continues")
                 return False
 
         logger.debug(
-            "agent.publish_citation published citation=%s reason=%s bytes=%d",
-            payload.get("citation") is not None,
+            "agent.publish_frame published citations=%d recalls=%d reason=%s bytes=%d",
+            len(payload.get("citations", [])),
+            len(recalls),
             payload.get("reason"),
             len(data),
         )
         return True
+
+    # Back-compat alias: the single-citation publisher is now a multi-citation
+    # frame publisher. Existing callers keep working.
+    async def publish_citation(
+        self,
+        result: RetrievalResult | MultiHopResult,
+        room: Any | None = None,  # noqa: ANN401 - LiveKit Room type is optional
+        *,
+        answer_text: str | None = None,
+        proactive: bool = False,
+        speaker: Speaker | None = None,
+        dedupe: bool = True,
+    ) -> bool:
+        """Deprecated alias for :meth:`publish_frame` (kept for back-compat)."""
+        return await self.publish_frame(
+            result,
+            room,
+            answer_text=answer_text,
+            proactive=proactive,
+            speaker=speaker,
+            dedupe=dedupe,
+        )
 
     @staticmethod
     # ANN401: LiveKit's ChatMessage type is unavailable without the optional
@@ -433,6 +634,8 @@ class CrossExamAgent(_agent_base()):  # type: ignore[misc]
         # ANN401: this is LiveKit's ChatMessage, untyped here without the
         # optional ``livekit-agents`` dep (the runtime passes it in verbatim).
         new_message: Any,  # noqa: ANN401
+        *,
+        speaker: Speaker | None = None,
     ) -> None:
         """LiveKit hook: enrich the turn with retrieved document passages.
 
@@ -442,18 +645,37 @@ class CrossExamAgent(_agent_base()):  # type: ignore[misc]
         ``role="system"`` message into ``turn_ctx`` so the model can ground and
         cite its answer with zero added latency for the user.
 
+        ROUTING (feat 1): when the turn reads as a contradiction / multi-hop
+        question (per :meth:`is_multihop_question`) it is routed through the
+        :class:`MultiHopRetriever` so the published frame carries the ``hops``
+        trail, the ``contradiction`` flag and citations spanning pages/docs;
+        otherwise the single-query path is used. The retrieval result (multi-hop
+        projected down) is what grounds the LLM and is published.
+
         Args:
             turn_ctx: The current turn / chat context to enrich.
             new_message: The user's just-completed message (string or LiveKit
                 ``ChatMessage``).
+            speaker: Optional meeting-mode speaker who triggered the turn (feat
+                4); threaded onto every frame published for this turn.
         """
         query_text = self._message_text(new_message).strip()
         if not query_text:
             logger.debug("agent.on_user_turn_completed empty message; skipping")
             return
 
-        result = await self.retrieve(query_text)
-        system_content = result.to_system_prompt()
+        # Decide the retrieval path: multi-hop for contradiction/compound asks.
+        publish_result: RetrievalResult | MultiHopResult
+        if self.is_multihop_question(query_text):
+            multi = await self.retrieve_multihop(query_text)
+            publish_result = multi
+            system_result = multi.to_retrieval_result()
+        else:
+            single = await self.retrieve(query_text)
+            publish_result = single
+            system_result = single
+
+        system_content = system_result.to_system_prompt()
 
         try:
             turn_ctx.add_message(role="system", content=system_content)
@@ -471,16 +693,22 @@ class CrossExamAgent(_agent_base()):  # type: ignore[misc]
         # confidently supports it, publish the citation UNPROMPTED with
         # ``proactive: true`` — the user need not ask. Confidence-gated by
         # retrieval score AND faithfulness so we never push a weak highlight.
-        if self._proactive_enabled and self._is_proactive_claim(query_text, result):
-            await self.publish_citation(
-                result, answer_text=query_text, proactive=True
+        # Speaker-aware: the surfacing is attributed to whoever made the claim.
+        if self._proactive_enabled and self._is_proactive_claim(
+            query_text, system_result
+        ):
+            await self.publish_frame(
+                publish_result,
+                answer_text=query_text,
+                proactive=True,
+                speaker=speaker,
             )
             return
 
-        # Otherwise publish the top citation (faithfulness-gated) for the answer.
+        # Otherwise publish the turn's frame (faithfulness-gated, memory-deduped).
         # No-op when no room is wired. ``answer_text`` defaults to the chunk in
         # publish path until the LLM's drafted answer is available.
-        await self.publish_citation(result)
+        await self.publish_frame(publish_result, speaker=speaker)
 
     def _is_proactive_claim(self, text: str, result: RetrievalResult) -> bool:
         """Whether ``text`` is a claim the document confidently supports.

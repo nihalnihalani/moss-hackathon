@@ -1,15 +1,21 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { Citation, PageRenderGeometry } from '../types';
+import type { BBox, Citation, PageRenderGeometry } from '../types';
 import { pdfBBoxToCanvasRect } from '../lib/bbox';
 import { scrollBehavior } from '../lib/motion';
 import { DEMO_PAGE_HEIGHT_PT, DEMO_PAGE_WIDTH_PT } from '../lib/mockData';
-import { ZoomIn, ZoomOut, Maximize } from 'lucide-react';
+import { ZoomIn, ZoomOut, Maximize, ScanLine } from 'lucide-react';
 
 export interface PdfCanvasProps {
   /** Page currently shown (1-based). */
   page: number;
-  /** The citation to highlight, or null for no overlay. */
+  /** The primary citation to highlight + focus, or null for no overlay. */
   citation: Citation | null;
+  /**
+   * All citations to render on the current page (multi-hop). When omitted, only
+   * `citation` is rendered. Each citation whose `bbox.page === page` is drawn;
+   * the one matching `citation.id` is the focused/labelled primary.
+   */
+  citations?: Citation[];
   /**
    * Optional real PDF URL. When absent (mock mode) a placeholder page is drawn
    * so the hero bbox snap shows with no backend.
@@ -51,14 +57,20 @@ const MAX_SCALE = 3.0;
 const SCALE_STEP = 0.25;
 
 /**
- * Renders a single PDF page (real or placeholder) at a FIXED zoom and overlays a
- * glowing amber bounding box positioned by lib/bbox.ts. The snap+glow is the hero
- * moment; the box is a focusable, keyboard-navigable target (Enter scrolls it into
- * view, Esc clears).
+ * Renders a single PDF page (real or placeholder) at a FIXED zoom and overlays
+ * glowing amber bounding boxes positioned by lib/bbox.ts. The snap+glow is the
+ * hero moment; the primary box is a focusable, keyboard-navigable target (Enter
+ * scrolls it into view, Esc clears).
+ *
+ * Feat 2 — quad highlights: when a citation carries `quads[]`, EACH quad is drawn
+ * as its own amber rect (so the highlight hugs real text across line wraps); the
+ * snap/glow + p.N·% label sit on the union `bbox`. Falls back to `bbox` when no
+ * quads are present.
  */
 export function PdfCanvas({
   page,
   citation,
+  citations,
   pdfUrl,
   renderScale = DEFAULT_SCALE,
   onClearCitation,
@@ -168,22 +180,51 @@ export function PdfCanvas({
     };
   }, [pdfUrl, page, scale, dpr]);
 
-  // Compute the overlay rect from the citation using the pinned transform.
-  const overlayRect = useMemo(() => {
-    if (!citation || citation.bbox.page !== page) return null;
-    const geometry: PageRenderGeometry = {
+  const geometry: PageRenderGeometry = useMemo(
+    () => ({
       pageWidthPt: pageSizePt.w,
       pageHeightPt: pageSizePt.h,
       renderScale: scale,
       canvasOffset: { x: 0, y: 0 }, // canvas is the overlay's positioned ancestor
       devicePixelRatio: dpr,
-    };
+    }),
+    [pageSizePt.w, pageSizePt.h, scale, dpr],
+  );
+
+  // Every citation visible on the current page (multi-hop). The primary is the
+  // one matching `citation`; others render as dim secondary boxes.
+  const pageCitations = useMemo(() => {
+    const list = citations && citations.length > 0 ? citations : citation ? [citation] : [];
+    return list.filter((c) => c.bbox.page === page);
+  }, [citations, citation, page]);
+
+  // Compute the primary overlay rect (drives focus, label, scroll-into-view).
+  const overlayRect = useMemo(() => {
+    if (!citation || citation.bbox.page !== page) return null;
     try {
       return pdfBBoxToCanvasRect(citation.bbox, geometry);
     } catch {
       return null;
     }
-  }, [citation, page, pageSizePt.w, pageSizePt.h, scale, dpr]);
+  }, [citation, page, geometry]);
+
+  // Per-quad rects for the primary citation (feat 2). Falls back to the union
+  // bbox when no quads are present, so a quad-less citation still highlights.
+  const primaryQuadRects = useMemo(() => {
+    if (!citation || citation.bbox.page !== page) return [];
+    const quads: BBox[] =
+      citation.quads && citation.quads.length > 0 ? citation.quads : [citation.bbox];
+    const rects = [];
+    for (const q of quads) {
+      if (q.page !== page) continue;
+      try {
+        rects.push(pdfBBoxToCanvasRect(q, geometry));
+      } catch {
+        /* skip degenerate quad */
+      }
+    }
+    return rects;
+  }, [citation, page, geometry]);
 
   // Flip the label ABOVE the box when the box sits near the page foot — otherwise
   // the default bottom:-30px label renders off the page and gets clipped.
@@ -222,6 +263,8 @@ export function PdfCanvas({
     [onClearCitation],
   );
 
+  const primaryScanned = citation?.scanned === true && citation.bbox.page === page;
+
   return (
     <div className="pdf-canvas" ref={containerRef}>
       <div className="pdf-controls">
@@ -252,6 +295,42 @@ export function PdfCanvas({
       <div className="pdf-canvas__page">
         <canvas ref={canvasRef} className="pdf-canvas__bitmap" aria-label={`Document page ${page}`} />
         {rendering ? <div className="pdf-skeleton" aria-hidden="true" /> : null}
+
+        {/* Scanned-source badge near the page corner (feat 3). */}
+        {primaryScanned ? (
+          <span className="scanned-badge scanned-badge--page" data-testid="scanned-badge-page">
+            <ScanLine size={11} aria-hidden="true" /> Scanned source
+          </span>
+        ) : null}
+
+        {/* Secondary citation boxes from other hops on this page (dim). */}
+        {pageCitations
+          .filter((c) => c.id !== citation?.id)
+          .map((c) => {
+            const rect = (() => {
+              try {
+                return pdfBBoxToCanvasRect(c.bbox, geometry);
+              } catch {
+                return null;
+              }
+            })();
+            if (!rect) return null;
+            return (
+              <div
+                key={`secondary-${c.id}`}
+                className="bbox-highlight bbox-highlight--secondary"
+                data-testid="bbox-secondary"
+                aria-hidden="true"
+                style={{
+                  left: `${rect.left}px`,
+                  top: `${rect.top}px`,
+                  width: `${rect.width}px`,
+                  height: `${rect.height}px`,
+                }}
+              />
+            );
+          })}
+
         {overlayRect ? (
           <div
             key={citation?.id}
@@ -267,7 +346,9 @@ export function PdfCanvas({
             }}
             tabIndex={0}
             role="button"
-            aria-label={`${proactive ? 'Surfaced automatically. ' : ''}Cited text: ${citation?.text ?? ''}`}
+            aria-label={`${proactive ? 'Surfaced automatically. ' : ''}${
+              citation?.scanned ? 'Scanned source. ' : ''
+            }Cited text: ${citation?.text ?? ''}`}
             onKeyDown={onBoxKeyDown}
           >
             <span className="bbox-highlight__tick" aria-hidden="true" />
@@ -285,6 +366,24 @@ export function PdfCanvas({
             </span>
           </div>
         ) : null}
+
+        {/* Per-quad highlights for the primary citation (feat 2): one amber rect
+            per line so the highlight hugs the real text across wraps. Rendered
+            ABOVE the union box (which carries the glow/label) but non-interactive. */}
+        {primaryQuadRects.map((rect, i) => (
+          <div
+            key={`quad-${citation?.id}-${i}`}
+            className="bbox-quad"
+            data-testid="bbox-quad"
+            aria-hidden="true"
+            style={{
+              left: `${rect.left}px`,
+              top: `${rect.top}px`,
+              width: `${rect.width}px`,
+              height: `${rect.height}px`,
+            }}
+          />
+        ))}
       </div>
     </div>
   );

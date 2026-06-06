@@ -76,6 +76,13 @@ def test_technical_depth_feature_defaults() -> None:
     assert settings.faithfulness_threshold == pytest.approx(0.5)
 
 
+def test_multihop_defaults_on() -> None:
+    """Multi-hop routing defaults on with a sane per-hop k."""
+    settings = Settings(_env_file=None)  # type: ignore[call-arg]
+    assert settings.multihop_enabled is True
+    assert settings.multihop_per_hop_k == 5
+
+
 def test_obs_defaults_off_and_no_secrets() -> None:
     """Observability is off by default with no baked-in Langfuse secrets."""
     settings = Settings(_env_file=None)  # type: ignore[call-arg]

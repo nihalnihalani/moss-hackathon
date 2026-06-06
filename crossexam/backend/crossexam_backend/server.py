@@ -38,15 +38,24 @@ def build_index(settings: Settings) -> RetrievalIndex:
     return get_index(settings)
 
 
-def build_agent(settings: Settings, index: RetrievalIndex) -> CrossExamAgent:
-    """Build the :class:`CrossExamAgent` from settings and an index."""
+def build_agent(
+    settings: Settings, index: RetrievalIndex, *, session_id: str = "default"
+) -> CrossExamAgent:
+    """Build the :class:`CrossExamAgent` from settings and an index.
+
+    ``session_id`` scopes the agent's :class:`ConversationMemory` (the live
+    worker passes the room name, so a repeated citation within a room is recalled
+    rather than re-snapped).
+    """
     return CrossExamAgent(
         index,
         top_k=settings.top_k,
         alpha=settings.alpha,
         speculative_enabled=settings.speculative_enabled,
         proactive_enabled=settings.proactive_enabled,
+        multihop_enabled=settings.multihop_enabled,
         faithfulness_threshold=settings.faithfulness_threshold,
+        session_id=session_id,
         tracer=get_tracer(settings),
     )
 
@@ -193,7 +202,10 @@ def _run_livekit_worker(settings: Settings, index: RetrievalIndex) -> int:
         """Per-room LiveKit job: connect, prewarm, and run the voice session."""
         await ctx.connect()
         await index.prewarm()
-        agent = build_agent(settings, index)
+        # Scope conversation memory to the room so repeated citations within the
+        # same session are recalled (feat 5) rather than re-snapped.
+        room_name = getattr(ctx.room, "name", None) or settings.livekit_default_room
+        agent = build_agent(settings, index, session_id=room_name)
         # Wire the room handle so on_user_turn_completed can publish citations
         # to the frontend over the data channel.
         agent.room = ctx.room

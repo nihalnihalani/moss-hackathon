@@ -34,6 +34,10 @@ class Settings(BaseSettings):
             left unset it is auto-derived: ``True`` if the Moss credentials are
             missing, ``False`` otherwise.
         mock_fixture_path: Path to the JSON fixture the mock index loads.
+        multihop_enabled: Route contradiction / multi-hop questions through the
+            MultiHopRetriever (decompose -> per-hop retrieve -> fuse -> flag
+            contradiction). Defaults to ``True``.
+        multihop_per_hop_k: Max citations retrieved per decomposed sub-query.
         log_level: Root log level for structured logging.
     """
 
@@ -83,6 +87,13 @@ class Settings(BaseSettings):
     # Proactive / ambient surfacing: publish a citation unprompted when a spoken
     # CLAIM (not a question) is confidently supported by the document.
     proactive_enabled: bool = Field(default=True)
+    # Multi-hop routing (depth-v2 feat 1): route contradiction / multi-hop
+    # questions through the MultiHopRetriever (decompose -> per-hop retrieve ->
+    # fuse -> flag contradiction) so the frame carries hops[] + contradiction
+    # and citations spanning pages/docs. On by default.
+    multihop_enabled: bool = Field(default=True)
+    # Max citations retrieved per decomposed sub-query (multi-hop per-hop k).
+    multihop_per_hop_k: int = Field(default=5, ge=1, le=50)
 
     # --- Observability (OpenTelemetry -> Langfuse) --------------------------
     # Tracing is OFF unless obs_enabled AND the [obs] extra is installed AND the

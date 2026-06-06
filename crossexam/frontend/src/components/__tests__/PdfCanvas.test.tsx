@@ -39,4 +39,38 @@ describe('PdfCanvas (mock mode)', () => {
     render(<PdfCanvas page={1} citation={ANSWER_CITATION} renderScale={RENDER_SCALE} />);
     expect(screen.queryByTestId('bbox-highlight')).toBeNull();
   });
+
+  it('renders one amber quad per Citation.quads[] entry at its computed coords (feat 2)', () => {
+    const quads = ANSWER_CITATION.quads ?? [];
+    expect(quads.length).toBeGreaterThan(1); // the mock answer wraps across lines
+
+    render(<PdfCanvas page={ANSWER_CITATION.bbox.page} citation={ANSWER_CITATION} renderScale={RENDER_SCALE} />);
+
+    const quadEls = screen.getAllByTestId('bbox-quad');
+    expect(quadEls.length).toBe(quads.length);
+
+    const geometry = {
+      pageWidthPt: DEMO_PAGE_WIDTH_PT,
+      pageHeightPt: DEMO_PAGE_HEIGHT_PT,
+      renderScale: RENDER_SCALE,
+      canvasOffset: { x: 0, y: 0 },
+      devicePixelRatio: window.devicePixelRatio || 1,
+    };
+
+    quads.forEach((q, i) => {
+      const expected = pdfBBoxToCanvasRect(q, geometry);
+      const el = quadEls[i];
+      expect(el).toBeDefined();
+      expect(el?.style.left).toBe(`${expected.left}px`);
+      expect(el?.style.top).toBe(`${expected.top}px`);
+      expect(el?.style.width).toBe(`${expected.width}px`);
+      expect(el?.style.height).toBe(`${expected.height}px`);
+    });
+  });
+
+  it('falls back to a single union-bbox quad when quads are absent (feat 2)', () => {
+    const noQuads = { ...ANSWER_CITATION, quads: undefined };
+    render(<PdfCanvas page={noQuads.bbox.page} citation={noQuads} renderScale={RENDER_SCALE} />);
+    expect(screen.getAllByTestId('bbox-quad').length).toBe(1);
+  });
 });

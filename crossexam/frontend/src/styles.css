@@ -360,6 +360,8 @@ body {
   --hue-a: var(--state-idle);
   --hue-b: #2a3340;
   --scale: 1;
+  /* Audio-reactive multiplier (feat 4): 1 when no live audio, >1 with mic/TTS RMS. */
+  --scale-audio: 1;
   position: relative;
   width: var(--orb-size);
   height: var(--orb-size);
@@ -373,7 +375,7 @@ body {
   inset: 0;
   border-radius: 50%;
   filter: blur(var(--blur)) saturate(180%);
-  transform: scale(var(--scale));
+  transform: scale(calc(var(--scale) * var(--scale-audio)));
   transition: filter var(--dur-med) var(--ease-emph),
     transform var(--dur-med) var(--ease-emph);
   will-change: transform, filter;
@@ -403,9 +405,12 @@ body {
   border-radius: 50%;
   background: radial-gradient(circle at 40% 35%, rgba(255, 255, 255, 0.9), rgba(255, 255, 255, 0.05) 70%);
   z-index: 1;
-  transform: scale(var(--scale));
-  transition: transform var(--dur-med) var(--ease-emph);
+  transform: scale(calc(var(--scale) * var(--scale-audio)));
+  transition: transform 90ms var(--ease-emph);
 }
+/* When live audio is driving the orb, react fast (RMS updates ~per frame). */
+.orb--reactive .orb__layer,
+.orb--reactive .orb__core { transition: transform 90ms linear; }
 @keyframes orb-spin { to { --angle: 360deg; } }
 
 /* fallback rotation for engines without @property registration support */
@@ -969,6 +974,278 @@ body {
 }
 
 /* ============================================================================
+ * FEAT 2 — MULTI-QUAD HIGHLIGHTS + SECONDARY BOXES
+ * One amber rect per line so the highlight hugs the real text across wraps. The
+ * union .bbox-highlight carries the glow + label; these quads are the fill.
+ * ========================================================================== */
+.bbox-quad {
+  position: absolute;
+  z-index: 11; /* above the union box fill, below its label */
+  border-radius: 2px;
+  background: var(--amber-soft);
+  border: 1px solid rgba(255, 176, 32, 0.55);
+  pointer-events: none;
+  animation: bbox-snap var(--dur-snap) var(--ease-snap) both;
+  will-change: transform, opacity;
+}
+
+/* Secondary (non-focused) multi-hop boxes on the same page: present but quiet. */
+.bbox-highlight--secondary {
+  z-index: 9;
+  background: rgba(255, 176, 32, 0.08);
+  border: 1.5px dashed rgba(255, 176, 32, 0.5);
+  cursor: default;
+  animation: bbox-fade var(--dur-med) linear both;
+}
+.bbox-highlight--secondary::after { content: none; }
+
+/* ============================================================================
+ * FEAT 3 — SCANNED-SOURCE BADGE
+ * ========================================================================== */
+.scanned-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--state-listen);
+  background: rgba(99, 179, 237, 0.12);
+  border: 1px solid rgba(99, 179, 237, 0.32);
+  border-radius: var(--r-sm);
+  padding: 3px 8px;
+  white-space: nowrap;
+}
+.scanned-badge svg { opacity: 0.9; }
+/* The page-anchored variant floats in the top-right corner of the paper. */
+.scanned-badge--page {
+  position: absolute;
+  top: var(--s3);
+  right: var(--s3);
+  z-index: 12;
+  background: rgba(12, 14, 19, 0.82);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
+}
+
+/* ============================================================================
+ * FEAT 1 — DOC SWITCHER (tabs of the documents present in citations)
+ * ========================================================================== */
+.doc-switcher {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px;
+  border-radius: var(--r-full);
+  background: rgba(12, 14, 19, 0.72);
+  border: 1px solid var(--hairline-st);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.45);
+  pointer-events: auto;
+}
+.doc-switcher__icon {
+  display: inline-flex;
+  color: var(--text-mute);
+  padding: 0 4px 0 2px;
+}
+.doc-switcher__tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  color: var(--text-dim);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--r-full);
+  padding: 5px 11px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background var(--dur-fast) var(--ease-emph),
+    color var(--dur-fast) var(--ease-emph),
+    border-color var(--dur-fast) var(--ease-emph);
+}
+.doc-switcher__tab:hover { color: var(--text); background: var(--surface-2); }
+.doc-switcher__tab--active {
+  color: var(--amber);
+  background: var(--amber-soft);
+  border-color: rgba(255, 176, 32, 0.3);
+}
+.doc-switcher__scan { display: inline-flex; color: var(--state-listen); }
+.doc-switcher__count {
+  font-variant-numeric: tabular-nums;
+  font-size: 10px;
+  color: var(--text-mute);
+  background: var(--surface-3);
+  border-radius: var(--r-full);
+  padding: 1px 6px;
+  min-width: 16px;
+  text-align: center;
+}
+.doc-switcher__tab--active .doc-switcher__count { color: var(--amber); background: rgba(255, 176, 32, 0.18); }
+
+/* ============================================================================
+ * FEAT 1 — CONTRADICTION BANNER + HOPS TRAIL
+ * ========================================================================== */
+.contradiction {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+  padding: var(--s3) var(--s4);
+  border-radius: var(--r-md);
+  border: 1px solid rgba(255, 176, 32, 0.34);
+  background: linear-gradient(180deg, rgba(255, 176, 32, 0.08), rgba(255, 176, 32, 0.02));
+  box-shadow: inset 0 0 0 1px var(--amber-soft);
+  animation: not-found-in var(--dur-med) var(--ease-decel) both;
+}
+.contradiction__head { display: inline-flex; align-items: center; gap: var(--s2); }
+.contradiction__mark {
+  display: inline-flex;
+  color: var(--amber);
+  filter: drop-shadow(0 0 6px var(--amber-glow));
+}
+.contradiction__title {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--amber);
+}
+.contradiction__chips { display: flex; flex-wrap: wrap; gap: var(--s2); }
+.contradiction__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  color: var(--text-dim);
+  background: var(--surface-2);
+  border: 1px solid var(--hairline-st);
+  border-radius: var(--r-sm);
+  padding: 5px 10px;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-emph),
+    color var(--dur-fast) var(--ease-emph),
+    border-color var(--dur-fast) var(--ease-emph),
+    transform var(--dur-fast) var(--ease-emph);
+}
+.contradiction__chip:hover { transform: translateY(-1px); color: var(--text); }
+.contradiction__chip--active {
+  color: var(--amber);
+  background: var(--amber-soft);
+  border-color: rgba(255, 176, 32, 0.4);
+}
+.contradiction__chip-doc { font-weight: 600; }
+.contradiction__chip-scan { display: inline-flex; color: var(--state-listen); }
+.contradiction__chip-page {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-mute);
+  padding-left: 4px;
+  border-left: 1px solid var(--hairline);
+}
+.contradiction__chip--active .contradiction__chip-page { color: var(--amber); border-color: rgba(255, 176, 32, 0.3); }
+
+.hops {
+  list-style: none;
+  margin: 0;
+  padding: var(--s2) 0 0;
+  border-top: 1px dashed var(--hairline-st);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+}
+.hops__label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-mute);
+}
+.hops__step {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s2);
+  font-family: var(--font-serif);
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text-dim);
+}
+.hops__arrow { display: inline-flex; margin-top: 2px; color: var(--amber); flex: 0 0 auto; }
+.hops__query { min-width: 0; }
+
+/* ============================================================================
+ * FEAT 4 — MEETING MODE (speaker labels + indicator)
+ * ========================================================================== */
+.meeting-indicator {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--state-listen);
+  background: rgba(99, 179, 237, 0.1);
+  border: 1px solid rgba(99, 179, 237, 0.28);
+  border-radius: var(--r-full);
+  padding: 3px 10px;
+}
+.meeting-indicator__label { color: var(--state-listen); }
+.meeting-indicator__speaker {
+  color: var(--text);
+  padding-left: 6px;
+  border-left: 1px solid rgba(99, 179, 237, 0.3);
+  letter-spacing: 0.04em;
+  text-transform: none;
+}
+.caption-line__speaker {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-mute);
+  margin-bottom: 3px;
+}
+.ambient-tag__speaker { color: var(--amber); letter-spacing: 0.04em; text-transform: none; }
+
+/* ============================================================================
+ * FEAT 5 — MEMORY RECALL CHIPS ("as we saw on p.N")
+ * ========================================================================== */
+.recall-row { display: flex; flex-wrap: wrap; gap: var(--s2); margin-top: var(--s2); }
+.recall-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.01em;
+  color: var(--text-dim);
+  background: var(--surface-2);
+  border: 1px solid var(--hairline-st);
+  border-radius: var(--r-full);
+  padding: 4px 11px 4px 9px;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-emph),
+    color var(--dur-fast) var(--ease-emph),
+    border-color var(--dur-fast) var(--ease-emph),
+    transform var(--dur-fast) var(--ease-emph);
+}
+.recall-chip:hover {
+  color: var(--amber);
+  border-color: rgba(255, 176, 32, 0.34);
+  transform: translateY(-1px);
+}
+.recall-chip__icon { display: inline-flex; color: var(--text-mute); }
+.recall-chip:hover .recall-chip__icon { color: var(--amber); }
+
+/* ============================================================================
  * DOCUMENT UPLOAD — amber-glow dropzone
  * ========================================================================== */
 .doc-upload { display: inline-flex; align-items: center; gap: var(--s3); }
@@ -1150,4 +1427,16 @@ body {
     box-shadow: 0 0 0 3px var(--amber-soft);
   }
   .not-found { animation: none; }
+
+  /* depth-v2: quads/secondary crossfade, banner/recall static (keep color) */
+  .bbox-quad { animation: bbox-fade var(--dur-med) linear both; }
+  .bbox-highlight--secondary { animation: none; }
+  .contradiction { animation: none; }
+  .recall-chip:hover,
+  .contradiction__chip:hover { transform: none; }
+
+  /* audio-reactive orb: no live scaling (the hook already reports 0, belt-and-braces) */
+  .orb { --scale-audio: 1 !important; }
+  .orb--reactive .orb__layer,
+  .orb--reactive .orb__core { transition: none; }
 }

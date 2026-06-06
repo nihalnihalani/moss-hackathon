@@ -60,10 +60,21 @@ export interface Citation {
   id: string;
   /** The exact quoted text the box wraps. */
   text: string;
-  /** Where on the page it lives. */
+  /** The UNION bounding rect (back-compat; used for page-jump + label). */
   bbox: BBox;
+  /**
+   * NEW (feat 2): per-line boxes hugging the actual glyphs across line wraps.
+   * When present, the canvas renders ONE amber rect per quad (hugging real
+   * text); `bbox` remains the union used for the page-jump + the p.N·% label.
+   * Each quad is a valid points rect on the same page as `bbox.page`.
+   */
+  quads?: BBox[];
   /** Retrieval confidence in [0,1]. */
   confidence: number;
+  /**
+   * Retrieval score (relevance), distinct from confidence. Optional on the wire.
+   */
+  score?: number;
   /** Retrieval latency in milliseconds (drives the "· 7ms" chip). */
   latencyMs: number;
   /** Total corpus size searched (drives "found in 912 pages"). */
@@ -74,25 +85,97 @@ export interface Citation {
    * "grounded 0.99" indicator on the citation card.
    */
   faithfulness?: Faithfulness;
+  /**
+   * NEW (feat 1): which document this citation came from. Maps to a PDF url via
+   * the doc switcher. Required by contract (single-doc demo = one id).
+   */
+  documentId: string;
+  /** NEW (feat 1): human label for the doc switcher tabs. */
+  documentTitle?: string;
+  /**
+   * NEW (feat 3): the source page was a scan (OCR). Drives the "SCANNED SOURCE"
+   * badge on the citation card + near the page.
+   */
+  scanned?: boolean;
+}
+
+/**
+ * NEW (feat 5): a memory recall. When the agent has already surfaced a citation
+ * this session, it emits a recall note ("as we saw on page 12") INSTEAD of
+ * re-snapping the box. Rendered as a clickable chip in the transcript.
+ */
+export interface MemoryRef {
+  /** Discriminant. */
+  kind: 'recall';
+  /** The citation being recalled (clicking the chip jumps to it). */
+  citationId: string;
+  /** Which document the recalled citation lives in. */
+  documentId: string;
+  /** Page of the recalled citation. */
+  page: number;
+  /** Human recall note, e.g. "as we saw on page 12". */
+  note: string;
+}
+
+/**
+ * NEW (feat 1): the agentic decomposition trail. Each hop is a sub-query the
+ * agent decomposed the question into, plus the citations it retrieved for it —
+ * surfaced as the "how I found this" trail under a contradiction.
+ */
+export interface HopTrace {
+  /** The sub-query the agent posed. */
+  subQuery: string;
+  /** Citation ids retrieved for this sub-query. */
+  citationIds: string[];
+}
+
+/**
+ * NEW (feat 4, meeting mode): who triggered a frame. When a speaker is present
+ * the transcript labels lines and a small "MEETING" indicator appears.
+ */
+export interface Speaker {
+  /** Stable speaker id (e.g. "spk_1"). */
+  id: string;
+  /** Human label, e.g. "Counsel", "Witness". */
+  label: string;
 }
 
 /** Reason the agent declined to surface a box. The honest-silence signal. */
 export type SilenceReason = 'not_found_in_document';
 
 /**
- * The wire frame published on the LiveKit data channel. Backend matches this
- * EXACTLY; the live handler in useCrossExam parses it field-by-field.
+ * The depth-v2 wire frame published on the LiveKit data channel. Backend matches
+ * this EXACTLY; the live handler in useCrossExam parses it field-by-field per
+ * /docs/depth-v2-contract.md.
  *
- *   { citation, proactive?, latencyMs?, reason?, agentState?, caption? }
+ *   { citations: Citation[], primaryId?, contradiction?, hops?, memory?,
+ *     speaker?, proactive?, latencyMs?, reason?, agentState?, caption? }
  *
- * - `citation: null` + `reason: "not_found_in_document"` => honest silence: the
+ * - `citations: []` + `reason: "not_found_in_document"` => honest silence: the
  *   agent found no grounded source and stayed quiet rather than show a wrong box.
+ * - `primaryId` => which citation to page-jump to first.
+ * - `contradiction: true` => the citations conflict (cross-page/cross-doc).
+ * - `hops` => the decomposition trail ("how I found this").
+ * - `memory` => recalls referenced this turn (render recall chips, no re-snap).
+ * - `speaker` => who triggered it (meeting mode).
  * - `proactive: true` => the agent surfaced this WITHOUT being asked (ambient).
  * - `latencyMs` => retrieval latency for the persistent live latency badge.
+ *
+ * Back-compat: a single-citation answer is `citations:[c]` with `primaryId=c.id`.
  */
-export interface LiveFrame {
-  /** The retrieval result, or null when nothing grounded was found. */
-  citation: Citation | null;
+export interface Frame {
+  /** 0..N citations — multi-hop can return several across docs/pages. */
+  citations: Citation[];
+  /** Which citation to page-jump to first. */
+  primaryId?: string;
+  /** The citations conflict (cross-page/cross-doc). */
+  contradiction?: boolean;
+  /** The agentic decomposition trail. */
+  hops?: HopTrace[];
+  /** Recalls referenced this turn. */
+  memory?: MemoryRef[];
+  /** Who triggered the frame (meeting mode). */
+  speaker?: Speaker;
   /** The agent surfaced this unprompted (ambient co-pilot behavior). */
   proactive?: boolean;
   /** Retrieval latency in milliseconds for this frame. */

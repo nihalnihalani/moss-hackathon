@@ -1,30 +1,43 @@
 /**
- * useCrossExam — the single source of truth for the demo UI.
+ * useCrossExam — the single source of truth for the depth-v2 demo UI.
  *
  * Two modes:
  *  - MOCK (default, no backend): drives the scripted listening → thinking →
- *    speaking → SNAP sequence with timers, including the contradiction follow-up.
- *  - LIVE: connects to a LiveKit room, mirrors the agent's state, and parses
- *    citation payloads arriving on the data channel.
+ *    speaking → SNAP sequence with timers, including the cross-document
+ *    contradiction, a memory recall, and a meeting-mode proactive beat.
+ *  - LIVE: connects to a LiveKit room, mirrors the agent's state, and parses the
+ *    depth-v2 Frame arriving on the data channel EXACTLY per the shared contract.
  *
  * LiveKit is imported lazily inside the live branch so the app builds and runs
  * with no keys and no network.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { AgentState, Citation, SilenceReason } from '../types';
+import type {
+  AgentState,
+  Citation,
+  HopTrace,
+  MemoryRef,
+  SilenceReason,
+  Speaker,
+} from '../types';
 import {
   ANSWER_CITATION,
   ANSWER_TRANSCRIPT,
   CONTRADICTION_CITATION,
+  CONTRADICTION_HOPS,
   CONTRADICTION_TRANSCRIPT,
   DEMO_QUESTION,
   DEMO_TOTAL_PAGES,
+  MEMORY_RECALL,
+  MEMORY_TRANSCRIPT,
   NOT_FOUND_CLAIM,
   NOT_FOUND_TRANSCRIPT,
   PROACTIVE_CITATION,
   PROACTIVE_CLAIM,
   PROACTIVE_TRANSCRIPT,
+  SPEAKER_COUNSEL,
+  SPEAKER_WITNESS,
 } from '../lib/mockData';
 
 export interface CrossExamConfig {
@@ -46,10 +59,20 @@ export interface CrossExamState {
   caption: string;
   /** The user's last question (for display). */
   question: string;
-  /** The currently highlighted citation, or null before the first snap. */
+  /** The currently highlighted (primary) citation, or null before the first snap. */
   activeCitation: Citation | null;
-  /** All citations surfaced so far this session (answer, then contradiction). */
+  /** All citations surfaced this turn (across docs/pages for multi-hop). */
   citations: Citation[];
+  /** Which citation to page-jump to / highlight first this turn. */
+  primaryId: string | null;
+  /** The surfaced citations conflict (cross-page/cross-doc). */
+  contradiction: boolean;
+  /** The agentic decomposition trail for "how I found this". */
+  hops: HopTrace[];
+  /** Memory recalls referenced this turn (render recall chips, no re-snap). */
+  memory: MemoryRef[];
+  /** Who triggered this frame (meeting mode), or null. */
+  speaker: Speaker | null;
   /** Target page the canvas should be showing (drives the page-jump). */
   targetPage: number;
   /** Total corpus size for the latency/“searched N pages” chip. */
@@ -87,6 +110,11 @@ interface MutableSnapshot {
   question: string;
   activeCitation: Citation | null;
   citations: Citation[];
+  primaryId: string | null;
+  contradiction: boolean;
+  hops: HopTrace[];
+  memory: MemoryRef[];
+  speaker: Speaker | null;
   targetPage: number;
   /** Did the active citation arrive unprompted? */
   proactive: boolean;
@@ -96,7 +124,7 @@ interface MutableSnapshot {
   silenceReason: SilenceReason | null;
 }
 
-/** The scripted 90s beats, compressed for a live demo cadence. */
+/** The scripted depth-v2 beats, compressed for a live demo cadence. */
 const MOCK_SCRIPT: ScriptStep[] = [
   {
     at: 0,
@@ -106,6 +134,10 @@ const MOCK_SCRIPT: ScriptStep[] = [
       s.caption = '';
       s.proactive = false;
       s.silenceReason = null;
+      s.contradiction = false;
+      s.hops = [];
+      s.memory = [];
+      s.speaker = SPEAKER_COUNSEL;
     },
   },
   {
@@ -118,10 +150,11 @@ const MOCK_SCRIPT: ScriptStep[] = [
   {
     at: 2600,
     apply: (s) => {
-      // THE SNAP.
+      // THE SNAP — the warehouse admission in the deposition.
       s.agentState = 'speaking';
       s.activeCitation = ANSWER_CITATION;
       s.citations = [ANSWER_CITATION];
+      s.primaryId = ANSWER_CITATION.id;
       s.caption = ANSWER_TRANSCRIPT;
       s.proactive = false;
       s.lastLatencyMs = ANSWER_CITATION.latencyMs;
@@ -132,24 +165,51 @@ const MOCK_SCRIPT: ScriptStep[] = [
     apply: (s) => {
       s.agentState = 'thinking';
       s.caption = ANSWER_TRANSCRIPT;
+      // Jump into the SEPARATE exhibit document.
       s.targetPage = CONTRADICTION_CITATION.bbox.page;
     },
   },
   {
     at: 7600,
     apply: (s) => {
-      // The contradiction climax.
+      // The cross-document contradiction climax: a second box in the exhibit,
+      // the contradiction banner + the hops trail.
       s.agentState = 'speaking';
       s.activeCitation = CONTRADICTION_CITATION;
       s.citations = [ANSWER_CITATION, CONTRADICTION_CITATION];
+      s.primaryId = CONTRADICTION_CITATION.id;
       s.caption = CONTRADICTION_TRANSCRIPT;
+      s.contradiction = true;
+      s.hops = CONTRADICTION_HOPS;
       s.proactive = false;
       s.lastLatencyMs = CONTRADICTION_CITATION.latencyMs;
     },
   },
-  // ---- AMBIENT / PROACTIVE BEAT: the co-pilot answers a spoken claim UNPROMPTED.
+  // ---- MEMORY-RECALL BEAT: the agent references a prior citation via a recall
+  // chip ("as we saw on page 12") instead of re-snapping the box.
   {
     at: 11800,
+    apply: (s) => {
+      s.agentState = 'thinking';
+      s.question = 'So does the warehouse alibi still hold?';
+      s.caption = '';
+      s.speaker = SPEAKER_COUNSEL;
+    },
+  },
+  {
+    at: 13000,
+    apply: (s) => {
+      s.agentState = 'speaking';
+      s.caption = MEMORY_TRANSCRIPT;
+      s.memory = [MEMORY_RECALL];
+      // No re-snap: keep the contradiction box on screen.
+      s.contradiction = true;
+    },
+  },
+  // ---- MEETING-MODE PROACTIVE BEAT: a speaker utters a claim aloud; the
+  // co-pilot surfaces the contradicting exhibit UNPROMPTED, tagged with the speaker.
+  {
+    at: 17200,
     apply: (s) => {
       s.agentState = 'listening';
       s.question = PROACTIVE_CLAIM;
@@ -157,33 +217,39 @@ const MOCK_SCRIPT: ScriptStep[] = [
       s.activeCitation = null;
       s.proactive = false;
       s.silenceReason = null;
+      s.memory = [];
+      s.speaker = SPEAKER_WITNESS;
     },
   },
   {
-    at: 13000,
+    at: 18400,
     apply: (s) => {
-      // No question was asked — the agent surfaces this on its own.
+      // No question was asked — the agent surfaces this on its own, tagged with
+      // the witness who triggered it (meeting mode).
       s.agentState = 'speaking';
       s.activeCitation = PROACTIVE_CITATION;
       s.citations = [ANSWER_CITATION, CONTRADICTION_CITATION, PROACTIVE_CITATION];
+      s.primaryId = PROACTIVE_CITATION.id;
       s.caption = PROACTIVE_TRANSCRIPT;
       s.targetPage = PROACTIVE_CITATION.bbox.page;
       s.proactive = true;
+      s.speaker = SPEAKER_WITNESS;
       s.lastLatencyMs = PROACTIVE_CITATION.latencyMs;
     },
   },
   // ---- HONEST-SILENCE BEAT: a claim with no grounded source. No box; stay quiet.
   {
-    at: 17500,
+    at: 22800,
     apply: (s) => {
       s.agentState = 'thinking';
       s.question = NOT_FOUND_CLAIM;
       s.caption = '';
       s.proactive = false;
+      s.speaker = SPEAKER_COUNSEL;
     },
   },
   {
-    at: 18800,
+    at: 24100,
     apply: (s) => {
       s.agentState = 'idle';
       s.activeCitation = null;
@@ -193,7 +259,7 @@ const MOCK_SCRIPT: ScriptStep[] = [
     },
   },
   {
-    at: 23000,
+    at: 28300,
     apply: (s) => {
       s.agentState = 'idle';
     },
@@ -206,6 +272,11 @@ const IDLE_SNAPSHOT: MutableSnapshot = {
   question: '',
   activeCitation: null,
   citations: [],
+  primaryId: null,
+  contradiction: false,
+  hops: [],
+  memory: [],
+  speaker: null,
   targetPage: 1,
   proactive: false,
   lastLatencyMs: undefined,
@@ -238,7 +309,12 @@ export function useCrossExam(config: CrossExamConfig): CrossExamState {
     for (const step of MOCK_SCRIPT) {
       const t = setTimeout(() => {
         setSnap((prev) => {
-          const next: MutableSnapshot = { ...prev, citations: [...prev.citations] };
+          const next: MutableSnapshot = {
+            ...prev,
+            citations: [...prev.citations],
+            hops: [...prev.hops],
+            memory: [...prev.memory],
+          };
           step.apply(next);
           return next;
         });
@@ -247,7 +323,7 @@ export function useCrossExam(config: CrossExamConfig): CrossExamState {
     }
   }, [clearTimers]);
 
-  // LIVE mode: connect to LiveKit lazily and mirror agent state + citation data.
+  // LIVE mode: connect to LiveKit lazily and mirror agent state + frame data.
   useEffect(() => {
     if (isMock) {
       setIsConnected(false);
@@ -309,6 +385,11 @@ export function useCrossExam(config: CrossExamConfig): CrossExamState {
     question: snap.question,
     activeCitation: snap.activeCitation,
     citations: snap.citations,
+    primaryId: snap.primaryId,
+    contradiction: snap.contradiction,
+    hops: snap.hops,
+    memory: snap.memory,
+    speaker: snap.speaker,
     targetPage: snap.targetPage,
     totalPages: DEMO_TOTAL_PAGES,
     proactive: snap.proactive,
@@ -322,16 +403,17 @@ export function useCrossExam(config: CrossExamConfig): CrossExamState {
 /**
  * Narrow an unknown LiveKit data payload into a state update. Defensive by design.
  *
- * Parses the shared wire frame EXACTLY:
- *   { citation, proactive?, latencyMs?, reason?, agentState?, caption? }
+ * Parses the shared depth-v2 wire frame EXACTLY (see /docs/depth-v2-contract.md):
+ *   { citations: Citation[], primaryId?, contradiction?, hops?, memory?,
+ *     speaker?, proactive?, latencyMs?, reason?, agentState?, caption? }
  *
- * Three branches:
- *   1. A valid `citation` => snap it, capture `proactive` + `latencyMs`, pass
- *      faithfulness through, clear any silence state.
- *   2. `citation: null` + `reason: "not_found_in_document"` => honest silence:
- *      clear the box, set the silence reason (still capture latencyMs — the
- *      retrieval ran, it just found nothing grounded).
- *   3. Neither => only the agentState/caption fields (if any) are applied.
+ * Branches:
+ *   1. Non-empty `citations[]` => snap the primary (primaryId, else first),
+ *      capture contradiction/hops/memory/speaker/proactive/latencyMs, clear
+ *      silence, and merge into the running session citation list.
+ *   2. Empty `citations[]` + `reason: "not_found_in_document"` => honest silence:
+ *      clear the box, set the silence reason (still capture latencyMs).
+ *   3. Neither => only the scalar fields (agentState/caption/speaker/latency) apply.
  */
 function handleLivePayload(
   parsed: unknown,
@@ -343,6 +425,10 @@ function handleLivePayload(
   // Frame-level retrieval latency (persists across snaps via lastLatencyMs).
   const latencyMs = typeof msg.latencyMs === 'number' ? msg.latencyMs : undefined;
   const proactive = msg.proactive === true;
+  const contradiction = msg.contradiction === true;
+  const speaker = isSpeaker(msg.speaker) ? msg.speaker : null;
+  const hops = parseHops(msg.hops);
+  const memory = parseMemory(msg.memory);
 
   if (typeof msg.agentState === 'string') {
     const state = msg.agentState as AgentState;
@@ -356,30 +442,71 @@ function handleLivePayload(
     const question = msg.question;
     setSnap((prev) => ({ ...prev, question }));
   }
+  if (speaker) {
+    setSnap((prev) => ({ ...prev, speaker }));
+  }
 
-  if (isCitation(msg.citation)) {
-    const citation = msg.citation;
+  // The citations array — the heart of the depth-v2 frame.
+  const citations = Array.isArray(msg.citations)
+    ? (msg.citations as unknown[]).filter(isCitation)
+    : [];
+
+  if (citations.length > 0) {
+    const primaryIdRaw = typeof msg.primaryId === 'string' ? msg.primaryId : undefined;
+    const primary = citations.find((c) => c.id === primaryIdRaw) ?? citations[0];
+    if (!primary) return;
+
+    setSnap((prev) => {
+      // Merge this turn's citations into the running session list (de-duped by id).
+      const merged = [...prev.citations];
+      for (const c of citations) {
+        const idx = merged.findIndex((m) => m.id === c.id);
+        if (idx === -1) merged.push(c);
+        else merged[idx] = c;
+      }
+      return {
+        ...prev,
+        activeCitation: primary,
+        agentState: 'speaking',
+        targetPage: primary.bbox.page,
+        primaryId: primary.id,
+        contradiction,
+        hops: hops ?? prev.hops,
+        memory: memory ?? [],
+        speaker: speaker ?? prev.speaker,
+        proactive,
+        silenceReason: null,
+        lastLatencyMs: latencyMs ?? primary.latencyMs ?? prev.lastLatencyMs,
+        citations: merged,
+      };
+    });
+    return;
+  }
+
+  // A memory-only turn: recalls referenced without re-snapping a box.
+  if (memory && memory.length > 0) {
     setSnap((prev) => ({
       ...prev,
-      activeCitation: citation,
-      agentState: 'speaking',
-      targetPage: citation.bbox.page,
-      proactive,
+      memory,
+      contradiction: contradiction || prev.contradiction,
+      hops: hops ?? prev.hops,
+      proactive: false,
       silenceReason: null,
-      lastLatencyMs: latencyMs ?? citation.latencyMs ?? prev.lastLatencyMs,
-      citations: prev.citations.some((c) => c.id === citation.id)
-        ? prev.citations
-        : [...prev.citations, citation],
+      lastLatencyMs: latencyMs ?? prev.lastLatencyMs,
     }));
     return;
   }
 
-  // Honest-silence: an explicit null citation with a not_found reason. The agent
-  // stayed quiet rather than show a wrong box — clear any prior box, flag silence.
-  if (msg.citation === null && msg.reason === 'not_found_in_document') {
+  // Honest-silence: empty citations with a not_found reason. The agent stayed
+  // quiet rather than show a wrong box — clear any prior box, flag silence.
+  if (msg.reason === 'not_found_in_document') {
     setSnap((prev) => ({
       ...prev,
       activeCitation: null,
+      primaryId: null,
+      contradiction: false,
+      hops: [],
+      memory: [],
       proactive: false,
       silenceReason: 'not_found_in_document',
       lastLatencyMs: latencyMs ?? prev.lastLatencyMs,
@@ -387,26 +514,78 @@ function handleLivePayload(
     return;
   }
 
-  // A frame may carry latency without a citation (e.g. a retrieval heartbeat).
+  // A frame may carry latency without citations (e.g. a retrieval heartbeat).
   if (latencyMs !== undefined) {
     setSnap((prev) => ({ ...prev, lastLatencyMs: latencyMs }));
   }
 }
 
+function isBBoxLike(b: unknown): boolean {
+  if (typeof b !== 'object' || b === null) return false;
+  const bb = b as Record<string, unknown>;
+  return (
+    typeof bb.page === 'number' &&
+    typeof bb.x0 === 'number' &&
+    typeof bb.y0 === 'number' &&
+    typeof bb.x1 === 'number' &&
+    typeof bb.y1 === 'number'
+  );
+}
+
 function isCitation(value: unknown): value is Citation {
   if (typeof value !== 'object' || value === null) return false;
   const c = value as Record<string, unknown>;
-  const b = c.bbox as Record<string, unknown> | undefined;
   return (
     typeof c.id === 'string' &&
     typeof c.text === 'string' &&
     typeof c.confidence === 'number' &&
-    typeof b === 'object' &&
-    b !== null &&
-    typeof b.page === 'number' &&
-    typeof b.x0 === 'number' &&
-    typeof b.y0 === 'number' &&
-    typeof b.x1 === 'number' &&
-    typeof b.y1 === 'number'
+    typeof c.documentId === 'string' &&
+    isBBoxLike(c.bbox)
   );
+}
+
+function isSpeaker(value: unknown): value is Speaker {
+  if (typeof value !== 'object' || value === null) return false;
+  const s = value as Record<string, unknown>;
+  return typeof s.id === 'string' && typeof s.label === 'string';
+}
+
+function parseHops(value: unknown): HopTrace[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const hops: HopTrace[] = [];
+  for (const h of value) {
+    if (typeof h !== 'object' || h === null) continue;
+    const hh = h as Record<string, unknown>;
+    if (typeof hh.subQuery !== 'string') continue;
+    const ids = Array.isArray(hh.citationIds)
+      ? hh.citationIds.filter((x): x is string => typeof x === 'string')
+      : [];
+    hops.push({ subQuery: hh.subQuery, citationIds: ids });
+  }
+  return hops;
+}
+
+function parseMemory(value: unknown): MemoryRef[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const refs: MemoryRef[] = [];
+  for (const m of value) {
+    if (typeof m !== 'object' || m === null) continue;
+    const mm = m as Record<string, unknown>;
+    if (
+      mm.kind === 'recall' &&
+      typeof mm.citationId === 'string' &&
+      typeof mm.documentId === 'string' &&
+      typeof mm.page === 'number' &&
+      typeof mm.note === 'string'
+    ) {
+      refs.push({
+        kind: 'recall',
+        citationId: mm.citationId,
+        documentId: mm.documentId,
+        page: mm.page,
+        note: mm.note,
+      });
+    }
+  }
+  return refs;
 }

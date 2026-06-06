@@ -68,6 +68,16 @@ def test_tracing_off_and_proactive_ready_by_default() -> None:
     assert checks["Proactive surfacing"].status is Status.READY
 
 
+def test_multihop_and_memory_rows_present_and_ready() -> None:
+    """The table reports multi-hop routing + conversation memory readiness."""
+    checks = {c.name: c for c in run_checks(_no_keys_settings())}
+    assert "Multi-hop routing" in checks
+    assert "Conversation memory" in checks
+    # Both default-on / always-available -> READY, never MISSING.
+    assert checks["Multi-hop routing"].status is Status.READY
+    assert checks["Conversation memory"].status is Status.READY
+
+
 def test_off_rows_do_not_fail_overall_mode() -> None:
     """OFF rows are not MISSING; mock mode still resolves cleanly."""
     checks = run_checks(_no_keys_settings())

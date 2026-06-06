@@ -277,6 +277,47 @@ def _check_proactive(settings: Settings) -> Check:
     )
 
 
+def _check_multihop(settings: Settings) -> Check:
+    """Check multi-hop / contradiction routing readiness (config toggle).
+
+    The path is pure and dependency-free (deterministic decomposer + RRF fusion +
+    contradiction detector), so readiness is purely whether the toggle is on.
+    """
+    if settings.multihop_enabled:
+        return Check(
+            "Multi-hop routing",
+            Status.READY,
+            "MULTIHOP_ENABLED: contradiction/multi-hop questions decompose into "
+            f"hops, retrieve per sub-query (per_hop_k={settings.multihop_per_hop_k}) "
+            "across documents, fuse and flag contradictions.",
+        )
+    return Check(
+        "Multi-hop routing",
+        Status.OFF,
+        "MULTIHOP_ENABLED is false; every turn uses the single-query path.",
+    )
+
+
+def _check_memory() -> Check:
+    """Check conversation-memory readiness (feat 5 dedupe/recall).
+
+    The default store is an in-process dict — always available, no deps, no
+    network — so this is READY whenever the package imports.
+    """
+    if _module_available("crossexam_backend.memory"):
+        return Check(
+            "Conversation memory",
+            Status.READY,
+            "In-process ConversationMemory active: a citation surfaced once per "
+            "session is recalled ('as we saw on page N') instead of re-snapped.",
+        )
+    return Check(
+        "Conversation memory",
+        Status.MISSING,
+        "crossexam_backend.memory not importable.",
+    )
+
+
 def run_checks(settings: Settings) -> list[Check]:
     """Run every preflight check against ``settings`` (no network calls)."""
     checks = [_check_retrieval(settings), _check_livekit(settings)]
@@ -289,6 +330,9 @@ def run_checks(settings: Settings) -> list[Check]:
     # Technical-depth feature readiness (never fails the run).
     checks.append(_check_tracing(settings))
     checks.append(_check_proactive(settings))
+    # Depth-v2 feature readiness (multi-hop routing + conversation memory).
+    checks.append(_check_multihop(settings))
+    checks.append(_check_memory())
     return checks
 
 
