@@ -69,6 +69,84 @@ def main() -> int:
     return _run_livekit_worker(settings, index)
 
 
+class ProviderConfigError(RuntimeError):
+    """Raised when a configured STT/LLM/TTS provider cannot be constructed.
+
+    This makes a missing plugin package or API key a CLEAR, actionable error
+    instead of a silent empty :class:`AgentSession` that never speaks.
+    """
+
+
+def _build_stt(settings: Settings) -> object:
+    """Construct the STT plugin selected by ``settings.stt_provider``.
+
+    Imports are local and guarded so a missing plugin or key surfaces a clear
+    :class:`ProviderConfigError` rather than an import-time crash.
+    """
+    provider = settings.stt_provider.lower()
+    if provider == "deepgram":
+        if not settings.deepgram_api_key:
+            raise ProviderConfigError(
+                "STT_PROVIDER=deepgram requires DEEPGRAM_API_KEY to be set."
+            )
+        try:
+            from livekit.plugins import deepgram  # type: ignore[import-not-found]
+        except ImportError as exc:  # pragma: no cover - needs the plugin installed
+            raise ProviderConfigError(
+                "STT_PROVIDER=deepgram requires the 'livekit-plugins-deepgram' "
+                "package. Install it with: pip install 'crossexam-backend[voice]'."
+            ) from exc
+        return deepgram.STT(api_key=settings.deepgram_api_key)
+
+    raise ProviderConfigError(
+        f"Unsupported STT_PROVIDER={settings.stt_provider!r}. Supported: deepgram."
+    )
+
+
+def _build_llm(settings: Settings) -> object:
+    """Construct the LLM plugin selected by ``settings.llm_provider``."""
+    provider = settings.llm_provider.lower()
+    if provider == "openai":
+        if not settings.openai_api_key:
+            raise ProviderConfigError(
+                "LLM_PROVIDER=openai requires OPENAI_API_KEY to be set."
+            )
+        try:
+            from livekit.plugins import openai  # type: ignore[import-not-found]
+        except ImportError as exc:  # pragma: no cover - needs the plugin installed
+            raise ProviderConfigError(
+                "LLM_PROVIDER=openai requires the 'livekit-plugins-openai' "
+                "package. Install it with: pip install 'crossexam-backend[voice]'."
+            ) from exc
+        return openai.LLM(api_key=settings.openai_api_key)
+
+    raise ProviderConfigError(
+        f"Unsupported LLM_PROVIDER={settings.llm_provider!r}. Supported: openai."
+    )
+
+
+def _build_tts(settings: Settings) -> object:
+    """Construct the TTS plugin selected by ``settings.tts_provider``."""
+    provider = settings.tts_provider.lower()
+    if provider == "cartesia":
+        if not settings.cartesia_api_key:
+            raise ProviderConfigError(
+                "TTS_PROVIDER=cartesia requires CARTESIA_API_KEY to be set."
+            )
+        try:
+            from livekit.plugins import cartesia  # type: ignore[import-not-found]
+        except ImportError as exc:  # pragma: no cover - needs the plugin installed
+            raise ProviderConfigError(
+                "TTS_PROVIDER=cartesia requires the 'livekit-plugins-cartesia' "
+                "package. Install it with: pip install 'crossexam-backend[voice]'."
+            ) from exc
+        return cartesia.TTS(api_key=settings.cartesia_api_key)
+
+    raise ProviderConfigError(
+        f"Unsupported TTS_PROVIDER={settings.tts_provider!r}. Supported: cartesia."
+    )
+
+
 def _run_livekit_worker(settings: Settings, index: RetrievalIndex) -> int:
     """Start the LiveKit worker. Imported lazily so the module stays portable."""
     # Imports are local on purpose: they only exist when livekit is installed.
@@ -84,7 +162,17 @@ def _run_livekit_worker(settings: Settings, index: RetrievalIndex) -> int:
         await ctx.connect()
         await index.prewarm()
         agent = build_agent(settings, index)
-        session = AgentSession()
+        # Wire the room handle so on_user_turn_completed can publish citations
+        # to the frontend over the data channel.
+        agent.room = ctx.room
+
+        # Build the STT/LLM/TTS providers from settings. A misconfigured or
+        # missing provider raises a CLEAR ProviderConfigError here instead of
+        # silently producing a no-op session.
+        stt = _build_stt(settings)
+        llm = _build_llm(settings)
+        tts = _build_tts(settings)
+        session = AgentSession(stt=stt, llm=llm, tts=tts)
         await session.start(agent=agent, room=ctx.room)
 
     async def prewarm(_proc: object) -> None:

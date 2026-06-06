@@ -23,6 +23,15 @@ dev = [
     "ruff>=0.4,<1.0",
     "mypy>=1.9,<2.0",
 ]
+# Real-time voice pipeline plugins (STT / LLM / TTS + VAD). Optional so the
+# mock/test path installs and runs without them; required only for a live
+# voice session. Install with: pip install 'crossexam-backend[voice]'.
+voice = [
+    "livekit-plugins-deepgram>=0.6,<1.0",
+    "livekit-plugins-openai>=0.10,<1.0",
+    "livekit-plugins-cartesia>=0.4,<1.0",
+    "livekit-plugins-silero>=0.7,<1.0",
+]
 
 [project.scripts]
 crossexam-worker = "crossexam_backend.server:main"

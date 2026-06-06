@@ -54,6 +54,20 @@ class Settings(BaseSettings):
     livekit_api_key: str | None = Field(default=None)
     livekit_api_secret: str | None = Field(default=None)
 
+    # --- Voice pipeline providers (STT / LLM / TTS) -------------------------
+    # Which plugin to use for each leg of the real-time voice loop. The defaults
+    # (deepgram / openai / cartesia) are the common LiveKit Agents stack. Each
+    # provider needs its corresponding API key below to actually start.
+    stt_provider: str = Field(default="deepgram")
+    llm_provider: str = Field(default="openai")
+    tts_provider: str = Field(default="cartesia")
+
+    # Provider API keys. Blank in mock/offline mode; required for the matching
+    # provider when a live voice session starts.
+    deepgram_api_key: str | None = Field(default=None)
+    openai_api_key: str | None = Field(default=None)
+    cartesia_api_key: str | None = Field(default=None)
+
     # --- Retrieval tuning ---------------------------------------------------
     top_k: int = Field(default=5, ge=1, le=50)
     alpha: float = Field(default=0.8, ge=0.0, le=1.0)

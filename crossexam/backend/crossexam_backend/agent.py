@@ -19,6 +19,7 @@ depend on.
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any, Protocol, runtime_checkable
 
@@ -26,6 +27,54 @@ from crossexam_backend.models import Citation, RetrievalResult
 from crossexam_backend.retrieval.base import RetrievalIndex
 
 logger = logging.getLogger(__name__)
+
+
+# --------------------------------------------------------------------------- #
+# Frontend bridge: structured citation payload                                #
+# --------------------------------------------------------------------------- #
+def build_citation_payload(result: RetrievalResult) -> dict[str, Any] | None:
+    """Build the JSON-serializable citation frame the frontend consumes.
+
+    The returned dict matches the EXACT shape ``frontend/src/hooks/useCrossExam.ts``
+    (``isCitation``) parses off the LiveKit data channel: a top-level ``citation``
+    object whose ``bbox`` carries ``page, x0, y0, x1, y1`` plus the optional
+    ``page_width``/``page_height`` (snake_case, matching ``BBox`` in
+    ``frontend/src/types.ts``), and whose top level carries ``id``, ``text``,
+    ``confidence`` and ``score``.
+
+    This is a pure function (no LiveKit dependency) so it can be unit-tested
+    without ``livekit-agents`` installed.
+
+    Args:
+        result: The retrieval result for the just-completed user turn.
+
+    Returns:
+        A dict ``{"citation": {...}}`` ready to ``json.dumps`` and publish, or
+        ``None`` when the result has no citations (nothing to highlight).
+    """
+    if not result.citations:
+        return None
+
+    top = result.citations[0]
+    chunk = top.chunk
+    bbox = chunk.bbox
+    return {
+        "citation": {
+            "id": chunk.id,
+            "text": chunk.text,
+            "bbox": {
+                "page": bbox.page,
+                "x0": bbox.x0,
+                "y0": bbox.y0,
+                "x1": bbox.x1,
+                "y1": bbox.y1,
+                "page_width": bbox.page_width,
+                "page_height": bbox.page_height,
+            },
+            "confidence": chunk.confidence,
+            "score": top.score,
+        }
+    }
 
 
 # --------------------------------------------------------------------------- #
@@ -120,6 +169,20 @@ class CrossExamAgent(_agent_base()):  # type: ignore[misc]
         self._top_k = top_k
         self._alpha = alpha
         self._latest_result: RetrievalResult | None = None
+        # Optional LiveKit room handle, set by the session entrypoint, used to
+        # publish structured citations to the frontend over the data channel.
+        # Typed ``Any`` so this module imports without ``livekit`` installed.
+        self._room: Any | None = None
+
+    # -- LiveKit room wiring (set by the session entrypoint) ----------------
+    @property
+    def room(self) -> Any | None:
+        """The LiveKit room handle used for publishing citations, if wired."""
+        return self._room
+
+    @room.setter
+    def room(self, room: Any | None) -> None:
+        self._room = room
 
     # -- accessors for the frontend bridge ----------------------------------
     @property
@@ -153,6 +216,51 @@ class CrossExamAgent(_agent_base()):  # type: ignore[misc]
             result.latency_ms,
         )
         return result
+
+    # -- frontend publishing -------------------------------------------------
+    async def publish_citation(
+        self,
+        result: RetrievalResult,
+        room: Any | None = None,
+    ) -> bool:
+        """Publish the top citation from ``result`` to the LiveKit data channel.
+
+        Builds the JSON frame via :func:`build_citation_payload` and writes it to
+        the room's local-participant data channel as a UTF-8 JSON frame, exactly
+        the shape ``useCrossExam.ts`` parses. All LiveKit usage is guarded so the
+        method is a safe no-op (returning ``False``) when no room is wired or
+        LiveKit is unavailable.
+
+        Args:
+            result: The retrieval result whose top citation to publish.
+            room: Optional explicit room handle; falls back to ``self.room``.
+
+        Returns:
+            ``True`` if a frame was published, ``False`` otherwise.
+        """
+        target_room = room if room is not None else self._room
+        if target_room is None:
+            logger.debug("agent.publish_citation no room wired; skipping")
+            return False
+
+        payload = build_citation_payload(result)
+        if payload is None:
+            logger.debug("agent.publish_citation no citations; skipping")
+            return False
+
+        data = json.dumps(payload).encode("utf-8")
+        try:
+            await target_room.local_participant.publish_data(data)
+        except Exception:  # noqa: BLE001 - never break the turn on publish failure
+            logger.exception("agent.publish_citation failed; turn continues")
+            return False
+
+        logger.debug(
+            "agent.publish_citation published citation id=%s bytes=%d",
+            payload["citation"]["id"],
+            len(data),
+        )
+        return True
 
     @staticmethod
     def _message_text(new_message: Any) -> str:
@@ -207,3 +315,7 @@ class CrossExamAgent(_agent_base()):  # type: ignore[misc]
             "agent.on_user_turn_completed injected system message chars=%d",
             len(system_content),
         )
+
+        # Publish the top citation to the frontend over the data channel so the
+        # LIVE-mode citation box can render. No-op when no room is wired.
+        await self.publish_citation(result)
