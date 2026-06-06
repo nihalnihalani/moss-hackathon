@@ -570,3 +570,86 @@ def test_decompose_emits_sensible_subqueries_not_conjunction_fragments() -> None
     assert subs[1].lower().startswith("evidence that contradicts")
     # No contradiction-framing word leaks into the located-claim sub-query.
     assert "contradict" not in subs[0].lower()
+
+
+# --------------------------------------------------------------------------- #
+# §4.2 subcontracting recall gap: anchor-expanded cross-doc counter retrieval  #
+# --------------------------------------------------------------------------- #
+# The contract clause and the email admission share the §4.2 / Acme ANCHOR but
+# the email lacks the literal query term "subcontract", so a plain retrieval
+# never surfaces it. Anchor-expanded counter retrieval must pull the email in.
+SUBCONTRACT_PRIMARY_ID = "contract-msa-p7-l1"  # the governing §4.2 clause
+SUBCONTRACT_COUNTER_ID = "email-thread-p1-l2"  # the email admission (cross-doc)
+
+# Natural phrasings that must ALL surface the §4.2 contradiction. None of these
+# is hardcoded into the detector — robustness comes from anchor expansion plus
+# the obligation/admission conflict test, not from string matching.
+SUBCONTRACT_QS = (
+    "Does the email contradict the subcontracting clause in the contract?",
+    "Is there an email admitting they subcontracted to Acme without consent?",
+    "Did the contractor breach the subcontracting clause?",
+)
+
+
+@pytest.mark.parametrize("question", SUBCONTRACT_QS)
+async def test_subcontracting_clause_fires_cross_doc_on_real_fixture(
+    real_index: MockIndex, question: str
+) -> None:
+    """The §4.2 contract-vs-email contradiction fires for NATURAL questions.
+
+    The email admission (``email-thread-p1-l2``) lacks the word "subcontract",
+    so it is absent from the plain top-20 pool; anchor-expanded counter
+    retrieval (re-querying the clause's §4.2 / Acme / "subcontract" anchors
+    across the other documents) must drag it into the contradiction pool. The
+    governing clause stays PRIMARY; the email is the cross-document COUNTER.
+    """
+    retriever = MultiHopRetriever(real_index)
+    result = await retriever.retrieve(question, top_k=5, per_hop_k=5)
+
+    assert result.contradiction is True
+    assert result.cross_document is True
+    assert result.primary_id == SUBCONTRACT_PRIMARY_ID
+    ids = {c.chunk.id for c in result.citations}
+    assert SUBCONTRACT_PRIMARY_ID in ids
+    assert SUBCONTRACT_COUNTER_ID in ids  # the recall-gap counter is present
+    by_id = {c.chunk.id: c for c in result.citations}
+    # The conflict spans two DIFFERENT documents (contract vs. email).
+    assert by_id[SUBCONTRACT_PRIMARY_ID].documentId == "contract-msa"
+    assert by_id[SUBCONTRACT_COUNTER_ID].documentId == "email-thread"
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "Does the email contradict the subcontracting clause in the contract?",
+        "Is there an email admitting they subcontracted to Acme without consent?",
+        "Did the contractor breach the subcontracting clause?",
+        "Did they actually subcontract the work?",
+    ],
+)
+def test_subcontracting_phrasings_route_multihop(question: str) -> None:
+    """Obligation/breach/admission phrasings route through the multi-hop path."""
+    assert QueryDecomposer().is_multihop(question) is True
+
+
+async def test_net30_pair_still_anchors_on_contract_clause(
+    real_index: MockIndex,
+) -> None:
+    """REGRESSION: the Net-30/Net-60 pair still fires with the clause as PRIMARY.
+
+    The email's Net-60 admission shares "Net"/"payment" vocabulary so it already
+    surfaces naturally — anchor expansion must NOT perturb this case into the
+    unrelated location conflict. Primary = the Net-30 clause; counter = the
+    email's Net-60 admission, cross-document.
+    """
+    retriever = MultiHopRetriever(real_index)
+    result = await retriever.retrieve(
+        "Did the email contradict the Net-30 payment terms in the contract?",
+        top_k=5,
+        per_hop_k=5,
+    )
+    assert result.contradiction is True
+    assert result.cross_document is True
+    assert result.primary_id == "contract-msa-p9-l1"  # the Net-30 clause anchors
+    ids = {c.chunk.id for c in result.citations}
+    assert "email-thread-p1-l3" in ids  # the Net-60 email admission counter

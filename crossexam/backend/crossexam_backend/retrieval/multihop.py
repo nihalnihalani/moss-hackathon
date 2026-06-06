@@ -94,7 +94,38 @@ _CONTRADICTION_CUES = frozenset(
         "aligns",
         "agree",
         "agrees",
+        # Admission framings: a question asking whether one document ADMITS doing
+        # the thing another prohibits ("admitting they subcontracted", "admits
+        # paying Net-60") is contradiction-seeking — it pits an admission against
+        # a governing obligation across documents.
+        "admit",
+        "admits",
+        "admitted",
+        "admitting",
     }
+)
+
+# Multi-word framings that signal a contradiction / obligation-conflict ask but
+# do not reduce to a single content token (so the token-set test above misses
+# them). Matched as substrings on the lowercased question. Kept conservative —
+# each phrase strongly implies "does X conflict with / breach Y", not a plain
+# fact lookup.
+_CONTRADICTION_PHRASES: tuple[str, ...] = (
+    "without consent",
+    "without the consent",
+    "without prior consent",
+    "without written consent",
+    "without approval",
+    "without sign-off",
+    "without sign off",
+    "without permission",
+    "without authorization",
+    "did they actually",
+    "did the contractor actually",
+    "is there anything that contradicts",
+    "is there anything that breaches",
+    "anything that contradicts",
+    "anything that breaches",
 )
 
 # Cues that a question spans more than one fact / hop and is worth decomposing
@@ -327,6 +358,8 @@ _ENTITY_STOP = frozenset(
         "without", "instead", "anyway", "however", "note", "per", "and", "or",
         "shall", "must", "may", "prior", "written", "consent", "amendment",
         "material", "breach", "payment", "terms", "days", "day", "basis",
+        "any", "all", "each", "such", "services", "service", "party",
+        "parties", "third", "heads", "just",
     }
 )
 
@@ -538,6 +571,65 @@ def _claims_conflict(left_text: str, right_text: str) -> bool:
     )
 
 
+# How many hits to pull per anchor-expansion sub-query when reaching ACROSS
+# other documents for the cross-doc counter. Kept small so the extra retrieval
+# stays within the latency budget while still surfacing the admission.
+_ANCHOR_EXPANSION_K = 5
+
+# SALIENT (high-IDF, distinctive) literal terms that, when present in a
+# governing clause, identify the SPECIFIC subject of the obligation — narrow
+# enough that re-querying them across other documents drags in the genuine
+# cross-doc counter (the admission) WITHOUT pulling in unrelated high-scoring
+# chunks. Deliberately excludes generic clause-boilerplate ("section",
+# "payment", "services", "amendment") which match many unrelated passages.
+_ANCHOR_TERM_CUES: frozenset[str] = frozenset(
+    {
+        "subcontract", "subcontracting", "subcontractor", "delegate",
+        "outsource", "consent", "warranty", "indemnify", "confidential",
+        "termination", "terminate",
+    }
+)
+
+
+def _governing_anchor_terms(text: str) -> frozenset[str]:
+    """SALIENT anchor TOKENS to re-query across other docs for a cross-doc counter.
+
+    Extracts, from a governing/normative passage, the DISTINCTIVE tokens a
+    contradicting counter is likely to SHARE even when it lacks the rest of the
+    query's vocabulary: a clause-number reference (``4.2`` from ``§4.2`` /
+    ``Section 4.2``), an invoice number, a specific ``Net-N`` value, a salient
+    named entity (``Acme``), and the specific obligation-subject terms present
+    (``subcontract``, ``consent`` …). Returned as plain query tokens.
+
+    Deliberately NARROW — generic clause boilerplate ("section", "payment",
+    "services", "amendment", "shall") is excluded so the re-query lands on the
+    genuine counter (the email admission, which shares ``4.2`` / ``Acme``) rather
+    than on unrelated passages that merely repeat clause scaffolding.
+
+    This powers ANCHOR-EXPANDED COUNTER RETRIEVAL: the email admission shares
+    ``Section 4.2`` / ``Acme`` with the contract clause but not the word
+    "subcontract", so this targeted re-query pulls it into the contradiction
+    pool even though the original query terms never matched it.
+    """
+    lowered = text.lower()
+    tokens = set(_TOKEN_RE.findall(lowered))
+    out: set[str] = set()
+    # Clause numbers ("4.2") as bare tokens so "Section 4.2" matches either side.
+    for m in _CLAUSE_RE.finditer(text):
+        out.add(m.group(1))
+    # Invoice numbers — the most specific possible shared anchor.
+    for m in _INVOICE_RE.finditer(text):
+        out.add(m.group(1))
+    # Specific Net term VALUE (e.g. "net-30"); the bare token "net" is too broad.
+    for n in _net_terms(text):
+        out.add(f"net-{n}")
+    # Salient named entities (Acme, Reyes, …).
+    out |= set(_named_entities(text))
+    # Specific obligation-subject terms present in the clause.
+    out |= tokens & _ANCHOR_TERM_CUES
+    return frozenset(out)
+
+
 def _is_governing_clause(text: str) -> bool:
     """Whether ``text`` is the NORMATIVE / governing statement of a conflict.
 
@@ -593,8 +685,14 @@ class QueryDecomposer:
         ``changed his story`` …) or a multi-hop cue (``and``/``both``/``compare``)
         joining two clauses.
         """
-        tokens = set(_TOKEN_RE.findall(question.lower()))
+        lowered = question.lower()
+        tokens = set(_TOKEN_RE.findall(lowered))
         if tokens & _CONTRADICTION_CUES:
+            return True
+        # Multi-word obligation/conflict framings ("without consent", "did they
+        # actually …", "anything that contradicts …") that don't reduce to a
+        # single content token but still seek a contradiction.
+        if any(phrase in lowered for phrase in _CONTRADICTION_PHRASES):
             return True
         # An "and"/"both"/"compare" only counts as multi-hop if there is enough
         # content on both sides to be two distinct asks.
@@ -979,6 +1077,20 @@ class MultiHopRetriever:
             # matches the surfaced candidates, not the wider detection pool.
             hops.append(HopTrace(subQuery=sub, citationIds=ranking[:per_hop_k]))
 
+        # ANCHOR-EXPANDED COUNTER RETRIEVAL: the initial pool surfaces the
+        # GOVERNING clause (the contract's "Section 4.2 ... shall not
+        # subcontract ... without prior written consent") but may MISS the
+        # cross-document counter (the email admission "we already handed the work
+        # off to Acme ... never got the sign-off") because it shares the clause's
+        # ANCHORS (Section 4.2 / Acme) but not the query's literal terms
+        # ("subcontract"). For each high-confidence governing candidate we
+        # extract its anchors and run a targeted re-query for them ACROSS THE
+        # OTHER documents, merging the hits into the detection pool so the
+        # counter is present even though the original query never matched it.
+        await self._expand_anchor_counters(
+            by_id, rankings, alpha=alpha, doc_ids=doc_ids
+        )
+
         # Detect the contradiction over the FULL fused pool (not just the
         # top_k slice) so a conflicting pair whose weaker side would be
         # truncated is still found, then PROMOTE both pair members into the
@@ -1013,6 +1125,102 @@ class MultiHopRetriever:
             primary_id=primary_id,
             latency_ms=latency_ms,
         )
+
+    async def _expand_anchor_counters(
+        self,
+        by_id: dict[str, Citation],
+        rankings: list[list[str]],
+        *,
+        alpha: float,
+        doc_ids: list[str] | None,
+    ) -> None:
+        """Pull cross-doc COUNTERS that share a governing clause's ANCHORS.
+
+        Mutates ``by_id`` (adding any newly retrieved counter citations, keeping
+        the best score per id) and appends one synthetic ranking per anchor
+        expansion to ``rankings`` so RRF fuses the counters into the pool.
+
+        For each high-confidence GOVERNING candidate already in the pool (a
+        clause-like chunk stating a prohibition/requirement, per
+        :func:`_is_governing_clause`), its ANCHORS (clause #, invoice #, ``Net-``
+        term, named entity, salient obligation terms — :func:`_governing_anchor_terms`)
+        are re-queried ACROSS THE OTHER documents (every doc except the
+        candidate's own), bounded to ``_ANCHOR_EXPANSION_K`` hits. This guarantees
+        the email admission — which shares the clause's ``Section 4.2`` / ``Acme``
+        anchor but lacks the literal query term ``subcontract`` — enters the
+        contradiction pool. Bounded and deterministic; a no-op when no governing
+        candidate is present.
+        """
+        # Governing candidates currently in the pool (avoid mutating during iter).
+        pool = list(by_id.values())
+        governing = [
+            c
+            for c in pool
+            if c.score >= _CONTRADICTION_MIN_SCORE
+            and _is_governing_clause(c.chunk.text)
+        ]
+        if not governing:
+            return
+
+        # A governing candidate that ALREADY has a cross-document counter in the
+        # pool (a chunk from another doc that conflicts with it, per
+        # :func:`_claims_conflict`) needs no expansion — the counter surfaced
+        # naturally (e.g. the Net-60 email shares "Net"/"payment" vocabulary).
+        # Expanding for it would only perturb the fused ranking without adding a
+        # missing counter, so we skip it; expansion fires ONLY for the genuine
+        # recall gap (the subcontracting clause whose email admission lacks the
+        # query term "subcontract").
+        def has_cross_doc_counter(clause: Citation) -> bool:
+            return any(
+                other.documentId != clause.documentId
+                and other.score >= _CONTRADICTION_MIN_SCORE
+                and _claims_conflict(clause.chunk.text, other.chunk.text)
+                for other in pool
+            )
+
+        governing = [c for c in governing if not has_cross_doc_counter(c)]
+        if not governing:
+            return
+
+        # All document ids visible to this turn (respecting any doc allow-list).
+        all_docs = list(getattr(self._index, "document_ids", []))
+        allowed = set(doc_ids) if doc_ids is not None else None
+
+        seen_queries: set[tuple[str, frozenset[str]]] = set()
+        for cand in governing:
+            anchors = _governing_anchor_terms(cand.chunk.text)
+            if not anchors:
+                continue
+            # Reach across OTHER documents (exclude the candidate's own doc) so
+            # the expansion finds the cross-document counter, not the clause
+            # itself again.
+            other_docs = [
+                d
+                for d in all_docs
+                if d != cand.documentId and (allowed is None or d in allowed)
+            ]
+            if not other_docs:
+                continue
+            anchor_query = " ".join(sorted(anchors))
+            key = (anchor_query, frozenset(other_docs))
+            if not anchor_query or key in seen_queries:
+                continue
+            seen_queries.add(key)
+            result = await self._index.query_multi(
+                anchor_query,
+                top_k=_ANCHOR_EXPANSION_K,
+                alpha=alpha,
+                doc_ids=other_docs,
+            )
+            ranking: list[str] = []
+            for cit in result.citations:
+                cid = cit.chunk.id
+                ranking.append(cid)
+                prev = by_id.get(cid)
+                if prev is None or cit.score > prev.score:
+                    by_id[cid] = cit
+            if ranking:
+                rankings.append(ranking)
 
     @staticmethod
     def _fuse(
