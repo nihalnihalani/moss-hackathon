@@ -1,7 +1,9 @@
 # CrossExam
 
-CrossExam is a real-time voice agent that **cross-examines large documents**. You talk to it;
-it answers out loud and **snaps a highlight box onto the exact cited line** of the PDF. It uses
+CrossExam is a **real-time voice co-pilot (ambient, grounded citations)** that listens to a live
+conversation and **snaps a verifiable highlight box onto the exact cited line** of the PDF the instant
+a claim is spoken — not a notetaker that summarizes after the call. You talk to it; it answers out
+loud and the source line is on screen at the same moment. It uses
 Moss for sub-10ms in-process semantic retrieval, an offline Unsiloed pipeline to turn PDFs into
 citation-grade chunks (page + bounding box + confidence), and LiveKit for the live voice loop.
 Everything runs end-to-end in **mock mode with no API keys**, so you can demo it offline.

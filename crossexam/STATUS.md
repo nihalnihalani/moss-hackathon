@@ -1,5 +1,8 @@
 # CrossExam — Production Status
 
+CrossExam is a **real-time voice co-pilot (ambient, grounded citations)** — it listens and snaps a
+verifiable source line onto the exact line of a document in <10ms, not a notetaker.
+
 Snapshot of what's built, verified, and what remains. Honest by design — "production-ready as
 possible" given that **no live sponsor API keys exist in this environment.**
 

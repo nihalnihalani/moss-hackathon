@@ -29,7 +29,7 @@ INDEX_OUT    := $(PIPELINE)/build/index_records.json
 .PHONY: help setup setup-backend setup-pipeline setup-frontend \
         dev dev-live api verify-live test test-backend test-pipeline test-frontend \
         lint lint-py lint-frontend fmt typecheck typecheck-py typecheck-frontend \
-        build index clean
+        eval bench build index clean
 
 # API host/port for local `make api` and the `verify-live` curls. Override on
 # the command line, e.g. `make verify-live API_PORT=9000`.
@@ -192,6 +192,23 @@ verify-live:
 		echo "   Start it with 'make api' (or 'make dev-live' / 'docker compose up'),"; \
 		echo "   then re-run 'make verify-live'. See KEYS.md for the key list."; \
 	fi
+
+# =============================================================================
+# eval / bench  (offline quality + latency gates — no API keys needed)
+# =============================================================================
+## eval: run the retrieval + faithfulness SCORECARD (mock index). HARD gate:
+## exits nonzero if MRR / P@1 / faithfulness fall below threshold.
+eval:
+	$(call need_py)
+	@echo ">> crossexam retrieval + faithfulness scorecard (mock mode, no keys)"
+	cd "$(BACKEND)" && $(PY) -m crossexam_backend.eval.run_eval
+
+## bench: micro-benchmark index.query latency (p50/p95/p99). HARD gate:
+## asserts retrieval p99 < 10ms on the mock index (the headline Moss claim).
+bench:
+	$(call need_py)
+	@echo ">> crossexam retrieval latency benchmark (mock mode, sub-10ms p99 gate)"
+	cd "$(BACKEND)" && $(PY) -m crossexam_backend.eval.bench
 
 # =============================================================================
 # build / index

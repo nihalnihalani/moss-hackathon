@@ -3,6 +3,13 @@
 The exact on-stage sequence. Runs in **mock mode with zero keys** (`make dev`), so it cannot fail
 on conference WiFi. The hero moment is the **bounding-box snap** onto the cited line.
 
+## Co-Pilot framing (CO-PILOT track)
+Frame CrossExam as an **ambient voice co-pilot that listens and displays live context** — not a
+notetaker. The win condition on screen is **verifiable co-presence**: the spoken question, the
+spoken answer, and the highlighted source line are all visible **in the same instant**. Say it out
+loud once: "This isn't a summary after the call — the proof is on screen *while* I'm talking."
+(See `co-pilot-positioning.md` for the full vs-incumbents brief.)
+
 ## Pre-flight (before you walk up)
 - `make dev` running; browser on the app, full-screen, mock mode (default).
 - Real `sample-deposition.pdf` loaded (912-page corpus metaphor; admission on p12, contradiction on p41).
@@ -18,7 +25,14 @@ on conference WiFi. The hero moment is the **bounding-box snap** onto the cited 
 | 0:25–0:40 | Orb `THINKING`; page counter blurs **1 → 12** | *(beat)* | The "searching 900 pages" motion |
 | **0:40–1:00** | **THE SNAP** — glowing box draws on the exact line of **p.12**; caption streams; chip reads **"found in 912 pages · 7ms"** | "Yes — page 12, at the Harbor Street warehouse until nearly midnight." | **The winning screenshot** |
 | 1:00–1:18 | Follow-up: box snaps on **p.41** | "But did he contradict himself?" → "Yes — on page 41 he says he left before 8 p.m." | Contradiction across the document |
-| 1:18–1:30 | Freeze on the citation; tagline | "Retrieval disappeared from the latency budget. Ask the document — it points to the proof." | Deck cover frame |
+| 1:18–1:30 | Freeze on the citation; tagline | "Verifiable co-presence — every claim provable the moment it's made." | Deck cover frame |
+
+### Optional ambient/proactive beat (CO-PILOT track)
+If time allows, drop one **unprompted** moment: instead of being asked, let a *claim* be spoken in
+the room — e.g. someone says "the witness was never at the warehouse" — and the co-pilot **snaps the
+contradicting source line on its own** (confidence-gated), with the latency badge. Line to say:
+"I didn't ask it anything — it heard the claim and put the proof on screen." This is the clearest
+demonstration of an ambient agent listening in and displaying live context.
 
 ## The one line that wins the room
 > "Every other voice agent bolts RAG on as an afterthought and you *hear* the dead air. We made

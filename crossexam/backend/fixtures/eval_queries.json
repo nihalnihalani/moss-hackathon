@@ -1,0 +1,121 @@
+[
+  {
+    "id": "q-admission-warehouse",
+    "query": "Did the witness admit they were at the warehouse on the night of the 14th?",
+    "gold": {"pdf-p12-l1": 3, "pdf-p27-l1": 1},
+    "answer": "Yes. The witness testified he was at the Harbor Street warehouse from approximately 9:00 p.m. until well past midnight on the night of the 14th, conducting the inventory count with Mr. Reyes.",
+    "note": "Canonical alibi admission, page 12."
+  },
+  {
+    "id": "q-warehouse-lighting",
+    "query": "Was the loading dock at the warehouse illuminated that evening?",
+    "gold": {"pdf-p12-l2": 3},
+    "answer": "Yes. The witness confirmed the loading dock at the Harbor Street warehouse was illuminated by the overhead sodium lamps throughout the entire evening of the fourteenth.",
+    "note": "Lighting / sodium lamps detail, page 12."
+  },
+  {
+    "id": "q-warehouse-keys",
+    "query": "Who else had access to the warehouse keys that night?",
+    "gold": {"pdf-p13-l1": 3},
+    "answer": "Only Mr. Reyes and the night security guard, Daniel Cole, carried keys to the Harbor Street facility.",
+    "note": "Key access, page 13."
+  },
+  {
+    "id": "q-keycard-log",
+    "query": "What is the keycard access log marked as Exhibit 7?",
+    "gold": {"pdf-p14-l1": 3},
+    "answer": "Counsel introduced Exhibit 7, the keycard access log, which records every entry to the Harbor Street warehouse between 6:00 p.m. and 6:00 a.m.",
+    "note": "Exhibit 7 keycard log, page 14."
+  },
+  {
+    "id": "q-guard-sighting",
+    "query": "Did the security guard see the witness enter the warehouse?",
+    "gold": {"pdf-p27-l1": 3, "pdf-p13-l1": 1},
+    "answer": "Yes. The security guard Daniel Cole stated that he saw the witness enter the Harbor Street warehouse at 9:05 p.m. on the night of the 14th and did not see him leave until after midnight.",
+    "note": "Guard corroboration, page 27."
+  },
+  {
+    "id": "q-cameras-offline",
+    "query": "Were the surveillance cameras working that night?",
+    "gold": {"pdf-p33-l1": 3},
+    "answer": "No. The expert witness reviewed the surveillance footage timestamps and concluded the warehouse cameras were offline between 10:30 p.m. and 11:45 p.m. on the evening in question.",
+    "note": "Camera footage offline, page 33."
+  },
+  {
+    "id": "q-contradiction-left-early",
+    "query": "Did the witness contradict his earlier testimony about when he left?",
+    "gold": {"pdf-p41-l1": 3, "pdf-p41-l2": 2, "pdf-p12-l1": 1},
+    "answer": "Yes. On further questioning the witness stated, contrary to his earlier testimony, that he had actually left the Harbor Street warehouse before 8:00 p.m. and spent the rest of the evening at home.",
+    "note": "The headline contradiction, page 41."
+  },
+  {
+    "id": "q-why-changed-story",
+    "query": "Why did the witness change his story about the night of the 14th?",
+    "gold": {"pdf-p41-l2": 3, "pdf-p41-l1": 1},
+    "answer": "When confronted with the inconsistency, the witness explained that he had confused the night of the 14th with the prior week and could no longer recall the exact time he departed the warehouse.",
+    "note": "Explanation for the inconsistency, page 41."
+  },
+  {
+    "id": "q-reyes-inventory",
+    "query": "Did Mr. Reyes confirm the inventory count happened that night?",
+    "gold": {"pdf-p52-l1": 3, "pdf-p12-l1": 1},
+    "answer": "No. Mr. Reyes testified that the inventory count on the fourteenth was cancelled and that no one performed any count at the warehouse that night.",
+    "note": "Reyes contradicts the alibi, page 52."
+  },
+  {
+    "id": "q-indemnification",
+    "query": "What does the indemnification clause about defective goods say?",
+    "gold": {"pdf-p3-l1": 3},
+    "answer": "Section 4.2 provides that the Supplier shall indemnify and hold harmless the Buyer against any losses arising out of defective goods delivered to the warehouse.",
+    "note": "Contract clause, page 3."
+  },
+  {
+    "id": "q-termination",
+    "query": "How much written notice is required to terminate the agreement?",
+    "gold": {"pdf-p8-l1": 3},
+    "answer": "Under Section 9.1, either party may terminate the Agreement upon thirty days written notice delivered to the registered address of the other party.",
+    "note": "Termination clause, page 8."
+  },
+  {
+    "id": "q-inventory-count-who",
+    "query": "What did the witness say about the inventory count with Reyes?",
+    "gold": {"pdf-p12-l1": 3, "pdf-p52-l1": 2},
+    "answer": "The witness said he was conducting the inventory count with Mr. Reyes at the Harbor Street warehouse from about 9:00 p.m. until past midnight.",
+    "note": "Two competing accounts of the inventory count, pages 12 and 52."
+  },
+  {
+    "id": "q-sodium-lamps",
+    "query": "sodium lamps overhead lighting fourteenth evening loading dock",
+    "gold": {"pdf-p12-l2": 3},
+    "answer": "The loading dock was illuminated by the overhead sodium lamps throughout the entire evening of the fourteenth.",
+    "note": "Keyword-style query for the lighting chunk, page 12."
+  },
+  {
+    "id": "q-camera-timestamps",
+    "query": "expert witness surveillance footage timestamps cameras offline",
+    "gold": {"pdf-p33-l1": 3},
+    "answer": "The expert concluded the warehouse cameras were offline between 10:30 p.m. and 11:45 p.m.",
+    "note": "Keyword-style query for the camera chunk, page 33."
+  },
+  {
+    "id": "q-neg-recipe",
+    "query": "What is the recipe for chocolate cake with buttercream frosting?",
+    "gold": {},
+    "answer": "There is no supporting passage in the deposition for this question.",
+    "note": "NEGATIVE: out-of-domain; the index should return nothing / low confidence."
+  },
+  {
+    "id": "q-neg-stock-market",
+    "query": "Predict tomorrow's stock market prices and interest rates.",
+    "gold": {},
+    "answer": "There is no supporting passage in the deposition for this question.",
+    "note": "NEGATIVE: out-of-domain; the index should return nothing / low confidence."
+  },
+  {
+    "id": "q-neg-weather",
+    "query": "What will the weather be like next weekend in Paris?",
+    "gold": {},
+    "answer": "There is no supporting passage in the deposition for this question.",
+    "note": "NEGATIVE: out-of-domain; the index should return nothing / low confidence."
+  }
+]

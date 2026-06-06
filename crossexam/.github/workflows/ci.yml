@@ -43,6 +43,30 @@ jobs:
         run: pytest
 
   # ---------------------------------------------------------------------------
+  eval:
+    name: eval + bench (quality gate)
+    runs-on: ubuntu-latest
+    # HARD gate: retrieval quality (MRR / P@1 / faithfulness) and the sub-10ms
+    # p99 latency claim are proven in mock mode with NO API keys.
+    defaults:
+      run:
+        working-directory: crossexam/backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+      - name: Retrieval + faithfulness scorecard (gate)
+        run: python -m crossexam_backend.eval.run_eval
+      - name: Retrieval latency benchmark (sub-10ms p99 gate)
+        run: python -m crossexam_backend.eval.bench
+
+  # ---------------------------------------------------------------------------
   pipeline:
     name: pipeline (python)
     runs-on: ubuntu-latest

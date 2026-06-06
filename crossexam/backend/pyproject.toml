@@ -44,11 +44,29 @@ api = [
     "livekit-api>=0.5,<2.0",
     "pdfplumber>=0.10,<1.0",
 ]
+# Optional cross-encoder reranker. The default LexicalReranker is zero-dependency
+# and always available; install this extra only to enable CrossEncoderReranker
+# (a sentence-transformers cross-encoder). Install with:
+# pip install 'crossexam-backend[rerank]'.
+rerank = [
+    "sentence-transformers>=2.2,<4.0",
+]
+# Real RAGAS faithfulness path for the eval harness. Optional: the eval + bench
+# suite runs fully offline (deterministic claim-token groundedness) without it;
+# install + set OPENAI_API_KEY only for LLM-judged faithfulness. The default
+# `make eval` / CI gate needs NO keys. Install with:
+# pip install 'crossexam-backend[eval]'.
+eval = [
+    "ragas>=0.1,<1.0",
+    "datasets>=2.0,<4.0",
+]
 
 [project.scripts]
 crossexam-worker = "crossexam_backend.server:main"
 crossexam-doctor = "crossexam_backend.doctor:main"
 crossexam-api = "crossexam_backend.api:main"
+crossexam-eval = "crossexam_backend.eval.run_eval:main"
+crossexam-bench = "crossexam_backend.eval.bench:main"
 
 [tool.setuptools.packages.find]
 include = ["crossexam_backend*"]

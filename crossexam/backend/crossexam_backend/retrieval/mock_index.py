@@ -1,13 +1,23 @@
 """In-memory mock retrieval index.
 
-Implements a deterministic hybrid (semantic-ish + keyword) ranking over a list
-of :class:`Chunk` objects loaded from a JSON fixture. It carries real bounding
+Implements a deterministic hybrid (semantic + lexical) ranking over a list of
+:class:`Chunk` objects loaded from a JSON fixture. It carries real bounding
 boxes and page numbers through to the citations and reports a realistic sub-ms
 latency, so the rest of the system behaves exactly as it would against Moss.
 
-The "semantic" component here is a lightweight token-overlap cosine that needs
-no model weights — it is intentionally simple, deterministic and dependency
-free, which is what makes it a faithful test double for Moss.
+The hybrid score fuses two first-stage rankers with Reciprocal Rank Fusion:
+
+* a "semantic" leg -- a lightweight TF-IDF cosine that needs no model weights,
+  and
+* a lexical leg -- an in-process Okapi BM25 scorer (:mod:`.bm25`).
+
+Both are intentionally simple, deterministic and dependency-free, which is what
+makes this a faithful test double for Moss's hybrid retrieval. The ``alpha``
+knob is threaded into the fusion as the dense/lexical weight (``1.0`` = pure
+semantic, ``0.0`` = pure BM25). Two order-sensitive lexical refinements (a
+verbatim phrase match and an IDF-weighted proximity score) are layered on top of
+the fused base, preserving the canonical demo ranking. An optional second-stage
+reranker (:mod:`.rerank`) can be enabled per-query.
 """
 
 from __future__ import annotations
@@ -22,6 +32,12 @@ from pathlib import Path
 
 from crossexam_backend.models import Chunk, Citation, RetrievalResult
 from crossexam_backend.retrieval.base import RetrievalIndex
+from crossexam_backend.retrieval.bm25 import BM25Okapi
+from crossexam_backend.retrieval.fusion import (
+    DEFAULT_RRF_K,
+    reciprocal_rank_fusion,
+)
+from crossexam_backend.retrieval.rerank import LexicalReranker, Reranker
 
 logger = logging.getLogger(__name__)
 
@@ -54,9 +70,14 @@ _DISCOURSE_TERMS = frozenset(
 _DISCOURSE_WEIGHT = 0.3
 
 # Relative weights of the two order-sensitive lexical refinements that are
-# layered on top of the alpha-blended semantic+keyword base score.
+# layered on top of the RRF-fused semantic+BM25 base score. The fused base is
+# normalised into [0, 1] before these are added, so these weights set how much
+# verbatim word-order and term-clustering can outweigh first-stage rank.
 _PHRASE_WEIGHT = 0.45
 _PROXIMITY_WEIGHT = 0.45
+
+# How many first-stage candidates to feed the optional second-stage reranker.
+_RERANK_CANDIDATES = 20
 
 
 def _tokenize(text: str) -> list[str]:
@@ -82,11 +103,16 @@ def _query_term_weight(term: str) -> float:
 class MockIndex(RetrievalIndex):
     """A deterministic in-memory retrieval index over fixture chunks."""
 
-    def __init__(self, chunks: list[Chunk]) -> None:
+    def __init__(
+        self, chunks: list[Chunk], *, reranker: Reranker | None = None
+    ) -> None:
         """Build the index from an in-memory list of chunks.
 
         Args:
             chunks: The corpus to search over.
+            reranker: Optional second-stage reranker used when a query passes
+                ``rerank=True``. Defaults to a deterministic
+                :class:`~crossexam_backend.retrieval.rerank.LexicalReranker`.
         """
         self._chunks: list[Chunk] = list(chunks)
         self._doc_tokens: list[list[str]] = [_tokenize(c.text) for c in self._chunks]
@@ -99,15 +125,22 @@ class MockIndex(RetrievalIndex):
         ]
         # Inverse document frequency, used to weight the semantic cosine.
         self._idf: dict[str, float] = self._compute_idf(self._doc_vectors)
+        # Lexical leg of the hybrid: an in-process Okapi BM25 over the same
+        # stopword-stripped tokens the semantic cosine uses.
+        self._bm25 = BM25Okapi(self._doc_tokens)
+        self._reranker: Reranker = reranker or LexicalReranker()
         logger.info("mock_index.loaded chunks=%d", len(self._chunks))
 
     # -- construction --------------------------------------------------------
     @classmethod
-    def from_fixture(cls, path: str | Path) -> MockIndex:
+    def from_fixture(
+        cls, path: str | Path, *, reranker: Reranker | None = None
+    ) -> MockIndex:
         """Load a :class:`MockIndex` from a JSON fixture file.
 
         Args:
             path: Path to a JSON file containing a list of chunk dicts.
+            reranker: Optional second-stage reranker (see :meth:`__init__`).
 
         Returns:
             A populated :class:`MockIndex`.
@@ -123,7 +156,7 @@ class MockIndex(RetrievalIndex):
         if not isinstance(raw, list):
             raise ValueError("Fixture must be a JSON list of chunk objects")
         chunks = [Chunk.model_validate(item) for item in raw]
-        return cls(chunks)
+        return cls(chunks, reranker=reranker)
 
     @staticmethod
     def _compute_idf(doc_vectors: list[Counter[str]]) -> dict[str, float]:
@@ -169,18 +202,6 @@ class MockIndex(RetrievalIndex):
         if q_norm == 0.0 or d_norm == 0.0:
             return 0.0
         return dot / (q_norm * d_norm)
-
-    @staticmethod
-    def _keyword_score(query_tokens: list[str], doc_vec: Counter[str]) -> float:
-        """Weighted fraction of distinct query tokens present in the document."""
-        if not query_tokens:
-            return 0.0
-        distinct = set(query_tokens)
-        total = sum(_query_term_weight(t) for t in distinct)
-        if total == 0.0:
-            return 0.0
-        hits = sum(_query_term_weight(t) for t in distinct if doc_vec.get(t, 0) > 0)
-        return hits / total
 
     def _phrase_score(self, query_raw: list[str], doc_idx: int) -> float:
         """Length of the longest verbatim query phrase found in the document.
@@ -260,23 +281,85 @@ class MockIndex(RetrievalIndex):
         ) / sum(_query_term_weight(t) * self._idf.get(t, 1.0) for t in distinct)
         return idf_mass * tightness
 
+    # -- hybrid fusion -------------------------------------------------------
+    def _candidate_indices(self, query_term_set: set[str]) -> list[int]:
+        """Chunks sharing at least one query term (cheap recall pruning).
+
+        A chunk with no overlapping term scores 0 on the semantic cosine, 0 on
+        BM25, and 0 on both refinements, so it can never rank — skipping it keeps
+        the per-query work proportional to the matched postings, not the corpus.
+        """
+        return [
+            idx
+            for idx in range(len(self._chunks))
+            if not query_term_set.isdisjoint(self._doc_vectors[idx])
+        ]
+
+    def _fused_base(
+        self,
+        candidates: list[int],
+        query_vec: Counter[str],
+        query_tokens: list[str],
+        alpha: float,
+    ) -> dict[int, float]:
+        """RRF-fuse the semantic and BM25 rankings over ``candidates``.
+
+        Builds two best-first rankings -- one by the TF-IDF cosine (the dense /
+        semantic leg) and one by Okapi BM25 (the lexical leg) -- and fuses them
+        with Reciprocal Rank Fusion, weighting the semantic leg by ``alpha`` and
+        the lexical leg by ``1 - alpha``. The resulting fused scores are scaled
+        so the best candidate is ``1.0`` (and the empty case yields ``{}``),
+        giving the order-sensitive refinements a stable scale to add onto.
+        """
+        semantic_scores = {
+            idx: self._semantic_score(query_vec, idx) for idx in candidates
+        }
+        bm25_scores = {idx: self._bm25.score(query_tokens, idx) for idx in candidates}
+
+        semantic_ranking = sorted(
+            candidates, key=lambda i: (-semantic_scores[i], self._chunks[i].id)
+        )
+        bm25_ranking = sorted(
+            candidates, key=lambda i: (-bm25_scores[i], self._chunks[i].id)
+        )
+
+        fused = reciprocal_rank_fusion(
+            [semantic_ranking, bm25_ranking],
+            weights=[alpha, 1.0 - alpha],
+            k=DEFAULT_RRF_K,
+        )
+        if not fused:
+            return {}
+        best = max(fused.values())
+        if best <= 0.0:
+            return dict.fromkeys(fused, 0.0)
+        return {idx: value / best for idx, value in fused.items()}
+
     # -- public API ----------------------------------------------------------
     async def query(
         self,
         text: str,
         top_k: int = 5,
         alpha: float = 0.8,
+        *,
+        rerank: bool = False,
     ) -> RetrievalResult:
         """Return the top-``k`` citations for ``text`` (see base class).
 
-        The score blends four deterministic, dependency-free signals:
+        The score combines deterministic, dependency-free signals:
 
-        * an ``alpha``-weighted mix of the TF-IDF cosine (semantic) and the
-          query-term-coverage (keyword) scores -- preserving the existing
-          ``alpha`` contract, and
-        * two order-sensitive lexical refinements -- a verbatim phrase match
-          and an IDF-weighted proximity score -- that reward passages echoing
-          the query's wording and clustering its salient terms.
+        * a hybrid base -- the TF-IDF cosine (semantic) ranking and the Okapi
+          BM25 (lexical) ranking fused with Reciprocal Rank Fusion, with
+          ``alpha`` weighting the dense leg and ``1 - alpha`` the lexical leg,
+          then normalised so the best candidate is ``1.0``; and
+        * two order-sensitive lexical refinements -- a verbatim phrase match and
+          an IDF-weighted proximity score -- layered on top to reward passages
+          that echo the query's wording and cluster its salient terms.
+
+        When ``rerank`` is ``True`` the top ``_RERANK_CANDIDATES`` first-stage
+        hits are re-scored by the configured second-stage
+        :class:`~crossexam_backend.retrieval.rerank.Reranker` before truncating
+        to ``top_k``; reranking never runs on the default path.
 
         Scores are normalised by the best hit, so the top citation reports
         ``1.0`` and the rest fall in ``(0, 1]``.
@@ -286,17 +369,14 @@ class MockIndex(RetrievalIndex):
         query_tokens = _tokenize(text)
         query_raw = _raw_tokens(text)
         query_vec: Counter[str] = Counter(query_tokens)
-
         query_term_set = set(query_tokens)
+
+        candidates = self._candidate_indices(query_term_set)
+        fused_base = self._fused_base(candidates, query_vec, query_tokens, alpha)
+
         scored: list[tuple[float, int]] = []
-        for idx in range(len(self._chunks)):
-            # Cheap pruning: a chunk sharing no query terms scores 0 on every
-            # component, so skip the (relatively pricey) phrase/proximity work.
-            if query_term_set.isdisjoint(self._doc_vectors[idx]):
-                continue
-            semantic = self._semantic_score(query_vec, idx)
-            keyword = self._keyword_score(query_tokens, self._doc_vectors[idx])
-            base = alpha * semantic + (1.0 - alpha) * keyword
+        for idx in candidates:
+            base = fused_base.get(idx, 0.0)
             phrase = self._phrase_score(query_raw, idx)
             proximity = self._proximity_score(query_tokens, idx)
             blended = (
@@ -310,6 +390,9 @@ class MockIndex(RetrievalIndex):
         # Sort by score desc, then by chunk id for fully deterministic ties.
         scored.sort(key=lambda pair: (-pair[0], self._chunks[pair[1]].id))
 
+        if rerank and scored:
+            scored = self._apply_rerank(text, scored)
+
         # Normalise so the best hit is 1.0 and scores stay in (0, 1].
         best = scored[0][0] if scored else 1.0
 
@@ -320,9 +403,30 @@ class MockIndex(RetrievalIndex):
 
         latency_ms = (time.perf_counter() - start) * 1000.0
         logger.debug(
-            "mock_index.query text=%r hits=%d latency_ms=%.3f",
+            "mock_index.query text=%r hits=%d rerank=%s latency_ms=%.3f",
             text,
             len(citations),
+            rerank,
             latency_ms,
         )
         return RetrievalResult(query=text, citations=citations, latency_ms=latency_ms)
+
+    def _apply_rerank(
+        self, text: str, scored: list[tuple[float, int]]
+    ) -> list[tuple[float, int]]:
+        """Re-order the top first-stage hits with the second-stage reranker.
+
+        Only the top ``_RERANK_CANDIDATES`` are re-scored (the rest keep their
+        first-stage order appended after, so ``top_k`` slicing is unaffected for
+        small ``k``). The reranker's scores fully determine the new order of the
+        candidate window; ties fall back to chunk id for determinism.
+        """
+        window = scored[:_RERANK_CANDIDATES]
+        tail = scored[_RERANK_CANDIDATES:]
+        documents = [self._chunks[idx].text for _, idx in window]
+        rerank_scores = self._reranker.score(text, documents)
+        reordered = sorted(
+            zip(rerank_scores, (idx for _, idx in window), strict=True),
+            key=lambda pair: (-pair[0], self._chunks[pair[1]].id),
+        )
+        return [(float(score), idx) for score, idx in reordered] + tail

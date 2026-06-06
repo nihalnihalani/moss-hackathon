@@ -86,6 +86,24 @@ async def test_alpha_extremes_change_results(index: MockIndex) -> None:
     assert sem.citations
 
 
+async def test_pure_bm25_alpha_zero_returns_lexical_matches(index: MockIndex) -> None:
+    """alpha=0.0 (pure lexical/BM25 leg) still surfaces a chunk with the term."""
+    result = await index.query("indemnification", top_k=3, alpha=0.0)
+    assert result.citations
+    assert "indemnification" in result.citations[0].chunk.text.lower()
+
+
+async def test_hybrid_rare_term_beats_common_term_chunk(index: MockIndex) -> None:
+    """The BM25 leg of the hybrid lets a rare distinctive term win.
+
+    'indemnification' occurs in a single chunk; the hybrid fusion (with BM25's
+    IDF weighting) must rank that chunk first for a query naming it, rather than
+    a boilerplate Q/A line that merely shares common words.
+    """
+    result = await index.query("indemnification clause supplier", top_k=5)
+    assert result.citations[0].chunk.id == "pdf-p3-l1"
+
+
 def test_from_fixture_missing_file() -> None:
     """A missing fixture raises FileNotFoundError."""
     with pytest.raises(FileNotFoundError):
