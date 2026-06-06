@@ -26,8 +26,8 @@ pdf = [
 ]
 dev = [
     "pytest>=8.0,<10.0",
-    "ruff>=0.4,<1.0",
-    "mypy>=1.9,<2.0",
+    "ruff==0.15.0",
+    "mypy==1.19.1",
     "reportlab>=4.0,<5.0",
     "pypdf>=4.0,<6.0",
     "pdfplumber>=0.11,<1.0",
@@ -52,7 +52,10 @@ target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "ANN", "D"]
-ignore = ["D203", "D213", "ANN101", "ANN102"]
+# B008: Typer's documented idiom passes typer.Option(...)/typer.Argument(...)
+# as parameter defaults; flagging it would fight the framework, so it is
+# ignored globally.
+ignore = ["D203", "D213", "B008"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"

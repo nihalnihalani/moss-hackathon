@@ -5,12 +5,15 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from crossexam_pipeline.build_index import build_index, write_chunks_json
 from crossexam_pipeline.fallback import DeterministicParser
 from crossexam_pipeline.models import ParsedChunk
 
 
 def test_dry_run_writes_backend_compatible_chunks(tmp_path: Path) -> None:
+    """Dry-run writes the exact backend mock-index JSON shape."""
     chunks = DeterministicParser().parse()
     out = tmp_path / "sample_chunks.json"
 
@@ -35,7 +38,10 @@ def test_dry_run_writes_backend_compatible_chunks(tmp_path: Path) -> None:
         ParsedChunk.model_validate(rec)
 
 
-def test_disk_mode_when_no_moss_credentials(tmp_path: Path, monkeypatch) -> None:
+def test_disk_mode_when_no_moss_credentials(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without Moss credentials, build_index falls back to disk mode."""
     for var in ("MOSS_PROJECT_ID", "MOSS_API_KEY", "MOSS_INDEX_NAME"):
         monkeypatch.delenv(var, raising=False)
     chunks = DeterministicParser().parse()
@@ -48,6 +54,7 @@ def test_disk_mode_when_no_moss_credentials(tmp_path: Path, monkeypatch) -> None
 
 
 def test_write_is_idempotent(tmp_path: Path) -> None:
+    """Writing the same chunks in any order yields identical bytes."""
     chunks = DeterministicParser().parse()
     out = tmp_path / "chunks.json"
     write_chunks_json(chunks, out)
@@ -59,6 +66,7 @@ def test_write_is_idempotent(tmp_path: Path) -> None:
 
 
 def test_output_round_trips_to_parsed_chunks(tmp_path: Path) -> None:
+    """Written JSON re-validates back into ParsedChunk records."""
     chunks = DeterministicParser().parse()
     out = tmp_path / "chunks.json"
     write_chunks_json(chunks, out)

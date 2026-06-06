@@ -52,6 +52,7 @@ class MossConfig:
         api_key: str | None,
         index_name: str | None,
     ) -> None:
+        """Store Moss configuration, coercing empty strings to ``None``."""
         self.project_id = project_id or None
         self.api_key = api_key or None
         self.index_name = index_name or None

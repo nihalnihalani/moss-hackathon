@@ -58,7 +58,7 @@ class _BackendBBox(BaseModel):
     page_height: float = Field(default=792.0, gt=0.0)
 
     @model_validator(mode="after")
-    def _ordering(self) -> "_BackendBBox":
+    def _ordering(self) -> _BackendBBox:
         if self.x1 < self.x0:
             raise ValueError("x1 must be >= x0")
         if self.y1 < self.y0:
@@ -76,7 +76,7 @@ class _BackendChunk(BaseModel):
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
 
     @model_validator(mode="after")
-    def _page_matches(self) -> "_BackendChunk":
+    def _page_matches(self) -> _BackendChunk:
         if self.bbox.page != self.page:
             raise ValueError("Chunk.page must match Chunk.bbox.page")
         return self

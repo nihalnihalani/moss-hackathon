@@ -11,10 +11,12 @@ def _parse() -> list[ParsedChunk]:
 
 
 def test_sample_fixture_exists() -> None:
+    """The bundled sample fixture is present on disk."""
     assert DEFAULT_SAMPLE_PATH.exists(), DEFAULT_SAMPLE_PATH
 
 
 def test_parse_produces_valid_chunks_with_bboxes() -> None:
+    """Parsed chunks carry point-based, in-page bounding boxes."""
     chunks = _parse()
     assert chunks, "expected at least one chunk"
     for c in chunks:
@@ -34,6 +36,7 @@ def test_parse_produces_valid_chunks_with_bboxes() -> None:
 
 
 def test_word_level_citations_are_present_and_boxed() -> None:
+    """Every chunk has one boxed word citation per token."""
     chunks = _parse()
     for c in chunks:
         assert c.words, f"chunk {c.id} has no word citations"
@@ -44,6 +47,7 @@ def test_word_level_citations_are_present_and_boxed() -> None:
 
 
 def test_key_admission_and_contradiction_present() -> None:
+    """The sample contains the key admission and its contradiction."""
     chunks = _parse()
     texts = [c.text.lower() for c in chunks]
     pages = {c.page for c in chunks}
@@ -56,12 +60,14 @@ def test_key_admission_and_contradiction_present() -> None:
 
 
 def test_parse_is_deterministic() -> None:
+    """Repeated parses yield byte-identical chunk dumps."""
     first = _parse()
     second = _parse()
     assert [c.model_dump() for c in first] == [c.model_dump() for c in second]
 
 
 def test_chunk_ids_are_unique_and_stable() -> None:
+    """Chunk ids are unique and stable across parses."""
     chunks = _parse()
     ids = [c.id for c in chunks]
     assert len(ids) == len(set(ids)), "chunk ids must be unique"

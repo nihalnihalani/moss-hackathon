@@ -64,6 +64,7 @@ class UnsiloedParser:
         timeout: float = 600.0,
         client: httpx.AsyncClient | None = None,
     ) -> None:
+        """Initialize the parser and validate that an API key is present."""
         if not api_key:
             raise MissingCredentialsError(
                 f"No Unsiloed API key. Set {ENV_API_KEY} or run with --dry-run "
@@ -76,7 +77,7 @@ class UnsiloedParser:
         self._client = client
 
     @classmethod
-    def from_env(cls, **kwargs: Any) -> UnsiloedParser:
+    def from_env(cls, **kwargs: Any) -> UnsiloedParser:  # noqa: ANN401 - forwarded verbatim to __init__, whose params are typed
         """Build a parser from environment variables.
 
         Reads ``UNSILOED_API_KEY`` and optionally ``UNSILOED_BASE_URL``.
@@ -190,7 +191,8 @@ class UnsiloedParser:
             payload = resp.json()
             status = str(payload.get("status", "")).lower()
             if status in {"completed", "succeeded", "done"}:
-                return payload.get("result", payload)
+                result: dict[str, Any] = payload.get("result", payload)
+                return result
             if status in {"failed", "error", "cancelled"}:
                 raise UnsiloedError(
                     f"Unsiloed job {job_id} ended with status {status!r}: "

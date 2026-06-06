@@ -14,16 +14,19 @@ def _bbox(page: int = 1) -> BBox:
 
 
 def test_bbox_rejects_negative_coordinates() -> None:
+    """BBox rejects negative coordinates."""
     with pytest.raises(ValidationError):
         BBox(page=1, x0=-1.0, y0=0.0, x1=540.0, y1=168.0)
 
 
 def test_bbox_rejects_inverted_coordinates() -> None:
+    """BBox rejects boxes where x1 < x0."""
     with pytest.raises(ValidationError):
         BBox(page=1, x0=540.0, y0=120.0, x1=72.0, y1=168.0)
 
 
 def test_chunk_bbox_page_must_match() -> None:
+    """A chunk's page must match its bbox page."""
     with pytest.raises(ValidationError):
         ParsedChunk(
             id="c1",
@@ -35,6 +38,7 @@ def test_chunk_bbox_page_must_match() -> None:
 
 
 def test_to_index_record_has_exact_backend_shape() -> None:
+    """to_index_record emits exactly the backend's key set."""
     chunk = ParsedChunk(
         id="c1",
         text="warehouse on the night of the 14th",
@@ -62,6 +66,7 @@ def test_to_index_record_has_exact_backend_shape() -> None:
 
 
 def test_chunks_to_index_records_roundtrips_through_validation() -> None:
+    """Projected index records re-validate as ParsedChunk."""
     chunk = ParsedChunk(
         id="c1", text="t", page=3, bbox=_bbox(3), confidence=0.8
     )

@@ -115,6 +115,7 @@ class DeterministicParser:
     """
 
     def __init__(self, sample_path: Path | str | None = None) -> None:
+        """Initialize with the sample JSON path, or the bundled default."""
         self.sample_path = Path(sample_path) if sample_path else DEFAULT_SAMPLE_PATH
 
     def _load_sample(self) -> dict[str, Any]:
