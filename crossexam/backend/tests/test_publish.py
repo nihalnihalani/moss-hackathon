@@ -315,3 +315,76 @@ def test_cross_document_contradiction_marks_cross_document_flag() -> None:
     frame = build_frame(result, answer_text="warehouse past midnight")
     assert frame["contradiction"] is True
     assert frame["crossDocument"] is True
+
+
+def _contract_email_contradiction_result() -> MultiHopResult:
+    """A §4.2 contract clause vs the email Acme admission (cross-document)."""
+    clause = Citation(
+        chunk=Chunk(
+            id="contract-msa-p7-l1",
+            text=(
+                "Section 4.2 Subcontracting. Contractor shall not delegate, "
+                "assign, or subcontract any of the Services, in whole or in "
+                "part, to any third party without the prior written consent of "
+                "Client."
+            ),
+            page=7,
+            bbox=BBox(page=7, x0=72.0, y0=100.0, x1=540.0, y1=136.0),
+            documentId="contract-msa",
+        ),
+        score=0.95,
+        documentId="contract-msa",
+    )
+    email = Citation(
+        chunk=Chunk(
+            id="email-thread-p1-l2",
+            text=(
+                "From: Dana Vance Subject: Re: Section 4.2 / Acme work order -- "
+                "we already handed the integration work off to Acme Labs last "
+                "week, and never got the formal sign-off from your side."
+            ),
+            page=1,
+            bbox=BBox(page=1, x0=72.0, y0=100.0, x1=540.0, y1=136.0),
+            documentId="email-thread",
+        ),
+        score=0.92,
+        documentId="email-thread",
+    )
+    return MultiHopResult(
+        query="Does the email breach §4.2 by subcontracting to Acme?",
+        citations=[clause, email],
+        hops=[],
+        contradiction=True,
+        cross_document=True,
+        primary_id="contract-msa-p7-l1",
+        latency_ms=5.0,
+    )
+
+
+def test_contradiction_frame_emits_clause_anchor() -> None:
+    """A §4.2 contradiction frame emits anchor='§4.2 Subcontracting' (FIX 1).
+
+    The frontend "CONFLICT — Anchor: §4.2 Subcontracting" banner reads
+    ``frame.anchor``; it must now be emitted in LIVE mode (was mock-only), paired
+    from the clause number and its heading label.
+    """
+    frame = build_frame(
+        _contract_email_contradiction_result(),
+        answer_text="The contract bars subcontracting without prior written consent.",
+    )
+    assert frame["contradiction"] is True
+    assert frame["crossDocument"] is True
+    assert frame["anchor"] == "§4.2 Subcontracting"
+    # The anchor is JSON-serialisable on the wire frame.
+    assert json.loads(json.dumps(frame))["anchor"] == "§4.2 Subcontracting"
+
+
+def test_non_contradiction_frame_omits_anchor() -> None:
+    """A plain (non-contradiction) result carries no ``anchor`` field."""
+    frame = build_frame(_supported_result())
+    assert "anchor" not in frame
+    # A multi-hop result without the contradiction flag also omits it.
+    no_conflict = _two_doc_contradiction_result().model_copy(
+        update={"contradiction": False}
+    )
+    assert "anchor" not in build_frame(no_conflict)

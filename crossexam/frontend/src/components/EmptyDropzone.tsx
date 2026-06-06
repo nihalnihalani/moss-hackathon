@@ -26,11 +26,13 @@ export interface EmptyDropzoneProps {
   disabled?: boolean;
 }
 
-/** Accepted document types: PDF, Word, plain text. Single file only. */
+/**
+ * Accepted document types: PDF only. The backend /documents endpoint rejects
+ * anything else with a 415, so the dropzone must not advertise docx/txt.
+ * Single file only.
+ */
 const ACCEPT = {
   'application/pdf': ['.pdf'],
-  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': ['.docx'],
-  'text/plain': ['.txt'],
 } as const;
 
 export function EmptyDropzone({ onUploaded, disabled = false }: EmptyDropzoneProps): JSX.Element {
@@ -75,7 +77,7 @@ export function EmptyDropzone({ onUploaded, disabled = false }: EmptyDropzonePro
       const reason = rejections[0]?.errors[0]?.message;
       const msg = reason
         ? `That file can't be used: ${reason}`
-        : 'That file type is not supported. Use a PDF, DOCX, or TXT.';
+        : 'That file type is not supported. Use a PDF.';
       setStatus(msg);
       toast.error(msg);
     },
@@ -119,7 +121,7 @@ export function EmptyDropzone({ onUploaded, disabled = false }: EmptyDropzonePro
         <p className="empty-dropzone__headline">
           {busy ? 'Submitting into evidence…' : 'Drag & drop a Deposition, Contract, or Brief to begin'}
         </p>
-        <p className="empty-dropzone__hint">PDF, DOCX, or TXT · single file</p>
+        <p className="empty-dropzone__hint">PDF · single file</p>
 
         <button
           type="button"

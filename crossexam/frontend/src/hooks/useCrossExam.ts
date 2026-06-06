@@ -45,6 +45,7 @@ import {
   PROACTIVE_TRANSCRIPT,
   SPEAKER_COUNSEL,
   SPEAKER_WITNESS,
+  matchMockCitation,
 } from '../lib/mockData';
 
 export interface CrossExamConfig {
@@ -536,21 +537,70 @@ export function useCrossExam(config: CrossExamConfig): CrossExamState {
     }
   }, [isMock]);
 
-  // Ask a typed question (Cmd/Ctrl+K). In mock, surface the question and run the
-  // scripted beat; in live, forward it to the agent over the data channel.
+  // Ask a typed question (Cmd/Ctrl+K).
+  //
+  // MOCK: the TYPED text drives the result. We score the question against the
+  // available mock citations and surface the BEST match as a real snap (its
+  // doc/page/quads/faithfulness), or an honest "No grounded source" not_found
+  // state when nothing matches. We do NOT replay the fixed script (that is what
+  // "Run demo" is for), so the typed question is never discarded.
+  //
+  // LIVE: publish `{type:"ask", text:q}` over the data channel for the backend
+  // handler to consume; the agent then drives state via the frame stream.
   const ask = useCallback(
     (question: string) => {
       const q = question.trim();
       if (!q) return;
       if (isMock) {
-        setSnap((prev) => ({ ...prev, question: q }));
-        runMockDemo();
+        // A typed ask is a one-shot turn, not the scripted walkthrough: cancel
+        // any in-flight demo timers so they cannot overwrite this result.
+        clearTimers();
+        const match = matchMockCitation(q);
+        if (match) {
+          const { citation, caption } = match;
+          setSnap((prev) => ({
+            ...prev,
+            question: q,
+            agentState: 'speaking',
+            caption,
+            activeCitation: citation,
+            citations: [citation],
+            primaryId: citation.id,
+            targetPage: citation.bbox.page,
+            contradiction: false,
+            anchor: null,
+            hops: [],
+            memory: [],
+            speaker: SPEAKER_COUNSEL,
+            proactive: false,
+            silenceReason: null,
+            lastLatencyMs: citation.latencyMs ?? prev.lastLatencyMs,
+          }));
+        } else {
+          // Honest silence — nothing in the corpus grounds this question.
+          setSnap((prev) => ({
+            ...prev,
+            question: q,
+            agentState: 'idle',
+            caption: NOT_FOUND_TRANSCRIPT,
+            activeCitation: null,
+            citations: [],
+            primaryId: null,
+            contradiction: false,
+            anchor: null,
+            hops: [],
+            memory: [],
+            speaker: SPEAKER_COUNSEL,
+            proactive: false,
+            silenceReason: 'not_found_in_document',
+          }));
+        }
       } else {
-        publishRef.current?.({ type: 'ask', question: q });
+        publishRef.current?.({ type: 'ask', text: q });
         setSnap((prev) => ({ ...prev, question: q, agentState: 'thinking' }));
       }
     },
-    [isMock, runMockDemo],
+    [isMock, clearTimers],
   );
 
   return {

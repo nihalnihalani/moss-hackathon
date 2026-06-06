@@ -2011,6 +2011,13 @@ body {
   body { overflow: visible; background: #ffffff; }
   .app > *:not(.memo-sheet) { display: none !important; }
   .atmosphere { display: none !important; }
+  /* Overlays portalled OUTSIDE .app (e.g. the toast container lives at the
+     ToastProvider root in main.tsx; the cmdk palette portals to <body>) escape
+     the `.app > *` rule above, so hide them explicitly or they print on top of
+     the memo. */
+  .toast-container,
+  .qpalette,
+  [cmdk-overlay] { display: none !important; }
 
   .memo-sheet {
     display: block;

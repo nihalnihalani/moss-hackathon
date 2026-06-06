@@ -46,6 +46,10 @@ Frame = {
   citations: Citation[],          // 0..N — multi-hop can return several across docs/pages
   primaryId?: string,             // which citation to page-jump to first
   contradiction?: boolean,        // NEW (feat 1): the citations conflict (cross-page/cross-doc)
+  crossDocument?: boolean,        // NEW (feat 1): the conflict spans two documents (vs in-document)
+  anchor?: string,                // NEW (feat 1): human-readable conflict anchor for the banner
+                                  //   (e.g. "§4.2 Subcontracting", "Acme", "Invoice #2231",
+                                  //   "Net-30 vs Net-60"); present only on a contradiction frame
   hops?: HopTrace[],              // NEW (feat 1): decomposition trail ("how I found this")
   memory?: MemoryRef[],           // NEW (feat 5): recalls referenced this turn
   speaker?: Speaker,              // NEW (feat 4): who triggered it (meeting mode)

@@ -209,6 +209,12 @@ def _run_livekit_worker(settings: Settings, index: RetrievalIndex) -> int:
         # Wire the room handle so on_user_turn_completed can publish citations
         # to the frontend over the data channel.
         agent.room = ctx.room
+        # Register the INBOUND data-channel handler so a typed Cmd+K question
+        # ({type:"ask"}) or Space push-to-talk ({type:"ptt"}) published by the
+        # frontend reaches the backend: an "ask" runs the same route as a spoken
+        # turn (retrieve / multi-hop -> publish a real citations/contradiction
+        # frame). Guarded — a no-op without a live room.
+        agent.register_inbound_handlers(ctx.room)
 
         # Build the STT/LLM/TTS providers from settings. A misconfigured or
         # missing provider raises a CLEAR ProviderConfigError here instead of

@@ -43,6 +43,22 @@ describe('EmptyDropzone', () => {
     expect(panel).toHaveAttribute('data-drag', 'idle');
   });
 
+  it('advertises PDF only (backend rejects other types with 415)', () => {
+    renderDropzone();
+    // The hint copy must say PDF only — no docx/txt.
+    const hint = screen.getByText(/single file/i);
+    expect(hint.textContent).toMatch(/PDF/);
+    expect(hint.textContent).not.toMatch(/DOCX/i);
+    expect(hint.textContent).not.toMatch(/TXT/i);
+    // react-dropzone reflects the accept map onto the hidden input's `accept`
+    // attribute: PDF mime + .pdf extension only, nothing else.
+    const input = screen.getByTestId('empty-dropzone-input');
+    const accept = input.getAttribute('accept') ?? '';
+    expect(accept).toContain('application/pdf');
+    expect(accept).toContain('.pdf');
+    expect(accept).not.toMatch(/wordprocessingml|\.docx|text\/plain|\.txt/i);
+  });
+
   it('accepts a dropped PDF and routes it through the ingest path', async () => {
     uploadDocument.mockResolvedValue({
       documentId: 'doc-brief',

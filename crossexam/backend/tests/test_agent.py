@@ -280,3 +280,116 @@ async def test_not_found_publishes_empty_citations_with_reason(
     frame = room.frames[-1]
     assert frame["citations"] == []
     assert frame["reason"] == REASON_NOT_FOUND
+
+
+# --------------------------------------------------------------------------- #
+# FIX 2: inbound typed question (Cmd+K) + push-to-talk over the data channel.  #
+# These exercise the pure helper / dispatcher WITHOUT ``livekit`` installed.   #
+# --------------------------------------------------------------------------- #
+async def test_handle_ask_text_contract_vs_email_yields_contradiction() -> None:
+    """A TYPED contract-vs-email question yields a real contradiction frame.
+
+    ``handle_ask_text`` runs the SAME route as a spoken turn (multi-hop -> fuse
+    -> contradiction), so a typed Cmd+K question produces ``contradiction:true``
+    + the ``anchor`` set + ``crossDocument:true`` and the contract clause as
+    primary — proving the typed input is no longer a dead channel.
+    """
+    index = MockIndex.from_fixture(FIXTURE)
+    await index.prewarm()
+    agent = CrossExamAgent(index, top_k=5)
+    frame = await agent.handle_ask_text(
+        "Does the email admit subcontracting to Acme in breach of Section 4.2 "
+        "without consent?"
+    )
+    assert frame is not None
+    assert frame["contradiction"] is True
+    assert frame["crossDocument"] is True
+    assert frame["anchor"] == "§4.2 Subcontracting"
+    # The page-jump anchor is the governing contract clause, not the email.
+    primary = next(c for c in frame["citations"] if c["id"] == frame["primaryId"])
+    assert primary["documentId"] == "contract-msa"
+
+
+async def test_handle_ask_text_blank_returns_none() -> None:
+    """A blank typed question is a no-op (returns ``None``)."""
+    index = MockIndex.from_fixture(FIXTURE)
+    agent = CrossExamAgent(index, top_k=3)
+    assert await agent.handle_ask_text("   ") is None
+
+
+async def test_handle_inbound_ask_publishes_frame() -> None:
+    """An inbound {type:'ask'} JSON payload publishes a real citations frame."""
+    index = MockIndex.from_fixture(FIXTURE)
+    await index.prewarm()
+    agent = CrossExamAgent(index, top_k=5)
+    room = _RecordingRoom()
+    agent.room = room
+    import json
+
+    payload = json.dumps(
+        {
+            "type": "ask",
+            "question": (
+                "Does the email admit subcontracting to Acme in breach of "
+                "Section 4.2 without consent?"
+            ),
+        }
+    ).encode("utf-8")
+    published = await agent.handle_inbound_data(payload)
+    assert published is True
+    frame = room.frames[-1]
+    assert frame["contradiction"] is True
+    assert frame["anchor"] == "§4.2 Subcontracting"
+
+
+async def test_handle_inbound_ask_accepts_text_key() -> None:
+    """The ask handler also accepts a ``text`` key (per the contract spec)."""
+    index = MockIndex.from_fixture(FIXTURE)
+    await index.prewarm()
+    agent = CrossExamAgent(index, top_k=3)
+    room = _RecordingRoom()
+    agent.room = room
+    import json
+
+    payload = json.dumps(
+        {"type": "ask", "text": "where were you on the night of the 14th warehouse"}
+    )
+    published = await agent.handle_inbound_data(payload)
+    assert published is True
+    assert room.frames[-1]["citations"]
+
+
+async def test_handle_inbound_ptt_toggles_listening_no_publish() -> None:
+    """A {type:'ptt'} signal toggles listening and publishes nothing."""
+    index = MockIndex.from_fixture(FIXTURE)
+    agent = CrossExamAgent(index, top_k=3)
+    room = _RecordingRoom()
+    agent.room = room
+    import json
+
+    assert agent.ptt_listening is False
+    assert await agent.handle_inbound_data(
+        json.dumps({"type": "ptt", "state": "start"})
+    ) is False
+    assert agent.ptt_listening is True
+    assert await agent.handle_inbound_data(
+        json.dumps({"type": "ptt", "state": "stop"})
+    ) is False
+    assert agent.ptt_listening is False
+    assert room.frames == []  # ptt never publishes a citation frame
+
+
+async def test_handle_inbound_malformed_payload_ignored() -> None:
+    """Malformed / non-dict inbound payloads are ignored, never crash."""
+    index = MockIndex.from_fixture(FIXTURE)
+    agent = CrossExamAgent(index, top_k=3)
+    assert await agent.handle_inbound_data(b"not json") is False
+    assert await agent.handle_inbound_data(b'"a string, not an object"') is False
+    assert await agent.handle_inbound_data(b'{"type": "unknown"}') is False
+
+
+async def test_register_inbound_handlers_noop_without_room() -> None:
+    """Registration is a guarded no-op when no room is wired (import-safe)."""
+    index = MockIndex.from_fixture(FIXTURE)
+    agent = CrossExamAgent(index, top_k=3)
+    assert agent.register_inbound_handlers() is False

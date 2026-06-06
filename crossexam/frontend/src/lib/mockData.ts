@@ -463,3 +463,107 @@ export const DEMO_CITATIONS: readonly Citation[] = [
   CONTRADICTION_CITATION,
   PROACTIVE_CITATION,
 ];
+
+/**
+ * Every citation the offline mock can ground a typed question against (the
+ * deposition admission, the cross-doc visitor log, the scanned field notes, the
+ * contract §4.2 clause, and the email admission). A Cmd+K query is scored
+ * against these so the TYPED text drives the result, not a canned script.
+ */
+export const ALL_MOCK_CITATIONS: readonly Citation[] = [
+  ANSWER_CITATION,
+  CONTRADICTION_CITATION,
+  PROACTIVE_CITATION,
+  CONTRACT_CLAUSE_CITATION,
+  EMAIL_ADMISSION_CITATION,
+];
+
+/** A spoken caption + an optional anchor to surface for a matched citation. */
+export interface MockMatch {
+  /** The best-matching citation for the query. */
+  citation: Citation;
+  /** A short grounded caption to speak alongside the snap. */
+  caption: string;
+}
+
+/** English stop-words stripped before scoring so only content words count. */
+const STOP_WORDS = new Set<string>([
+  'a', 'an', 'and', 'any', 'are', 'as', 'at', 'be', 'been', 'but', 'by', 'did',
+  'do', 'does', 'for', 'from', 'had', 'has', 'have', 'he', 'her', 'him', 'his',
+  'i', 'if', 'in', 'into', 'is', 'it', 'its', 'me', 'my', 'no', 'not', 'of',
+  'on', 'or', 'our', 'over', 'she', 'so', 'that', 'the', 'their', 'them',
+  'then', 'there', 'they', 'this', 'to', 'up', 'us', 'was', 'we', 'were',
+  'what', 'when', 'where', 'which', 'who', 'why', 'will', 'with', 'you', 'your',
+  'about', 'ever', 'still', 'whole',
+]);
+
+/** Lowercase, split on non-word chars, drop stop-words + 1-char tokens. */
+function tokenize(s: string): string[] {
+  return s
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((t) => t.length > 1 && !STOP_WORDS.has(t));
+}
+
+/**
+ * True when two content words refer to the same concept: an exact match, or one
+ * is a stem/prefix of the other of length >= 4 (so "contract" matches
+ * "contractor"/"contracting" and "subcontracting" matches "subcontract"). This
+ * keeps the matcher robust to morphology without a real stemmer.
+ */
+function tokensRelated(a: string, b: string): boolean {
+  if (a === b) return true;
+  const [shorter, longer] = a.length <= b.length ? [a, b] : [b, a];
+  return shorter.length >= 4 && longer.startsWith(shorter);
+}
+
+/**
+ * Score a query against the mock corpus and return the BEST-matching citation
+ * (with a grounded caption), or null when nothing clears the bar — the honest
+ * "No grounded source" state. Scoring is a content-word overlap (with light
+ * stemming) between the query and each citation's quoted text + title, so e.g. a
+ * contract / subcontracting query surfaces the §4.2 clause rather than the
+ * deposition, while a gibberish query matches nothing.
+ *
+ * Pure + deterministic so the mock `ask(q)` path is unit-testable.
+ */
+export function matchMockCitation(query: string): MockMatch | null {
+  const qTokens = tokenize(query);
+  if (qTokens.length === 0) return null;
+
+  let best: { citation: Citation; score: number } | null = null;
+  for (const citation of ALL_MOCK_CITATIONS) {
+    const haystack = tokenize(`${citation.text} ${citation.documentTitle ?? ''}`);
+    let score = 0;
+    for (const qt of qTokens) {
+      // Count a query word once if it relates to any word in the source.
+      if (haystack.some((ht) => tokensRelated(qt, ht))) score += 1;
+    }
+    if (score === 0) continue;
+    if (!best || score > best.score) best = { citation, score };
+  }
+
+  // Require at least two overlapping content words so a gibberish or off-corpus
+  // query honestly yields not_found instead of a weak, misleading snap.
+  if (!best || best.score < 2) return null;
+
+  return { citation: best.citation, caption: captionFor(best.citation) };
+}
+
+/** A short grounded caption for a matched citation (verbatim-quote friendly). */
+function captionFor(citation: Citation): string {
+  switch (citation.id) {
+    case ANSWER_CITATION.id:
+      return ANSWER_TRANSCRIPT;
+    case CONTRADICTION_CITATION.id:
+      return CONTRADICTION_TRANSCRIPT;
+    case CONTRACT_CLAUSE_CITATION.id:
+      return CONTRACT_EMAIL_TRANSCRIPT;
+    case EMAIL_ADMISSION_CITATION.id:
+      return CONTRACT_EMAIL_TRANSCRIPT;
+    case PROACTIVE_CITATION.id:
+      return PROACTIVE_TRANSCRIPT;
+    default:
+      return `Found a grounded source on page ${citation.bbox.page}.`;
+  }
+}

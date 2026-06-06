@@ -505,6 +505,97 @@ def _shared_anchors(left_text: str, right_text: str) -> frozenset[str]:
     return left & right
 
 
+# A clause heading: the short label that FOLLOWS the clause number in a section
+# header, e.g. "Section 4.2 Subcontracting." -> "Subcontracting". Captures the
+# capitalised title words up to the first sentence terminator / lowercased prose.
+_CLAUSE_LABEL_RE = re.compile(
+    r"(?i:(?:§|\bsec(?:tion|\.)?\b))\s*\d+(?:\.\d+)?\.?\s+"
+    r"([A-Z][A-Za-z]*(?:\s+(?:of|and|the|to)?\s*[A-Z][A-Za-z]*){0,3})",
+)
+
+
+def _clause_label(text: str, clause_num: str) -> str | None:
+    """The short heading label for ``clause_num`` in ``text`` (e.g. "Subcontracting").
+
+    Looks for the clause number followed by a capitalised title (the section
+    heading) and returns it trimmed. ``None`` when the clause is referenced
+    without a heading (e.g. a bare "per Section 4.2").
+    """
+    for m in _CLAUSE_LABEL_RE.finditer(text):
+        # Confirm this match is for the requested clause number.
+        num_m = _CLAUSE_RE.search(m.group(0))
+        if num_m is not None and num_m.group(1) == clause_num:
+            return m.group(1).strip()
+    return None
+
+
+def contradiction_anchor(left_text: str, right_text: str) -> str | None:
+    """A human-readable anchor string for the conflict between two passages.
+
+    Reuses the structural anchor extractors to produce the label the frontend
+    "CONFLICT — Anchor: …" banner shows, in strict preference order:
+
+    1. a CLAUSE reference shared by both sides, paired with its short heading
+       label when available — e.g. ``"§4.2 Subcontracting"`` (else ``"§4.2"``);
+    2. a salient shared NAMED ENTITY — e.g. ``"Acme"``;
+    3. a shared INVOICE reference — e.g. ``"Invoice #2231"``;
+    4. a NET-term conflict — e.g. ``"Net-30 vs Net-60"``;
+    5. the shared TEMPORAL anchor for a location/time conflict — e.g.
+       ``"the 14th"``.
+
+    Returns ``None`` when no anchor can be derived. Pure and deterministic.
+    """
+    shared = _shared_anchors(left_text, right_text)
+
+    # 1. Clause reference (prefer the lowest-numbered shared clause for stability).
+    shared_clauses = sorted(
+        a.split(":", 1)[1] for a in shared if a.startswith("clause:")
+    )
+    if shared_clauses:
+        num = shared_clauses[0]
+        label = _clause_label(left_text, num) or _clause_label(right_text, num)
+        return f"§{num} {label}" if label else f"§{num}"
+
+    # 2. Salient named entity shared by both sides (e.g. "Acme").
+    shared_entities = sorted(_named_entities(left_text) & _named_entities(right_text))
+    if shared_entities:
+        return shared_entities[0].capitalize()
+
+    # 3. Shared invoice reference (e.g. "Invoice #2231").
+    shared_invoices = sorted(
+        a.split(":", 1)[1] for a in shared if a.startswith("invoice:")
+    )
+    if shared_invoices:
+        return f"Invoice #{shared_invoices[0]}"
+
+    # 4. Net-term conflict: different Net-N values for the same governed term.
+    left_net, right_net = _net_terms(left_text), _net_terms(right_text)
+    if left_net and right_net and left_net != right_net:
+        lo = f"Net-{min(left_net)}"
+        hi = f"Net-{min(right_net)}"
+        return f"{lo} vs {hi}"
+
+    # 5. Temporal anchor for a location/time conflict (e.g. "d14" -> "the 14th").
+    shared_times = sorted(_temporal_anchors(left_text) & _temporal_anchors(right_text))
+    if shared_times:
+        day = shared_times[0].lstrip("d")
+        suffix = _ordinal_suffix(day)
+        return f"the {day}{suffix}"
+
+    return None
+
+
+def _ordinal_suffix(day: str) -> str:
+    """The ordinal suffix for a day-of-month string (``"14"`` -> ``"th"``)."""
+    try:
+        n = int(day)
+    except ValueError:
+        return ""
+    if 11 <= (n % 100) <= 13:
+        return "th"
+    return {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+
+
 def _has_any(text: str, cues: tuple[str, ...]) -> bool:
     """Whether ``text`` (case-insensitive) contains any of ``cues``."""
     lowered = text.lower()

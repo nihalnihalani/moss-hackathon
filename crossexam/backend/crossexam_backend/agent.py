@@ -19,6 +19,7 @@ depend on.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Any, Protocol, runtime_checkable
@@ -39,7 +40,11 @@ from crossexam_backend.proactive import (
     should_surface,
 )
 from crossexam_backend.retrieval.base import RetrievalIndex
-from crossexam_backend.retrieval.multihop import MultiHopRetriever, QueryDecomposer
+from crossexam_backend.retrieval.multihop import (
+    MultiHopRetriever,
+    QueryDecomposer,
+    contradiction_anchor,
+)
 from crossexam_backend.speculative import SpeculativeRetriever
 from crossexam_backend.tracing import NoOpTracer, OTelTracer
 from crossexam_backend.verify import FaithfulnessVerdict, verify_faithfulness
@@ -116,6 +121,36 @@ def _hop_dict(hop: HopTrace) -> dict[str, Any]:
 def _speaker_dict(speaker: Speaker) -> dict[str, Any]:
     """Serialise a :class:`Speaker` (meeting mode) to the wire shape (feat 4)."""
     return {"id": speaker.id, "label": speaker.label}
+
+
+def _contradiction_anchor(result: MultiHopResult) -> str | None:
+    """Human-readable conflict anchor for a contradiction :class:`MultiHopResult`.
+
+    Pairs the contradiction's PRIMARY citation (the claim/clause under
+    examination) with the conflicting COUNTER and reuses the multi-hop anchor
+    extractors (clause ref like ``"§4.2 Subcontracting"``, named entity like
+    ``"Acme"``, invoice like ``"Invoice #2231"``, ``"Net-30 vs Net-60"``, or the
+    shared temporal anchor) to produce the string the frontend "CONFLICT —
+    Anchor: …" banner shows. The counter is the first OTHER citation that yields
+    an anchor against the primary (falling back to the primary's own text when no
+    other citation is present). ``None`` when no anchor can be derived.
+    """
+    citations = list(result.citations)
+    if not citations:
+        return None
+    primary_id = result.primary_id
+    primary = next(
+        (c for c in citations if c.chunk.id == primary_id), citations[0]
+    )
+    primary_text = primary.chunk.text
+    for other in citations:
+        if other.chunk.id == primary.chunk.id:
+            continue
+        anchor = contradiction_anchor(primary_text, other.chunk.text)
+        if anchor is not None:
+            return anchor
+    # Single-citation contradiction (degenerate): derive from the primary alone.
+    return contradiction_anchor(primary_text, primary_text)
 
 
 def build_frame(
@@ -222,6 +257,14 @@ def build_frame(
             # Expose whether the conflict spans two documents (alibi vs.
             # independent exhibit) rather than an in-document inconsistency.
             frame["crossDocument"] = result.cross_document
+            # Human-readable anchor for the "CONFLICT — Anchor: §4.2
+            # Subcontracting" banner. Derived from the conflicting pair via the
+            # multi-hop anchor extractors (clause / entity / invoice / Net term /
+            # temporal). Was mock-only; now emitted in LIVE mode too. Omitted
+            # when no anchor can be derived so the banner falls back gracefully.
+            anchor = _contradiction_anchor(result)
+            if anchor is not None:
+                frame["anchor"] = anchor
         if result.hops:
             frame["hops"] = [_hop_dict(h) for h in result.hops]
 
@@ -377,6 +420,10 @@ class CrossExamAgent(_agent_base()):  # type: ignore[misc]
         # publish structured citations to the frontend over the data channel.
         # Typed ``Any`` so this module imports without ``livekit`` installed.
         self._room: Any | None = None
+        # Push-to-talk (Space) listening state, toggled by inbound ``ptt``
+        # data-channel messages. Informational for now (the live VAD/turn
+        # detector still drives the actual turn boundary).
+        self._ptt_listening = False
 
         # Speculative retrieval: prefetch on interim transcripts so the citation
         # is ready before the turn ends. The query closure threads top_k/alpha.
@@ -427,6 +474,11 @@ class CrossExamAgent(_agent_base()):  # type: ignore[misc]
     def multihop_enabled(self) -> bool:
         """Whether contradiction/multi-hop routing is active for this agent."""
         return self._multihop_enabled
+
+    @property
+    def ptt_listening(self) -> bool:
+        """Whether a push-to-talk press is currently held (inbound ``ptt``)."""
+        return self._ptt_listening
 
     def is_multihop_question(self, text: str) -> bool:
         """Whether ``text`` should route through the multi-hop retriever.
@@ -752,6 +804,130 @@ class CrossExamAgent(_agent_base()):  # type: ignore[misc]
         # No-op when no room is wired. ``answer_text`` defaults to the chunk in
         # publish path until the LLM's drafted answer is available.
         await self.publish_frame(publish_result, speaker=speaker)
+
+    # -- inbound text question (Cmd+K) + push-to-talk over the data channel --
+    async def handle_ask_text(self, text: str) -> dict[str, Any] | None:
+        """Run a TYPED question (Cmd+K ``{type:"ask"}``) and return its frame.
+
+        Pure, LiveKit-free spine for the inbound text path: routes ``text``
+        through :meth:`is_multihop_question` -> :meth:`retrieve` /
+        :meth:`retrieve_multihop` (the SAME path as a spoken turn), then builds —
+        but does NOT publish — the depth-v2 wire frame via :func:`build_frame`
+        (faithfulness-gated, with ``contradiction``/``crossDocument``/``anchor``
+        threaded through). Returns the frame dict, or ``None`` for an empty/blank
+        question. Testable without ``livekit-agents`` installed; the live handler
+        publishes the result of the same route via :meth:`answer_ask`.
+        """
+        query_text = text.strip()
+        if not query_text:
+            return None
+        if self.is_multihop_question(query_text):
+            result: RetrievalResult | MultiHopResult = await self.retrieve_multihop(
+                query_text
+            )
+        else:
+            result = await self.retrieve(query_text)
+        return build_frame(
+            result,
+            faithfulness_threshold=self._faithfulness_threshold,
+        )
+
+    async def answer_ask(self, text: str) -> bool:
+        """Answer a typed question live: route, then PUBLISH the frame.
+
+        The live counterpart to :meth:`handle_ask_text`: it runs the identical
+        routing/retrieval spine and then publishes the frame to the data channel
+        via :meth:`publish_frame` (memory-deduped, faithfulness-gated). A no-op
+        returning ``False`` for a blank question or when no room is wired.
+        """
+        query_text = text.strip()
+        if not query_text:
+            return False
+        if self.is_multihop_question(query_text):
+            publish_result: RetrievalResult | MultiHopResult = (
+                await self.retrieve_multihop(query_text)
+            )
+        else:
+            publish_result = await self.retrieve(query_text)
+        return await self.publish_frame(publish_result)
+
+    async def handle_inbound_data(self, raw: bytes | str) -> bool:
+        """Parse one inbound data-channel message and dispatch it.
+
+        The frontend publishes JSON over the LiveKit data channel: a typed
+        question ``{"type":"ask","question"|"text": "..."}`` (Cmd+K) or a
+        push-to-talk signal ``{"type":"ptt","state":"start"|"stop"}`` (Space). An
+        ``ask`` runs the full retrieval+publish path (:meth:`answer_ask`) so a
+        typed question yields real citations / contradiction frames live; a
+        ``ptt`` toggles the listening attribute and is otherwise a no-op for now.
+        Malformed payloads are logged and ignored — never break the session.
+
+        Returns ``True`` when an ``ask`` published a frame, ``False`` otherwise.
+        """
+        try:
+            text = raw.decode("utf-8") if isinstance(raw, bytes) else raw
+            msg = json.loads(text)
+        except (ValueError, UnicodeDecodeError):
+            logger.debug("agent.handle_inbound_data ignoring malformed payload")
+            return False
+        if not isinstance(msg, dict):
+            return False
+        kind = msg.get("type")
+        if kind == "ask":
+            # The frontend sends "question"; accept "text" too for robustness.
+            question = msg.get("question") or msg.get("text") or ""
+            if not isinstance(question, str):
+                return False
+            logger.info("agent.inbound ask question=%r", question)
+            return await self.answer_ask(question)
+        if kind == "ptt":
+            state = msg.get("state")
+            self._ptt_listening = state == "start"
+            logger.debug("agent.inbound ptt state=%s", state)
+            return False
+        logger.debug("agent.inbound unknown message type=%r", kind)
+        return False
+
+    def register_inbound_handlers(
+        self,
+        room: Any | None = None,  # noqa: ANN401 - LiveKit Room type is optional
+    ) -> bool:
+        """Register the LiveKit data-channel handler for inbound ``ask``/``ptt``.
+
+        Guarded and import-safe: wires the room's ``data_received`` event to
+        :meth:`handle_inbound_data` so a typed Cmd+K question or Space
+        push-to-talk published by the frontend reaches the backend. Only active
+        in a REAL session (a room with an event API); a no-op returning ``False``
+        when no room is wired or LiveKit is unavailable, so tests run without
+        ``livekit``. Called by the session entrypoint after the room is set.
+        """
+        target_room = room if room is not None else self._room
+        if target_room is None:
+            logger.debug("agent.register_inbound_handlers no room; skipping")
+            return False
+        register = getattr(target_room, "on", None)
+        if not callable(register):
+            logger.debug("agent.register_inbound_handlers room has no .on(); skipping")
+            return False
+
+        def _on_data(data_packet: Any) -> None:  # noqa: ANN401 - LiveKit DataPacket
+            # LiveKit's DataReceived event passes a packet whose payload is on
+            # ``.data`` (bytes); fall back to treating the arg itself as bytes.
+            payload = getattr(data_packet, "data", data_packet)
+            try:
+                asyncio.get_running_loop().create_task(
+                    self.handle_inbound_data(payload)
+                )
+            except RuntimeError:  # pragma: no cover - no running loop (defensive)
+                logger.debug("agent inbound: no running loop; dropping packet")
+
+        try:
+            register("data_received", _on_data)
+        except Exception:  # noqa: BLE001 - never break session wiring on register
+            logger.exception("agent.register_inbound_handlers failed")
+            return False
+        logger.info("agent.register_inbound_handlers wired data-channel ask/ptt")
+        return True
 
     def _is_proactive_claim(self, text: str, result: RetrievalResult) -> bool:
         """Whether ``text`` is a claim the document confidently supports.

@@ -98,9 +98,20 @@ export function App(): JSX.Element {
   const onUploaded = useCallback((result: UploadResponse, file: File): void => {
     setDocInfo(result);
     // Render the uploaded file locally so the canvas reflects the new document.
-    setUploadedUrl(URL.createObjectURL(file));
+    // Revoke any prior object URL first so re-uploading never leaks (m3).
+    setUploadedUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return URL.createObjectURL(file);
+    });
     setDocLoaded(true);
   }, []);
+
+  // Revoke the live object URL on unmount so a closed tab/session never leaks it.
+  useEffect(() => {
+    return () => {
+      if (uploadedUrl) URL.revokeObjectURL(uploadedUrl);
+    };
+  }, [uploadedUrl]);
 
   // ---- FEATURE 1: multi-doc. Derive the set of documents from the citations.
   const docs: DocSwitcherDoc[] = useMemo(() => {
@@ -251,6 +262,22 @@ export function App(): JSX.Element {
     cx.reset();
   }, [cx]);
 
+  // Full session reset: return the stage to the empty dropzone. Resets the
+  // CrossExam snapshot, clears the docLoaded flag (so the EmptyDropzone renders
+  // again), revokes any uploaded object URL (fixes the m3 leak), and clears the
+  // uploaded/corpus + manual doc/contradiction UI selection state.
+  const onReset = useCallback((): void => {
+    cx.reset();
+    setDocLoaded(false);
+    if (uploadedUrl) URL.revokeObjectURL(uploadedUrl);
+    setUploadedUrl(null);
+    setDocInfo(null);
+    setManualDocId(null);
+    lastPrimaryId.current = null;
+    lastBreachKey.current = null;
+    setRefocus(0);
+  }, [cx, uploadedUrl]);
+
   // ---- QUICK WIN #1: keyboard shortcuts ------------------------------------
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
@@ -365,7 +392,7 @@ export function App(): JSX.Element {
             onChange={(e) => setForceMock(e.target.checked)}
             aria-label="Force mock mode"
           />
-          <button className="btn btn--ghost" onClick={cx.reset} aria-label="Reset session">
+          <button className="btn btn--ghost" onClick={onReset} aria-label="Reset session">
             <RotateCcw size={13} /> Reset
           </button>
           <button className="btn btn--primary" onClick={cx.runDemo} disabled={!cx.isMock} aria-label="Run demo">
