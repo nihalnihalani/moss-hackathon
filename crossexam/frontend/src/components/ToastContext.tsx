@@ -71,7 +71,11 @@ function ToastContainer({ toasts, removeToast }: { toasts: Toast[]; removeToast:
   return (
     <div className="toast-container" aria-live="polite" aria-atomic="true">
       {toasts.map((toast) => (
-        <div key={toast.id} className={`toast toast--${toast.type}`} role="alert">
+        <div
+          key={toast.id}
+          className={`toast toast--${toast.type}`}
+          role={toast.type === 'error' ? 'alert' : 'status'}
+        >
           <div className="toast__message">{toast.message}</div>
           <button
             className="toast__close"

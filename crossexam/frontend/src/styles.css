@@ -172,7 +172,7 @@ body {
   font-family: var(--font-mono);
   font-size: 11px;
   letter-spacing: 0.04em;
-  color: var(--text-mute);
+  color: var(--text-dim);
   padding-left: var(--s3);
   border-left: 1px solid var(--hairline);
   white-space: nowrap;
@@ -543,13 +543,13 @@ body {
 /* page-jump */
 .page-jump { font-size: 12px; }
 .page-jump__label {
-  color: var(--text-mute);
+  color: var(--text-dim);
   font-size: 11px;
   letter-spacing: 0.1em;
   text-transform: uppercase;
 }
 .page-jump__counter { font-variant-numeric: tabular-nums; color: var(--text); }
-.page-jump__total { color: var(--text-mute); }
+.page-jump__total { color: var(--text-dim); }
 .page-jump__scan {
   width: 28px;
   height: 1px;
@@ -656,7 +656,7 @@ body {
   font-family: var(--font-mono);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
-  color: var(--text-mute);
+  color: var(--text-dim);
   padding: 0 6px;
   min-width: 42px;
   text-align: center;
@@ -728,6 +728,12 @@ body {
   border-radius: var(--r-sm);
   white-space: nowrap;
   box-shadow: 0 4px 14px var(--amber-soft);
+}
+/* Flip above the box for citations near the page foot, so the label isn't
+ * clipped off the bottom of the page. Same amber-on-dark legibility. */
+.bbox-highlight__label--above {
+  bottom: auto;
+  top: -30px;
 }
 
 /* ============================================================================

@@ -41,7 +41,8 @@ describe('DocumentUpload', () => {
     selectFile(pdf);
 
     await waitFor(() => expect(onUploaded).toHaveBeenCalledTimes(1));
-    expect(screen.getByRole('alert').textContent).toMatch(/42 pages/);
+    // Success toasts are polite (role="status"); errors stay assertive ("alert").
+    expect(screen.getByRole('status').textContent).toMatch(/42 pages/);
   });
 
   it('shows an error message when the upload fails', async () => {

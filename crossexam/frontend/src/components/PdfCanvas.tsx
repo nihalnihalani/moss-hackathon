@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Citation, PageRenderGeometry } from '../types';
 import { pdfBBoxToCanvasRect } from '../lib/bbox';
+import { scrollBehavior } from '../lib/motion';
 import { DEMO_PAGE_HEIGHT_PT, DEMO_PAGE_WIDTH_PT } from '../lib/mockData';
 import { ZoomIn, ZoomOut, Maximize } from 'lucide-react';
 
@@ -178,17 +179,26 @@ export function PdfCanvas({
     }
   }, [citation, page, pageSizePt.w, pageSizePt.h, scale, dpr]);
 
+  // Flip the label ABOVE the box when the box sits near the page foot — otherwise
+  // the default bottom:-30px label renders off the page and gets clipped.
+  const labelAbove = useMemo(() => {
+    if (!overlayRect) return false;
+    const pageHeightCss = pageSizePt.h * scale;
+    const LABEL_GUTTER = 34; // label height (~24px) + offset, in CSS px
+    return overlayRect.top + overlayRect.height + LABEL_GUTTER > pageHeightCss;
+  }, [overlayRect, pageSizePt.h, scale]);
+
   // Re-center the box when it snaps in (and on an explicit refocus request).
   useEffect(() => {
     if (overlayRect && boxRef.current) {
-      boxRef.current.scrollIntoView?.({ block: 'center', behavior: 'smooth' });
+      boxRef.current.scrollIntoView?.({ block: 'center', behavior: scrollBehavior() });
     }
   }, [overlayRect, citation?.id]);
 
   // A transcript chip click bumps refocusSignal: re-center AND move focus there.
   useEffect(() => {
     if (refocusSignal && boxRef.current) {
-      boxRef.current.scrollIntoView?.({ block: 'center', behavior: 'smooth' });
+      boxRef.current.scrollIntoView?.({ block: 'center', behavior: scrollBehavior() });
       boxRef.current.focus();
     }
   }, [refocusSignal]);
@@ -200,7 +210,7 @@ export function PdfCanvas({
         onClearCitation?.();
       } else if (e.key === 'Enter' || e.key === ' ') {
         e.preventDefault();
-        boxRef.current?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        boxRef.current?.scrollIntoView({ block: 'center', behavior: scrollBehavior() });
       }
     },
     [onClearCitation],
@@ -254,7 +264,7 @@ export function PdfCanvas({
             onKeyDown={onBoxKeyDown}
           >
             <span className="bbox-highlight__tick" aria-hidden="true" />
-            <span className="bbox-highlight__label">
+            <span className={`bbox-highlight__label${labelAbove ? ' bbox-highlight__label--above' : ''}`}>
               p.{citation?.bbox.page} · {Math.round((citation?.confidence ?? 0) * 100)}%
             </span>
           </div>

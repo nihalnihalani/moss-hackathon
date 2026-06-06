@@ -6,13 +6,6 @@ export interface VoiceOrbProps {
   level?: number;
 }
 
-const STATE_LABEL: Record<AgentState, string> = {
-  idle: 'idle',
-  listening: 'listening',
-  thinking: 'analyzing',
-  speaking: 'speaking',
-};
-
 /**
  * Siri-style voice orb — pure CSS. Two blurred, saturated, rotating layers
  * (a conic gradient + a radial highlight) over a soft core. State is driven
@@ -22,6 +15,9 @@ const STATE_LABEL: Record<AgentState, string> = {
  *
  * Under prefers-reduced-motion the layers stop and collapse to a static,
  * state-colored dot (handled in styles.css) — feedback without movement.
+ *
+ * Purely decorative (aria-hidden): the StatePill is the single source of
+ * spoken state for screen readers, so the orb doesn't double-announce.
  */
 export function VoiceOrb({ state, level }: VoiceOrbProps): JSX.Element {
   const reactiveScale =
@@ -30,8 +26,7 @@ export function VoiceOrb({ state, level }: VoiceOrbProps): JSX.Element {
   return (
     <div
       className={`orb orb--${state}`}
-      role="img"
-      aria-label={`Voice activity orb, agent is ${STATE_LABEL[state]}`}
+      aria-hidden="true"
       style={reactiveScale as React.CSSProperties | undefined}
     >
       <span className="orb__layer orb__layer--conic" aria-hidden="true" />

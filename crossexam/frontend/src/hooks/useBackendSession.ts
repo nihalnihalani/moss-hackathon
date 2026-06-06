@@ -99,11 +99,14 @@ export function useBackendSession(options: UseBackendSessionOptions = {}): Backe
         });
       } catch (err) {
         if (cancelled) return;
+        // A simple fetch failure means the backend is unreachable — this is the
+        // EXPECTED offline/no-backend path (mock demo). Tag it as "offline:" so
+        // the UI treats it silently (the MOCK/OFFLINE badge already says it all).
         setSession({
           status: 'mock',
           livekitUrl: undefined,
           livekitToken: undefined,
-          reason: `Backend unreachable: ${err instanceof Error ? err.message : String(err)}`,
+          reason: `offline: ${err instanceof Error ? err.message : String(err)}`,
         });
       }
     })();

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { prefersReducedMotion } from '../lib/motion';
 
 export interface LatencyChipProps {
   /** Total corpus pages searched. */
@@ -8,11 +9,6 @@ export interface LatencyChipProps {
   /** Show the chip only after a result has landed. */
   visible: boolean;
 }
-
-const prefersReducedMotion = (): boolean =>
-  typeof window !== 'undefined' &&
-  typeof window.matchMedia === 'function' &&
-  window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 /** Ease toward the target so the numbers feel like they *resolve*, not tick. */
 function useCountUp(target: number, run: boolean): number {

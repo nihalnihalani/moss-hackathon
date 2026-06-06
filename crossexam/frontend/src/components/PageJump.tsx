@@ -40,7 +40,7 @@ export function PageJump({ active, targetPage, totalPages }: PageJumpProps): JSX
 
   if (!active) return null;
   return (
-    <div className="glass-pill page-jump" role="status" aria-live="off" aria-label="Searching pages">
+    <div className="glass-pill page-jump" aria-hidden="true">
       <span className="page-jump__scan" aria-hidden="true" />
       <span className="page-jump__label">searching</span>
       <span className="page-jump__counter">

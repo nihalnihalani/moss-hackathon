@@ -35,9 +35,17 @@ export function App(): JSX.Element {
 
   useEffect(() => {
     if (session.reason && session.reason !== prevReason.current) {
-      if (session.reason.includes('Backend unreachable') || session.reason.includes('Backend live but no LiveKit URL')) {
+      const isOffline = session.reason.startsWith('offline:');
+      const isForcedMock = session.reason === 'Forced mock mode';
+      const isLiveFalse = session.reason === 'Backend reports live:false';
+      const isMisconfigured = session.reason.includes('Backend live but no LiveKit URL');
+
+      if (isMisconfigured) {
+        // A REACHABLE backend that's misconfigured is a genuine problem.
         toast.error(`Connection Error: ${session.reason}`, 7000);
-      } else if (session.reason !== 'Forced mock mode' && session.reason !== 'Backend reports live:false') {
+      } else if (!isOffline && !isForcedMock && !isLiveFalse) {
+        // Other non-mock reasons are informational. The expected offline path,
+        // forced-mock, and live:false stay silent — the MOCK/OFFLINE badge says it.
         toast.info(session.reason);
       }
       prevReason.current = session.reason;
