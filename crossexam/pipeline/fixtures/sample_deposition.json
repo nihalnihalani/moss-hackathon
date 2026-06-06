@@ -1,0 +1,37 @@
+{
+  "document": {
+    "title": "Deposition of Raymond T. Holloway (excerpt)",
+    "case": "Vance v. Meridian Logistics, Inc., No. 24-CV-00912",
+    "total_pages": 912,
+    "note": "Synthetic sample input for the CrossExam deterministic fallback parser. Only the demo-relevant pages of an otherwise 912-page deposition are included. Page 147 contains the key admission about the warehouse on the night of the 14th; page 488 contains a direct contradiction of that testimony."
+  },
+  "pages": [
+    {
+      "page": 147,
+      "lines": [
+        "Q. Mr. Holloway, where were you on the night of the 14th?",
+        "A. I was at the warehouse on the night of the 14th, working the late shift.",
+        "Q. The Meridian distribution warehouse on Industrial Parkway?",
+        "A. Yes. That warehouse. I clocked in a little before ten and stayed until close."
+      ]
+    },
+    {
+      "page": 488,
+      "lines": [
+        "Q. Let me take you back to the evening of the 14th. Were you anywhere near the warehouse?",
+        "A. No. I never went to the warehouse that night. I was home the entire evening of the 14th.",
+        "Q. So you were not at the Industrial Parkway facility at all?",
+        "A. Correct. I did not set foot in that building on the 14th."
+      ]
+    },
+    {
+      "page": 612,
+      "lines": [
+        "Q. Who else had keys to the loading dock?",
+        "A. Just me and the shift supervisor, Dana Wexler, as far as I know.",
+        "Q. And the security logs would reflect badge entries for that dock?",
+        "A. They should, yes. Every entry gets logged by badge number."
+      ]
+    }
+  ]
+}
