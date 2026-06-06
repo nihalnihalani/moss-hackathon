@@ -39,6 +39,32 @@ class RetrievalIndex(abc.ABC):
         """
         raise NotImplementedError
 
+    async def query_multi(
+        self,
+        text: str,
+        top_k: int = 5,
+        alpha: float = 0.8,
+        *,
+        doc_ids: list[str] | None = None,
+    ) -> RetrievalResult:
+        """Return the top-``k`` citations for ``text`` across one or more docs.
+
+        The cross-document variant of :meth:`query`. When ``doc_ids`` is given,
+        only those documents are searched; otherwise the whole index is. The
+        default implementation ignores ``doc_ids`` and delegates to
+        :meth:`query`, so single-document backends remain valid.
+
+        Args:
+            text: The sub-query text to search for.
+            top_k: Maximum number of citations to return.
+            alpha: Hybrid weight (see :meth:`query`).
+            doc_ids: Optional document-id allow-list; ``None`` searches all docs.
+
+        Returns:
+            A :class:`RetrievalResult` whose citations are sorted best-first.
+        """
+        return await self.query(text, top_k=top_k, alpha=alpha)
+
     async def prewarm(self) -> None:
         """Eagerly load any state needed before the first query.
 

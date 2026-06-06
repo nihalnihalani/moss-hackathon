@@ -288,17 +288,36 @@ class MossIndex(RetrievalIndex):
             page_width=float(get(bbox_raw, "page_width", 612.0)),
             page_height=float(get(bbox_raw, "page_height", 792.0)),
         )
-        chunk = Chunk(
-            id=str(get(match, "id", get(meta, "id", "unknown"))),
-            text=str(get(match, "text", get(meta, "text", ""))),
-            page=page,
-            bbox=bbox,
-            confidence=float(get(match, "confidence", get(meta, "confidence", 1.0))),
-        )
+        # Depth-v2 multi-doc / scanned-source metadata (optional; defaults keep
+        # single-doc back-compat). documentId may be top-level or in metadata.
+        document_id = get(match, "documentId", get(meta, "documentId", None))
+        document_title = get(match, "documentTitle", get(meta, "documentTitle", None))
+        scanned = bool(get(match, "scanned", get(meta, "scanned", False)))
+
+        chunk_kwargs: dict[str, Any] = {
+            "id": str(get(match, "id", get(meta, "id", "unknown"))),
+            "text": str(get(match, "text", get(meta, "text", ""))),
+            "page": page,
+            "bbox": bbox,
+            "confidence": float(
+                get(match, "confidence", get(meta, "confidence", 1.0))
+            ),
+            "documentTitle": document_title,
+            "scanned": scanned,
+        }
+        if document_id is not None:
+            chunk_kwargs["documentId"] = str(document_id)
+        chunk = Chunk(**chunk_kwargs)
         raw_score = float(get(match, "score", 0.0))
         # Clamp into [0, 1] in case Moss returns distances/logits.
         score = max(0.0, min(raw_score, 1.0))
-        return Citation(chunk=chunk, score=score)
+        return Citation(
+            chunk=chunk,
+            score=score,
+            documentId=chunk.documentId,
+            documentTitle=chunk.documentTitle,
+            scanned=chunk.scanned,
+        )
 
     # -- lifecycle ----------------------------------------------------------
     async def prewarm(self) -> None:
@@ -362,6 +381,31 @@ class MossIndex(RetrievalIndex):
             latency_ms,
         )
         return RetrievalResult(query=text, citations=citations, latency_ms=latency_ms)
+
+    async def query_multi(
+        self,
+        text: str,
+        top_k: int = 5,
+        alpha: float = 0.8,
+        *,
+        doc_ids: list[str] | None = None,
+    ) -> RetrievalResult:
+        """Query Moss across one or more documents (see base class).
+
+        The upstream Moss filter surface for restricting to specific documents is
+        unverified, so this defensively over-fetches and filters the returned
+        citations by ``documentId`` client-side. With ``doc_ids=None`` it is
+        identical to :meth:`query`.
+        """
+        if doc_ids is None:
+            return await self.query(text, top_k=top_k, alpha=alpha)
+        allow = set(doc_ids)
+        # Over-fetch so post-filtering still yields up to top_k from the allow-set.
+        wide = await self.query(text, top_k=max(top_k * 4, top_k), alpha=alpha)
+        filtered = [c for c in wide.citations if c.documentId in allow][:top_k]
+        return RetrievalResult(
+            query=text, citations=filtered, latency_ms=wide.latency_ms
+        )
 
     async def aclose(self) -> None:
         """Close the underlying client if it exposes a ``close`` method."""

@@ -209,6 +209,23 @@ _CROSSEXAM_ROOT = _PIPELINE_ROOT.parent
 ASSET_PDF_PATH = _CROSSEXAM_ROOT / "assets" / "sample-deposition.pdf"
 FRONTEND_PDF_PATH = _CROSSEXAM_ROOT / "frontend" / "public" / "sample-deposition.pdf"
 
+# Document identities (feat 1, multi-document). The deposition is the primary
+# document; the visitor log is a CONTRADICTING exhibit.
+DEPOSITION_DOC_ID = "deposition-holloway"
+DEPOSITION_DOC_TITLE = "Deposition of Raymond T. Holloway"
+VISITOR_LOG_DOC_ID = "exhibit-visitor-log"
+VISITOR_LOG_DOC_TITLE = "Exhibit 14: Security Desk Visitor Log"
+
+# Second exhibit (feat 1): a Security Desk Visitor Log that places Holloway
+# DOWNTOWN at 9:40 p.m. on the 14th -- directly contradicting the deposition's
+# warehouse alibi (p.12, "at the Harbor Street warehouse from approximately
+# 9:00 p.m. until well past midnight").
+VISITOR_LOG_ASSET_PATH = _CROSSEXAM_ROOT / "assets" / "exhibit-visitor-log.pdf"
+VISITOR_LOG_FRONTEND_PATH = (
+    _CROSSEXAM_ROOT / "frontend" / "public" / "exhibit-visitor-log.pdf"
+)
+_VISITOR_LOG_TOTAL_PAGES = 3
+
 _HEADER_TEXT = "DEPOSITION OF RAYMOND T. HOLLOWAY"
 _CASE_TEXT = "Vance v. Meridian Logistics, Inc.  -  No. 24-CV-00912"
 
@@ -353,16 +370,208 @@ def make_pdf(path: Path) -> Path:
     return path
 
 
+# --- Second document: the contradicting visitor-log exhibit (feat 1) ---------
+# Each line: (page, baseline_y_bottom, text). Page 2 carries the contradiction:
+# Holloway signed in DOWNTOWN at 9:40 p.m. on the 14th, conflicting with the
+# warehouse alibi in the deposition.
+_VISITOR_LOG_LINES: tuple[tuple[int, float, str], ...] = (
+    (
+        1,
+        660.0,
+        "MERIDIAN LOGISTICS DOWNTOWN TOWER -- SECURITY DESK VISITOR LOG",
+    ),
+    (
+        1,
+        630.0,
+        "Address: 400 Commerce Plaza, Downtown. All visitors must sign the desk register.",
+    ),
+    (
+        1,
+        600.0,
+        "This log is maintained by the night security supervisor and reviewed daily.",
+    ),
+    (
+        2,
+        660.0,
+        (
+            "Visitor log entry: Raymond T. Holloway signed in at the downtown "
+            "security desk at 9:40 p.m. on the night of the 14th and signed out "
+            "at 11:20 p.m., having attended the quarterly budget meeting on the "
+            "ninth floor."
+        ),
+    ),
+    (
+        2,
+        560.0,
+        (
+            "The security supervisor, Lena Ortiz, confirmed she personally issued "
+            "a visitor badge to Mr. Holloway at the downtown tower and that he "
+            "was present in the building throughout the entire evening of the "
+            "fourteenth."
+        ),
+    ),
+    (
+        3,
+        660.0,
+        (
+            "The downtown lobby camera recorded Mr. Holloway entering at 9:38 p.m. "
+            "and the badge system logged his exit at 11:20 p.m. on the 14th."
+        ),
+    ),
+)
+
+# Filler so the exhibit reads like a real multi-page log without colliding with
+# the contradiction lines or carrying the warehouse keywords.
+_VISITOR_LOG_FILLER: tuple[str, ...] = (
+    "Time      Visitor                 Host / Purpose            Badge",
+    "08:15 PM  J. Marsh                Facilities                D-1042",
+    "08:52 PM  K. Nguyen               Vendor delivery           D-1043",
+    "09:10 PM  P. Okafor               Accounting                D-1044",
+)
+
+_VISITOR_LOG_HEADER = "EXHIBIT 14 - SECURITY DESK VISITOR LOG"
+_VISITOR_LOG_CASE = "Vance v. Meridian Logistics, Inc.  -  No. 24-CV-00912"
+
+
+def _draw_visitor_header(canvas: object, page_no: int) -> None:
+    """Draw the visitor-log running header, caption, and page footer."""
+    canvas.setFont("Helvetica-Bold", 9)  # type: ignore[attr-defined]
+    canvas.drawString(LEFT_MARGIN, PAGE_HEIGHT - 48.0, _VISITOR_LOG_HEADER)  # type: ignore[attr-defined]
+    canvas.setFont("Helvetica", 8)  # type: ignore[attr-defined]
+    canvas.drawString(LEFT_MARGIN, PAGE_HEIGHT - 60.0, _VISITOR_LOG_CASE)  # type: ignore[attr-defined]
+    canvas.drawRightString(  # type: ignore[attr-defined]
+        PAGE_WIDTH - RIGHT_MARGIN, 36.0, f"Page {page_no} of {_VISITOR_LOG_TOTAL_PAGES}"
+    )
+    canvas.setLineWidth(0.5)  # type: ignore[attr-defined]
+    canvas.line(  # type: ignore[attr-defined]
+        LEFT_MARGIN, PAGE_HEIGHT - 66.0, PAGE_WIDTH - RIGHT_MARGIN, PAGE_HEIGHT - 66.0
+    )
+
+
+def make_visitor_log_pdf(path: Path) -> Path:
+    """Render the contradicting Security Desk Visitor Log exhibit to ``path``.
+
+    A short multi-page exhibit whose page-2 entry places Holloway downtown at
+    9:40 p.m. on the 14th, contradicting the deposition's warehouse alibi.
+
+    Args:
+        path: Output PDF path. Parent directories are created.
+
+    Returns:
+        The ``path`` written.
+
+    Raises:
+        ImportError: If ``reportlab`` is not installed.
+    """
+    try:
+        from reportlab.pdfgen import canvas as _canvas
+    except ImportError as exc:  # pragma: no cover - dev-only dependency
+        raise ImportError(
+            "reportlab is required to generate the sample PDF. "
+            "Install it with `pip install reportlab`."
+        ) from exc
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    c = _canvas.Canvas(str(path), pagesize=(PAGE_WIDTH, PAGE_HEIGHT))
+    c.setTitle("Exhibit 14: Security Desk Visitor Log (synthetic)")
+    c.setAuthor("CrossExam pipeline")
+    c.setSubject("Synthetic contradicting exhibit for the CrossExam demo")
+
+    by_page: dict[int, list[tuple[float, str]]] = {
+        p: [] for p in range(1, _VISITOR_LOG_TOTAL_PAGES + 1)
+    }
+    for page, y, text in _VISITOR_LOG_LINES:
+        by_page[page].append((y, text))
+
+    for page_no in range(1, _VISITOR_LOG_TOTAL_PAGES + 1):
+        _draw_visitor_header(c, page_no)
+        c.setFont(FONT_NAME, FONT_SIZE)
+        for y, text in by_page[page_no]:
+            cur_y = y
+            for physical in _wrap(text):
+                c.drawString(LEFT_MARGIN, cur_y, physical)
+                cur_y -= PARAGRAPH_LEADING
+        # Widely spaced filler table low on the page (never merges with entries).
+        filler_y = 300.0
+        for fline in _VISITOR_LOG_FILLER:
+            c.drawString(LEFT_MARGIN, filler_y, fline)
+            filler_y -= FILLER_LEADING
+        c.showPage()
+
+    c.save()
+    logger.info("Wrote %d-page visitor-log exhibit -> %s", _VISITOR_LOG_TOTAL_PAGES, path)
+    return path
+
+
+def make_scanned_pdf(path: Path, pages: int = 2) -> Path:
+    """Render a SCANNED-style PDF with NO extractable text layer (feat 3).
+
+    The text is drawn as vector outlines (``textOutline``) instead of selectable
+    glyphs, so ``pdfplumber.extract_words`` finds nothing -- this simulates an
+    image-only scan. The scanned parse path (see
+    :mod:`crossexam_pipeline.unsiloed`) handles such a document by producing
+    region-box quads and marking the chunks ``scanned=True``.
+
+    Args:
+        path: Output PDF path. Parent directories are created.
+        pages: Number of pages to render.
+
+    Returns:
+        The ``path`` written.
+
+    Raises:
+        ImportError: If ``reportlab`` is not installed.
+    """
+    try:
+        from reportlab.pdfgen import canvas as _canvas
+    except ImportError as exc:  # pragma: no cover - dev-only dependency
+        raise ImportError(
+            "reportlab is required to generate the sample PDF. "
+            "Install it with `pip install reportlab`."
+        ) from exc
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    c = _canvas.Canvas(str(path), pagesize=(PAGE_WIDTH, PAGE_HEIGHT))
+    c.setTitle("Scanned handwritten field notes (synthetic, image-only)")
+    scanned_lines = (
+        "FIELD NOTES (scanned, handwritten)",
+        "Observed delivery truck at the loading dock near midnight.",
+        "Lighting was poor; could not read the license plate clearly.",
+        "Will follow up with the night supervisor in the morning.",
+    )
+    for _ in range(max(1, pages)):
+        text_obj = c.beginText(LEFT_MARGIN, PAGE_HEIGHT - 120.0)
+        text_obj.setFont("Helvetica", 14)
+        # Outline-only render => no recoverable text layer (simulates a scan).
+        text_obj.setTextRenderMode(1)  # stroke (outline) only, no fill, no text
+        for line in scanned_lines:
+            text_obj.textLine(line)
+            text_obj.textLine("")
+        c.setLineWidth(0.4)
+        c.drawText(text_obj)
+        c.showPage()
+    c.save()
+    logger.info("Wrote %d-page scanned (image-only) PDF -> %s", max(1, pages), path)
+    return path
+
+
 def main() -> None:
-    """Generate the sample PDF into ``assets/`` and copy to ``frontend/public/``."""
+    """Generate both demo PDFs into ``assets/`` and copy to ``frontend/public/``."""
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+    # Primary document: the deposition.
     make_pdf(ASSET_PDF_PATH)
-    # Copy bytes to the frontend public asset so VITE_PDF_URL can serve it.
     FRONTEND_PDF_PATH.parent.mkdir(parents=True, exist_ok=True)
     FRONTEND_PDF_PATH.write_bytes(ASSET_PDF_PATH.read_bytes())
     logger.info("Copied sample PDF -> %s", FRONTEND_PDF_PATH)
-    print(f"sample PDF written: {ASSET_PDF_PATH}")
-    print(f"sample PDF copied:  {FRONTEND_PDF_PATH}")
+    # Second document (feat 1): the contradicting visitor-log exhibit.
+    make_visitor_log_pdf(VISITOR_LOG_ASSET_PATH)
+    VISITOR_LOG_FRONTEND_PATH.parent.mkdir(parents=True, exist_ok=True)
+    VISITOR_LOG_FRONTEND_PATH.write_bytes(VISITOR_LOG_ASSET_PATH.read_bytes())
+    logger.info("Copied visitor-log exhibit -> %s", VISITOR_LOG_FRONTEND_PATH)
+    print(f"deposition PDF written: {ASSET_PDF_PATH}")
+    print(f"deposition PDF copied:  {FRONTEND_PDF_PATH}")
+    print(f"visitor-log PDF written: {VISITOR_LOG_ASSET_PATH}")
+    print(f"visitor-log PDF copied:  {VISITOR_LOG_FRONTEND_PATH}")
 
 
 if __name__ == "__main__":  # pragma: no cover

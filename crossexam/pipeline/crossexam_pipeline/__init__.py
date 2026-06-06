@@ -16,8 +16,19 @@ consumes:
 
 from __future__ import annotations
 
-from crossexam_pipeline.models import BBox, ParsedChunk
+from crossexam_pipeline.models import (
+    DEFAULT_DOCUMENT_ID,
+    DEFAULT_DOCUMENT_TITLE,
+    BBox,
+    ParsedChunk,
+)
 
-__all__ = ["BBox", "ParsedChunk", "__version__"]
+__all__ = [
+    "DEFAULT_DOCUMENT_ID",
+    "DEFAULT_DOCUMENT_TITLE",
+    "BBox",
+    "ParsedChunk",
+    "__version__",
+]
 
 __version__ = "0.1.0"

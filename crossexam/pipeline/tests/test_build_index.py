@@ -27,8 +27,14 @@ def test_dry_run_writes_backend_compatible_chunks(tmp_path: Path) -> None:
     assert isinstance(data, list) and data
 
     for rec in data:
-        # Exact backend mock-index shape.
-        assert set(rec.keys()) == {"id", "text", "page", "bbox", "confidence"}
+        # Original backend keys plus depth-v2 documentId (always emitted) and
+        # the optional documentTitle/scanned/quads. The backend Chunk model
+        # ignores the extras.
+        assert {"id", "text", "page", "bbox", "confidence", "documentId"} <= set(rec)
+        assert set(rec.keys()) <= {
+            "id", "text", "page", "bbox", "confidence",
+            "documentId", "documentTitle", "scanned", "quads",
+        }
         assert set(rec["bbox"].keys()) == {
             "page", "x0", "y0", "x1", "y1", "page_width", "page_height"
         }

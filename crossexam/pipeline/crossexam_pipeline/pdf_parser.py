@@ -25,7 +25,13 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from crossexam_pipeline.models import BBox, ParsedChunk, WordCitation
+from crossexam_pipeline.models import (
+    DEFAULT_DOCUMENT_ID,
+    DEFAULT_DOCUMENT_TITLE,
+    BBox,
+    ParsedChunk,
+    WordCitation,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -207,22 +213,86 @@ def _group_lines_into_paragraphs(
     return paragraphs
 
 
+def _line_quads(words: list[WordCitation], page: int, page_w: float, page_h: float) -> list[BBox]:
+    """Group word citations into per-LINE union boxes ("quads") for feat 2.
+
+    A chunk's words may span several wrapped physical lines. Each quad is the
+    union rect of all words sharing a physical line (clustered by their top
+    coordinate), so the quads hug the actual glyphs line-by-line while the
+    chunk's overall ``bbox`` remains the union of every word.
+
+    Args:
+        words: The chunk's word-level citations (top-left points).
+        page: 1-based page number every quad lives on.
+        page_w: Page width (points).
+        page_h: Page height (points).
+
+    Returns:
+        One :class:`BBox` per physical line, ordered top-to-bottom.
+    """
+    if not words:
+        return []
+    # Cluster words by baseline/top using the same tolerance as line grouping.
+    y_tol = 3.0
+    lines: list[list[WordCitation]] = []
+    for w in sorted(words, key=lambda c: (round(c.bbox.y0, 1), c.bbox.x0)):
+        placed = False
+        for line in lines:
+            if abs(line[0].bbox.y0 - w.bbox.y0) <= y_tol:
+                line.append(w)
+                placed = True
+                break
+        if not placed:
+            lines.append([w])
+    lines.sort(key=lambda ln: ln[0].bbox.y0)
+
+    quads: list[BBox] = []
+    for line in lines:
+        x0 = min(c.bbox.x0 for c in line)
+        x1 = max(c.bbox.x1 for c in line)
+        y0 = min(c.bbox.y0 for c in line)
+        y1 = max(c.bbox.y1 for c in line)
+        quads.append(
+            BBox(
+                page=page,
+                x0=round(max(0.0, x0), 2),
+                y0=round(max(0.0, y0), 2),
+                x1=round(min(page_w, x1), 2),
+                y1=round(min(page_h, y1), 2),
+                page_width=round(page_w, 2),
+                page_height=round(page_h, 2),
+            )
+        )
+    return quads
+
+
 class PdfTextParser:
     """Parses a born-digital PDF's text layer into :class:`ParsedChunk` records.
 
     No network and no credentials: it reads the embedded text + per-word
     coordinates with ``pdfplumber`` and converts them to canonical top-left
-    points. One rendered line of substantive text becomes one chunk.
+    points. One rendered paragraph of substantive text becomes one chunk, with
+    per-line ``quads`` hugging the glyphs and a union ``bbox``.
 
     Args:
         pdf_path: Path to the source PDF.
         id_prefix: Prefix for generated chunk ids when a line has no known id.
+        document_id: Source document id stamped on every chunk (feat 1).
+        document_title: Human label for the doc switcher (feat 1).
     """
 
-    def __init__(self, pdf_path: Path | str, id_prefix: str = "pdf") -> None:
-        """Store the source PDF path and the chunk-id prefix."""
+    def __init__(
+        self,
+        pdf_path: Path | str,
+        id_prefix: str = "pdf",
+        document_id: str = DEFAULT_DOCUMENT_ID,
+        document_title: str | None = DEFAULT_DOCUMENT_TITLE,
+    ) -> None:
+        """Store the source PDF path, chunk-id prefix, and document identity."""
         self.pdf_path = Path(pdf_path)
         self.id_prefix = id_prefix
+        self.document_id = document_id
+        self.document_title = document_title
 
     def parse(self) -> list[ParsedChunk]:
         """Parse the PDF text layer into chunks.
@@ -265,6 +335,7 @@ class PdfTextParser:
                     y0 = min(c.bbox.y0 for c in citations)
                     y1 = max(c.bbox.y1 for c in citations)
                     conf = round(sum(c.confidence for c in citations) / len(citations), 4)
+                    quads = _line_quads(citations, page_idx, page_w, page_h)
                     chunks.append(
                         ParsedChunk(
                             id=f"{self.id_prefix}-p{page_idx}-l{line_idx}",
@@ -280,6 +351,9 @@ class PdfTextParser:
                                 page_height=round(page_h, 2),
                             ),
                             confidence=conf,
+                            document_id=self.document_id,
+                            document_title=self.document_title,
+                            quads=quads,
                             words=citations,
                             source="pdf-text",
                         )

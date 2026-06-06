@@ -49,8 +49,15 @@ def test_to_index_record_has_exact_backend_shape() -> None:
         source="fallback",
     )
     rec = chunk.to_index_record()
-    # Exact key set the backend mock index consumes -- no extras.
-    assert set(rec.keys()) == {"id", "text", "page", "bbox", "confidence"}
+    # The five original backend keys plus depth-v2 documentId (always emitted).
+    # documentTitle is present here because the chunk carries the default title.
+    assert {"id", "text", "page", "bbox", "confidence", "documentId"} <= set(rec.keys())
+    # Backend Chunk.model_validate ignores the extra keys; only pipeline-only
+    # enrichment (words/source) is dropped.
+    assert set(rec.keys()) <= {
+        "id", "text", "page", "bbox", "confidence",
+        "documentId", "documentTitle", "scanned", "quads",
+    }
     assert set(rec["bbox"].keys()) == {
         "page", "x0", "y0", "x1", "y1", "page_width", "page_height"
     }

@@ -18,6 +18,7 @@ changes here.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import os
 from pathlib import Path
@@ -25,7 +26,13 @@ from typing import Any
 
 import httpx
 
-from crossexam_pipeline.models import BBox, ParsedChunk, WordCitation
+from crossexam_pipeline.models import (
+    DEFAULT_DOCUMENT_ID,
+    DEFAULT_DOCUMENT_TITLE,
+    BBox,
+    ParsedChunk,
+    WordCitation,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +70,8 @@ class UnsiloedParser:
         poll_interval: float = 3.0,
         timeout: float = 600.0,
         client: httpx.AsyncClient | None = None,
+        document_id: str = DEFAULT_DOCUMENT_ID,
+        document_title: str | None = DEFAULT_DOCUMENT_TITLE,
     ) -> None:
         """Initialize the parser and validate that an API key is present."""
         if not api_key:
@@ -75,6 +84,8 @@ class UnsiloedParser:
         self.poll_interval = poll_interval
         self.timeout = timeout
         self._client = client
+        self.document_id = document_id
+        self.document_title = document_title
 
     @classmethod
     def from_env(cls, **kwargs: Any) -> UnsiloedParser:  # noqa: ANN401 - forwarded verbatim to __init__, whose params are typed
@@ -112,11 +123,13 @@ class UnsiloedParser:
             return self._client, False
         return httpx.AsyncClient(timeout=httpx.Timeout(60.0)), True
 
-    async def parse(self, input_path: Path | str) -> list[ParsedChunk]:
+    async def parse(self, input_path: Path | str, scanned: bool = False) -> list[ParsedChunk]:
         """Parse a document via Unsiloed: submit, poll, normalize.
 
         Args:
             input_path: Path to the source document (e.g. a PDF).
+            scanned: If ``True``, use the VISION/scan path (OCR region boxes) and
+                mark the resulting chunks ``scanned=True`` (feat 3).
 
         Returns:
             Normalized :class:`ParsedChunk` records.
@@ -131,22 +144,51 @@ class UnsiloedParser:
 
         client, owns = await self._acquire_client()
         try:
-            job_id = await self._submit(client, path)
-            logger.info("Submitted Unsiloed parse job %s for %s", job_id, path.name)
-            result = await self._poll(client, job_id)
-            chunks = self.normalize(result)
+            job_id = await self._submit(client, path, scanned=scanned)
+            logger.info(
+                "Submitted Unsiloed %s job %s for %s",
+                "vision/scan" if scanned else "parse",
+                job_id,
+                path.name,
+            )
+            endpoint = "vision" if scanned else "parse"
+            result = await self._poll(client, job_id, endpoint=endpoint)
+            chunks = self.normalize(
+                result,
+                scanned=scanned,
+                document_id=self.document_id,
+                document_title=self.document_title,
+            )
             logger.info("Unsiloed job %s yielded %d chunk(s).", job_id, len(chunks))
             return chunks
         finally:
             if owns:
                 await client.aclose()
 
-    async def _submit(self, client: httpx.AsyncClient, path: Path) -> str:
+    async def parse_scanned(self, input_path: Path | str) -> list[ParsedChunk]:
+        """Parse a scanned/image-only document via the Unsiloed VISION path.
+
+        Convenience wrapper for ``parse(..., scanned=True)``: submits the scan to
+        the OCR/vision endpoint, polls, normalizes to region-box quads, and marks
+        every chunk ``scanned=True``.
+
+        Args:
+            input_path: Path to the scanned source document.
+
+        Returns:
+            Normalized :class:`ParsedChunk` records with ``scanned=True``.
+        """
+        return await self.parse(input_path, scanned=True)
+
+    async def _submit(
+        self, client: httpx.AsyncClient, path: Path, scanned: bool = False
+    ) -> str:
         """Upload the document and return the created job id.
 
         Args:
             client: Async HTTP client.
             path: Document to upload.
+            scanned: Route to the vision/OCR endpoint when ``True``.
 
         Returns:
             The Unsiloed job identifier.
@@ -155,9 +197,17 @@ class UnsiloedParser:
             UnsiloedError: If the API does not return a job id.
         """
         files = {"file": (path.name, path.read_bytes(), "application/pdf")}
-        data = {"extract_bbox": "true", "extract_words": "true"}
+        # The vision/scan path asks the API to OCR an image-only document and
+        # return region boxes; the born-digital path extracts the text layer.
+        endpoint = "vision" if scanned else "parse"
+        data = {
+            "extract_bbox": "true",
+            "extract_words": "true",
+            "ocr": "true" if scanned else "false",
+            "mode": "vision" if scanned else "text",
+        }
         resp = await client.post(
-            f"{self.base_url}/parse",
+            f"{self.base_url}/{endpoint}",
             headers=self._headers(),
             files=files,
             data=data,
@@ -166,15 +216,21 @@ class UnsiloedParser:
         payload = resp.json()
         job_id = payload.get("job_id") or payload.get("id")
         if not job_id:
-            raise UnsiloedError(f"Unsiloed /parse returned no job id: {payload!r}")
+            raise UnsiloedError(
+                f"Unsiloed /{endpoint} returned no job id: {payload!r}"
+            )
         return str(job_id)
 
-    async def _poll(self, client: httpx.AsyncClient, job_id: str) -> dict[str, Any]:
+    async def _poll(
+        self, client: httpx.AsyncClient, job_id: str, endpoint: str = "parse"
+    ) -> dict[str, Any]:
         """Poll a job until it completes, fails, or times out.
 
         Args:
             client: Async HTTP client.
             job_id: Job to poll.
+            endpoint: API endpoint the job was submitted to (``parse`` or
+                ``vision``); polled at ``/{endpoint}/{job_id}``.
 
         Returns:
             The completed job's result payload.
@@ -185,7 +241,7 @@ class UnsiloedParser:
         elapsed = 0.0
         while elapsed <= self.timeout:
             resp = await client.get(
-                f"{self.base_url}/parse/{job_id}", headers=self._headers()
+                f"{self.base_url}/{endpoint}/{job_id}", headers=self._headers()
             )
             resp.raise_for_status()
             payload = resp.json()
@@ -289,13 +345,75 @@ class UnsiloedParser:
         return words
 
     @classmethod
-    def normalize(cls, result: dict[str, Any]) -> list[ParsedChunk]:
+    def _quads_for(
+        cls,
+        rc: dict[str, Any],
+        words: list[WordCitation],
+        bbox: BBox,
+        page: int,
+    ) -> list[BBox]:
+        """Build per-line quad boxes for a chunk (feat 2).
+
+        Resolution order:
+
+        * Explicit ``quads``/``lines``/``regions`` on the raw chunk (the vision
+          path returns OCR region boxes here) -> coerce each to points.
+        * Otherwise group the word boxes into physical lines by their top edge.
+        * Otherwise fall back to the union ``bbox`` as a single quad.
+        """
+        raw_quads = rc.get("quads") or rc.get("lines") or rc.get("regions")
+        if raw_quads:
+            out: list[BBox] = []
+            for q in raw_quads:
+                qbox = q.get("bbox") or q.get("bounding_box") or q
+                out.append(cls._coerce_bbox(qbox, page))
+            if out:
+                return out
+        if words:
+            y_tol = 3.0
+            lines: list[list[WordCitation]] = []
+            for w in sorted(words, key=lambda c: (round(c.bbox.y0, 1), c.bbox.x0)):
+                placed = False
+                for line in lines:
+                    if abs(line[0].bbox.y0 - w.bbox.y0) <= y_tol:
+                        line.append(w)
+                        placed = True
+                        break
+                if not placed:
+                    lines.append([w])
+            lines.sort(key=lambda ln: ln[0].bbox.y0)
+            return [
+                BBox(
+                    page=page,
+                    x0=round(min(c.bbox.x0 for c in line), 2),
+                    y0=round(min(c.bbox.y0 for c in line), 2),
+                    x1=round(max(c.bbox.x1 for c in line), 2),
+                    y1=round(max(c.bbox.y1 for c in line), 2),
+                    page_width=bbox.page_width,
+                    page_height=bbox.page_height,
+                )
+                for line in lines
+            ]
+        return [bbox]
+
+    @classmethod
+    def normalize(
+        cls,
+        result: dict[str, Any],
+        scanned: bool = False,
+        document_id: str = DEFAULT_DOCUMENT_ID,
+        document_title: str | None = DEFAULT_DOCUMENT_TITLE,
+    ) -> list[ParsedChunk]:
         """Normalize a completed Unsiloed result into :class:`ParsedChunk`.
 
         Args:
             result: The job's result payload. Expected to contain a ``chunks``
                 (or ``blocks``/``elements``) list, each with ``text``, ``page``,
-                a bounding box, an optional ``words`` list, and a confidence.
+                a bounding box, an optional ``words``/``quads`` list, and a
+                confidence.
+            scanned: Mark every chunk ``scanned=True`` (vision/OCR path, feat 3).
+            document_id: Source document id stamped on every chunk (feat 1).
+            document_title: Human label for the doc switcher (feat 1).
 
         Returns:
             Normalized chunks, skipping any entry without text.
@@ -322,6 +440,7 @@ class UnsiloedParser:
             bbox_raw = rc.get("bbox") or rc.get("bounding_box") or {}
             bbox = cls._coerce_bbox(bbox_raw, page)
             words = cls._coerce_words(list(rc.get("words", [])), page)
+            quads = cls._quads_for(rc, words, bbox, page)
             conf = rc.get("confidence", rc.get("score"))
             if conf is None and words:
                 conf = sum(w.confidence for w in words) / len(words)
@@ -334,8 +453,117 @@ class UnsiloedParser:
                     page=page,
                     bbox=bbox,
                     confidence=round(confidence, 4),
+                    document_id=document_id,
+                    document_title=document_title,
+                    scanned=bool(scanned or rc.get("scanned", False)),
+                    quads=quads,
                     words=words,
                     source="unsiloed",
                 )
             )
+        return chunks
+
+
+# --- Offline scanned fallback (feat 3) ---------------------------------------
+# Region-box geometry for the synthetic scan: a band of OCR "regions" per page.
+_SCAN_PAGE_W = 612.0
+_SCAN_PAGE_H = 792.0
+_SCAN_LEFT = 72.0
+_SCAN_RIGHT = 540.0
+_SCAN_TOP = 120.0
+_SCAN_REGION_H = 28.0
+_SCAN_REGION_GAP = 16.0
+
+
+def _scan_confidence(text: str, floor: float = 0.62, ceiling: float = 0.82) -> float:
+    """Deterministic OCR-style confidence (lower band: scans are noisier)."""
+    digest = hashlib.sha256(text.encode("utf-8")).digest()
+    frac = int.from_bytes(digest[:2], "big") / 65536.0
+    return round(floor + frac * (ceiling - floor), 4)
+
+
+class ScannedFallbackParser:
+    """Deterministic, network-free parser for scanned/image-only documents.
+
+    This is the offline counterpart of the Unsiloed VISION path (feat 3). A real
+    scan has no clean text layer, so this parser does NOT try to read glyphs:
+    it marks the document ``scanned=True`` and lays out one region box per
+    "OCR'd" line, using those region boxes as the chunk ``quads`` (and their
+    union as the chunk ``bbox``). It is fully deterministic so the fixture and
+    tests are reproducible.
+
+    The recovered text is supplied by the caller (``lines``) -- in the offline
+    demo this stands in for what an OCR engine would have returned -- defaulting
+    to a small set of handwritten field-note lines that match the synthetic
+    scanned sample produced by :func:`make_sample_pdf.make_scanned_pdf`.
+
+    Args:
+        document_id: Source document id stamped on every chunk.
+        document_title: Human label for the doc switcher.
+        lines: Recovered text lines (one chunk per line).
+    """
+
+    DEFAULT_LINES: tuple[str, ...] = (
+        "FIELD NOTES (scanned, handwritten)",
+        "Observed delivery truck at the loading dock near midnight.",
+        "Lighting was poor; could not read the license plate clearly.",
+        "Will follow up with the night supervisor in the morning.",
+    )
+
+    def __init__(
+        self,
+        document_id: str = "exhibit-field-notes",
+        document_title: str | None = "Exhibit 22: Handwritten Field Notes (scanned)",
+        lines: tuple[str, ...] | None = None,
+    ) -> None:
+        """Store the document identity and the recovered text lines."""
+        self.document_id = document_id
+        self.document_title = document_title
+        self.lines = lines or self.DEFAULT_LINES
+
+    def parse(self) -> list[ParsedChunk]:
+        """Produce scanned chunks with region-box quads.
+
+        Returns:
+            One :class:`ParsedChunk` per recovered line, each ``scanned=True``
+            with a single region-box quad whose union equals the chunk ``bbox``.
+        """
+        chunks: list[ParsedChunk] = []
+        y = _SCAN_TOP
+        for idx, text in enumerate(self.lines):
+            stripped = text.strip()
+            if not stripped:
+                continue
+            y0 = round(y, 2)
+            y1 = round(min(y + _SCAN_REGION_H, _SCAN_PAGE_H), 2)
+            region = BBox(
+                page=1,
+                x0=_SCAN_LEFT,
+                y0=y0,
+                x1=_SCAN_RIGHT,
+                y1=y1,
+                page_width=_SCAN_PAGE_W,
+                page_height=_SCAN_PAGE_H,
+            )
+            chunks.append(
+                ParsedChunk(
+                    id=f"{self.document_id}-p1-l{idx}",
+                    text=stripped,
+                    page=1,
+                    bbox=region,
+                    confidence=_scan_confidence(stripped),
+                    document_id=self.document_id,
+                    document_title=self.document_title,
+                    scanned=True,
+                    quads=[region],
+                    words=[],
+                    source="scanned-fallback",
+                )
+            )
+            y = y1 + _SCAN_REGION_GAP
+        logger.info(
+            "Scanned fallback produced %d region chunk(s) for %s.",
+            len(chunks),
+            self.document_id,
+        )
         return chunks

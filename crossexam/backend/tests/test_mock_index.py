@@ -108,3 +108,53 @@ def test_from_fixture_missing_file() -> None:
     """A missing fixture raises FileNotFoundError."""
     with pytest.raises(FileNotFoundError):
         MockIndex.from_fixture(Path("/nonexistent/does-not-exist.json"))
+
+
+# --------------------------------------------------------------------------- #
+# Multi-document querying (depth-v2 feat 1)                                    #
+# --------------------------------------------------------------------------- #
+def _multi_doc_index() -> MockIndex:
+    """A self-contained 2-document index for the cross-doc query tests."""
+    from crossexam_backend.models import BBox, Chunk
+
+    def _c(cid: str, text: str, page: int, doc: str) -> Chunk:
+        bbox = BBox(page=page, x0=72.0, y0=100.0, x1=540.0, y1=136.0)
+        return Chunk(id=cid, text=text, page=page, bbox=bbox, documentId=doc)
+
+    return MockIndex(
+        [
+            _c("a1", "warehouse inventory count on the night of the 14th", 1, "docA"),
+            _c("a2", "the witness remained past midnight", 2, "docA"),
+            _c("b1", "keycard access log for the warehouse on the 14th", 1, "docB"),
+        ]
+    )
+
+
+async def test_query_multi_filters_by_doc() -> None:
+    """query_multi with doc_ids only returns citations from those documents."""
+    index = _multi_doc_index()
+    result = await index.query_multi("warehouse 14th", top_k=5, doc_ids=["docB"])
+    assert result.citations
+    assert {c.documentId for c in result.citations} == {"docB"}
+
+
+async def test_query_multi_spans_all_docs_by_default() -> None:
+    """query_multi with no filter searches every document."""
+    index = _multi_doc_index()
+    result = await index.query_multi("warehouse 14th", top_k=5)
+    assert {c.documentId for c in result.citations} >= {"docA", "docB"}
+
+
+async def test_document_ids_property() -> None:
+    """The index reports its distinct document ids."""
+    index = _multi_doc_index()
+    assert set(index.document_ids) == {"docA", "docB"}
+
+
+async def test_citation_carries_document_id_from_chunk(index: MockIndex) -> None:
+    """Citations from the shipped fixture carry the default documentId."""
+    from crossexam_backend.models import DEFAULT_DOCUMENT_ID
+
+    result = await index.query("warehouse night of the 14th", top_k=2)
+    assert result.citations
+    assert result.citations[0].documentId == DEFAULT_DOCUMENT_ID

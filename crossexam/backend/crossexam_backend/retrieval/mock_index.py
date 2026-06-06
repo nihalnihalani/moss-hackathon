@@ -43,7 +43,12 @@ logger = logging.getLogger(__name__)
 
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
 
-# Extremely common words that should not drive keyword matching.
+# Extremely common words that should not drive keyword matching. Includes the
+# modal/auxiliary and generic verbs ("will", "like", "be", ...) that carry no
+# content signal: a query like "what *will* the weather *be* *like*" must not
+# match a passage merely because it also contains "will" — these words appear
+# everywhere and only inflate spurious overlap, so they are dropped before
+# scoring (mirrors the verify.py content-token list).
 _STOPWORDS = frozenset(
     {
         "the", "a", "an", "of", "on", "in", "at", "to", "and", "or", "for",
@@ -51,6 +56,8 @@ _STOPWORDS = frozenset(
         "this", "it", "as", "by", "with", "from", "what", "when", "where",
         "who", "how", "why", "i", "you", "he", "she", "they", "we", "me",
         "my", "your", "his", "her", "their", "there", "had", "has", "have",
+        "will", "would", "could", "should", "shall", "may", "might", "must",
+        "can", "like", "about", "not", "no",
     }
 )
 
@@ -98,6 +105,23 @@ def _raw_tokens(text: str) -> list[str]:
 def _query_term_weight(term: str) -> float:
     """Per-term query weight: down-weight discourse/role words (see above)."""
     return _DISCOURSE_WEIGHT if term in _DISCOURSE_TERMS else 1.0
+
+
+def _chunk_to_citation(chunk: Chunk, score: float) -> Citation:
+    """Build a :class:`Citation` from a chunk, carrying the depth-v2 fields.
+
+    Propagates the chunk's ``documentId`` / ``documentTitle`` / ``quads`` /
+    ``scanned`` onto the citation so multi-doc, quad-highlight and scanned-source
+    metadata survive retrieval (see the shared contract).
+    """
+    return Citation(
+        chunk=chunk,
+        score=score,
+        quads=chunk.quads,
+        documentId=chunk.documentId,
+        documentTitle=chunk.documentTitle,
+        scanned=chunk.scanned,
+    )
 
 
 class MockIndex(RetrievalIndex):
@@ -282,18 +306,32 @@ class MockIndex(RetrievalIndex):
         return idf_mass * tightness
 
     # -- hybrid fusion -------------------------------------------------------
-    def _candidate_indices(self, query_term_set: set[str]) -> list[int]:
+    def _candidate_indices(
+        self, query_term_set: set[str], doc_ids: set[str] | None = None
+    ) -> list[int]:
         """Chunks sharing at least one query term (cheap recall pruning).
 
         A chunk with no overlapping term scores 0 on the semantic cosine, 0 on
         BM25, and 0 on both refinements, so it can never rank — skipping it keeps
         the per-query work proportional to the matched postings, not the corpus.
+        When ``doc_ids`` is given, only chunks from those documents are kept (the
+        cross-document filter).
         """
         return [
             idx
             for idx in range(len(self._chunks))
             if not query_term_set.isdisjoint(self._doc_vectors[idx])
+            and (doc_ids is None or self._chunks[idx].documentId in doc_ids)
         ]
+
+    @property
+    def document_ids(self) -> list[str]:
+        """Distinct document ids present in the index, in first-seen order."""
+        seen: list[str] = []
+        for chunk in self._chunks:
+            if chunk.documentId not in seen:
+                seen.append(chunk.documentId)
+        return seen
 
     def _fused_base(
         self,
@@ -343,6 +381,7 @@ class MockIndex(RetrievalIndex):
         alpha: float = 0.8,
         *,
         rerank: bool = False,
+        doc_ids: list[str] | None = None,
     ) -> RetrievalResult:
         """Return the top-``k`` citations for ``text`` (see base class).
 
@@ -371,7 +410,8 @@ class MockIndex(RetrievalIndex):
         query_vec: Counter[str] = Counter(query_tokens)
         query_term_set = set(query_tokens)
 
-        candidates = self._candidate_indices(query_term_set)
+        doc_filter = set(doc_ids) if doc_ids is not None else None
+        candidates = self._candidate_indices(query_term_set, doc_filter)
         fused_base = self._fused_base(candidates, query_vec, query_tokens, alpha)
 
         scored: list[tuple[float, int]] = []
@@ -399,7 +439,7 @@ class MockIndex(RetrievalIndex):
         citations: list[Citation] = []
         for score, idx in scored[:top_k]:
             chunk = self._chunks[idx]
-            citations.append(Citation(chunk=chunk, score=min(score / best, 1.0)))
+            citations.append(_chunk_to_citation(chunk, min(score / best, 1.0)))
 
         latency_ms = (time.perf_counter() - start) * 1000.0
         logger.debug(
@@ -410,6 +450,26 @@ class MockIndex(RetrievalIndex):
             latency_ms,
         )
         return RetrievalResult(query=text, citations=citations, latency_ms=latency_ms)
+
+    async def query_multi(
+        self,
+        text: str,
+        top_k: int = 5,
+        alpha: float = 0.8,
+        *,
+        doc_ids: list[str] | None = None,
+        rerank: bool = False,
+    ) -> RetrievalResult:
+        """Query across one or more documents, optionally filtered to ``doc_ids``.
+
+        A thin contract-named wrapper over :meth:`query`: with ``doc_ids=None``
+        it searches every document in the index; otherwise it restricts the
+        candidate set to those documents. Citations carry their ``documentId`` so
+        callers can fuse results spanning documents.
+        """
+        return await self.query(
+            text, top_k=top_k, alpha=alpha, rerank=rerank, doc_ids=doc_ids
+        )
 
     def _apply_rerank(
         self, text: str, scored: list[tuple[float, int]]

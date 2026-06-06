@@ -23,9 +23,18 @@ import typer
 
 from crossexam_pipeline.build_index import build_index as _build_index
 from crossexam_pipeline.fallback import DEFAULT_SAMPLE_PATH, DeterministicParser
-from crossexam_pipeline.models import ParsedChunk, chunks_to_index_records
+from crossexam_pipeline.models import (
+    DEFAULT_DOCUMENT_ID,
+    DEFAULT_DOCUMENT_TITLE,
+    ParsedChunk,
+    chunks_to_index_records,
+)
 from crossexam_pipeline.pdf_parser import PdfTextParser
-from crossexam_pipeline.unsiloed import MissingCredentialsError, UnsiloedParser
+from crossexam_pipeline.unsiloed import (
+    MissingCredentialsError,
+    ScannedFallbackParser,
+    UnsiloedParser,
+)
 
 logger = logging.getLogger("crossexam_pipeline")
 
@@ -109,6 +118,24 @@ def parse(
         "network, no Unsiloed key). Reads real per-word coordinates from "
         "--input and emits canonical top-left point boxes.",
     ),
+    scanned: bool = typer.Option(
+        False,
+        "--scanned",
+        help="Treat the source as a scanned / image-only document (feat 3). "
+        "Uses the Unsiloed VISION/OCR path when UNSILOED_API_KEY is set; "
+        "otherwise (or with --dry-run) uses the deterministic offline scanned "
+        "fallback that emits region-box quads and marks chunks scanned=true.",
+    ),
+    document_id: str = typer.Option(
+        DEFAULT_DOCUMENT_ID,
+        "--document-id",
+        help="Source document id stamped on every chunk (feat 1).",
+    ),
+    document_title: str = typer.Option(
+        DEFAULT_DOCUMENT_TITLE,
+        "--document-title",
+        help="Human-readable document label for the doc switcher (feat 1).",
+    ),
     sample: Path = typer.Option(
         DEFAULT_SAMPLE_PATH,
         "--sample",
@@ -118,9 +145,12 @@ def parse(
 ) -> None:
     """Parse a document into backend-compatible chunk JSON.
 
-    Three parse paths:
+    Parse paths:
 
     * ``--dry-run``    -- deterministic JSON fallback (bundled sample, no I/O).
+    * ``--scanned``    -- scanned / image-only path (feat 3): Unsiloed VISION/OCR
+      when a key is set, else the deterministic offline scanned fallback
+      (region-box quads, ``scanned=true``).
     * ``--text-layer`` -- read a born-digital PDF's text layer locally
       (``pdfplumber``); no network and no Unsiloed key required.
     * default          -- Unsiloed Parse/Extract (requires ``UNSILOED_API_KEY``)
@@ -129,8 +159,40 @@ def parse(
     _configure_logging(verbose)
 
     if dry_run:
-        logger.info("Parsing with deterministic fallback (sample=%s).", sample)
-        chunks = DeterministicParser(sample_path=sample).parse()
+        if scanned:
+            logger.info("Parsing with deterministic scanned fallback (feat 3).")
+            chunks = ScannedFallbackParser(
+                document_id=document_id, document_title=document_title
+            ).parse()
+        else:
+            logger.info("Parsing with deterministic fallback (sample=%s).", sample)
+            chunks = DeterministicParser(sample_path=sample).parse()
+    elif scanned:
+        # Scanned/vision path: real Unsiloed VISION when configured, else the
+        # deterministic offline scanned fallback so the demo still works.
+        try:
+            parser = UnsiloedParser.from_env(
+                document_id=document_id, document_title=document_title
+            )
+        except MissingCredentialsError:
+            logger.info(
+                "No Unsiloed key; using the deterministic offline scanned "
+                "fallback (region-box quads, scanned=true)."
+            )
+            chunks = ScannedFallbackParser(
+                document_id=document_id, document_title=document_title
+            ).parse()
+        else:
+            if input is None:
+                typer.secho(
+                    "--input is required with --scanned when UNSILOED_API_KEY is "
+                    "set (path to the scanned PDF to OCR via the vision path).",
+                    fg="red",
+                    err=True,
+                )
+                raise typer.Exit(code=2)
+            logger.info("Parsing %s with Unsiloed VISION (scanned).", input)
+            chunks = asyncio.run(parser.parse_scanned(input))
     elif text_layer:
         if input is None:
             typer.secho(
@@ -141,7 +203,9 @@ def parse(
             )
             raise typer.Exit(code=2)
         logger.info("Parsing %s text layer locally (pdfplumber).", input)
-        chunks = PdfTextParser(input).parse()
+        chunks = PdfTextParser(
+            input, document_id=document_id, document_title=document_title
+        ).parse()
     else:
         if input is None:
             typer.secho(
@@ -152,7 +216,9 @@ def parse(
             )
             raise typer.Exit(code=2)
         try:
-            parser = UnsiloedParser.from_env()
+            parser = UnsiloedParser.from_env(
+                document_id=document_id, document_title=document_title
+            )
         except MissingCredentialsError as exc:
             typer.secho(str(exc), fg="yellow", err=True)
             raise typer.Exit(code=3) from exc
@@ -212,6 +278,83 @@ def build_index_cmd(
         f"-> {summary.get('path') or summary.get('index')}",
         fg="green",
     )
+
+
+@app.command("sample-fixture")
+def sample_fixture_cmd(
+    out: Path | None = typer.Option(
+        None,
+        "--out",
+        "-o",
+        help="Fixture path to write (defaults to the backend mock fixture).",
+    ),
+    include_scanned: bool = typer.Option(
+        True,
+        "--include-scanned/--no-scanned",
+        help="Append a scanned (OCR) document so a scanned=true source exists.",
+    ),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose logging."),
+) -> None:
+    """Regenerate the multi-document demo fixture (feats 1-3).
+
+    Generates both demo PDFs, parses each into chunks carrying their own
+    ``documentId``/``documentTitle`` and per-line ``quads``, optionally appends a
+    scanned document (region-box quads, ``scanned=true``), and writes the
+    backend-compatible fixture. The deposition keeps the ``pdf-...`` chunk ids so
+    existing demo ranking and eval gold ids still resolve.
+    """
+    _configure_logging(verbose)
+    from crossexam_pipeline import make_sample_pdf as msp
+    from crossexam_pipeline.build_index import DEFAULT_CHUNKS_OUT
+
+    chunks = _build_sample_fixture_chunks(include_scanned=include_scanned)
+    target = out or DEFAULT_CHUNKS_OUT
+    _write_chunk_records(chunks, target)
+    docs = sorted({c.document_id for c in chunks})
+    typer.secho(
+        f"sample-fixture: wrote {len(chunks)} chunk(s) across {len(docs)} "
+        f"document(s) {docs} -> {target}",
+        fg="green",
+    )
+    _ = msp  # keep import referenced for side-effect-free linting
+
+
+def _build_sample_fixture_chunks(include_scanned: bool = True) -> list[ParsedChunk]:
+    """Generate both demo PDFs and parse them into multi-document chunks.
+
+    Returns:
+        Deposition chunks (ids ``pdf-...``, ``deposition-holloway``) +
+        visitor-log chunks (``exhibit-visitor-log``) + optional scanned chunks
+        (``scanned=true``).
+    """
+    import tempfile
+
+    from crossexam_pipeline import make_sample_pdf as msp
+    from crossexam_pipeline.unsiloed import ScannedFallbackParser
+
+    chunks: list[ParsedChunk] = []
+    with tempfile.TemporaryDirectory() as tmp:
+        dep_pdf = Path(tmp) / "deposition.pdf"
+        log_pdf = Path(tmp) / "visitor-log.pdf"
+        msp.make_pdf(dep_pdf)
+        msp.make_visitor_log_pdf(log_pdf)
+        # Deposition keeps the historical "pdf" id prefix so pdf-p12-l1 etc.
+        # survive for the existing demo ranking + eval gold ids.
+        chunks += PdfTextParser(
+            dep_pdf,
+            id_prefix="pdf",
+            document_id=msp.DEPOSITION_DOC_ID,
+            document_title=msp.DEPOSITION_DOC_TITLE,
+        ).parse()
+        chunks += PdfTextParser(
+            log_pdf,
+            id_prefix="exhibit-visitor-log",
+            document_id=msp.VISITOR_LOG_DOC_ID,
+            document_title=msp.VISITOR_LOG_DOC_TITLE,
+        ).parse()
+    if include_scanned:
+        chunks += ScannedFallbackParser().parse()
+    return chunks
 
 
 def main() -> None:

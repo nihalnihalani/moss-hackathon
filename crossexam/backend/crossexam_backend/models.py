@@ -7,7 +7,13 @@ carries a page number, a bounding box and a confidence score.
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field, computed_field, field_validator, model_validator
+
+# Default single-document id used for back-compat. A single-doc demo carries one
+# id like this on every chunk/citation (see the contract invariants).
+DEFAULT_DOCUMENT_ID = "deposition-holloway"
 
 
 class BBox(BaseModel):
@@ -86,6 +92,12 @@ class Chunk(BaseModel):
         page: 1-based page number (mirrors ``bbox.page`` for convenience).
         bbox: Bounding box locating the chunk on the page.
         confidence: Ingest-time OCR/parse confidence in ``[0, 1]``.
+        documentId: Which document this chunk belongs to (depth-v2 multi-doc).
+            Defaults to a single id so single-doc fixtures stay valid.
+        documentTitle: Optional human label for the document switcher.
+        quads: Optional per-line bounding boxes hugging the glyphs (all on
+            ``bbox.page``); carried through onto the citation for rendering.
+        scanned: Whether the source page was a scan (OCR).
     """
 
     id: str
@@ -93,24 +105,65 @@ class Chunk(BaseModel):
     page: int = Field(ge=1)
     bbox: BBox
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+    documentId: str = Field(default=DEFAULT_DOCUMENT_ID)  # noqa: N815 - wire contract field name
+    documentTitle: str | None = None  # noqa: N815 - wire contract field name
+    quads: list[BBox] | None = None
+    scanned: bool = False
 
     @model_validator(mode="after")
     def _page_matches_bbox(self) -> Chunk:
         if self.bbox.page != self.page:
             raise ValueError("Chunk.page must match Chunk.bbox.page")
+        if self.quads is not None:
+            for quad in self.quads:
+                if quad.page != self.bbox.page:
+                    raise ValueError("Chunk.quads must be on the same page as bbox")
         return self
 
 
 class Citation(BaseModel):
     """A single retrieved chunk together with its relevance score.
 
+    Carries the depth-v2 multi-document / quad-highlight / scanned-source fields
+    from the shared contract. The geometry stays in :attr:`chunk` (the union
+    ``bbox`` is used for page-jump + label); :attr:`quads`, when present, are the
+    per-line boxes the frontend renders.
+
     Attributes:
         chunk: The retrieved :class:`Chunk`.
         score: Relevance score in ``[0, 1]`` (higher is more relevant).
+        quads: Optional per-line bounding boxes hugging the actual glyphs. All
+            must lie on the same page as ``chunk.bbox`` (the union rect).
+        documentId: Which document this citation came from. Defaults to a single
+            id (:data:`DEFAULT_DOCUMENT_ID`) so single-doc callers stay valid.
+        documentTitle: Optional human label for the document switcher.
+        scanned: Whether the source page was a scan (OCR) — drives the "scanned
+            source" badge in the UI.
     """
 
     chunk: Chunk
     score: float = Field(ge=0.0, le=1.0)
+    quads: list[BBox] | None = None
+    documentId: str = Field(default=DEFAULT_DOCUMENT_ID)  # noqa: N815 - wire contract field name
+    documentTitle: str | None = None  # noqa: N815 - wire contract field name
+    scanned: bool = False
+
+    @property
+    def confidence(self) -> float:
+        """Ingest-time confidence of the underlying chunk (contract field)."""
+        return self.chunk.confidence
+
+    @model_validator(mode="after")
+    def _quads_on_bbox_page(self) -> Citation:
+        """Every quad must sit on the same page as the union ``bbox``."""
+        if self.quads is not None:
+            page = self.chunk.bbox.page
+            for quad in self.quads:
+                if quad.page != page:
+                    raise ValueError(
+                        "Citation.quads must be on the same page as chunk.bbox"
+                    )
+        return self
 
 
 class RetrievalResult(BaseModel):
@@ -158,3 +211,82 @@ class RetrievalResult(BaseModel):
                 f"{cit.chunk.text.strip()}"
             )
         return "\n".join(lines)
+
+
+class MemoryRef(BaseModel):
+    """A recall of a citation already surfaced earlier this session (feat 5).
+
+    Instead of re-snapping a box the agent already showed, the backend emits a
+    :class:`MemoryRef` so the agent can say "as we saw on page N".
+
+    Attributes:
+        kind: Always ``"recall"`` (a literal discriminator on the wire frame).
+        citationId: The id of the chunk being recalled.
+        documentId: Which document the recalled citation lives in.
+        page: 1-based page the recalled citation is on.
+        note: Human phrasing for the recall, e.g. ``"as we saw on page 12"``.
+    """
+
+    kind: Literal["recall"] = "recall"
+    citationId: str  # noqa: N815 - wire contract field name
+    documentId: str = Field(default=DEFAULT_DOCUMENT_ID)  # noqa: N815 - wire contract field name
+    page: int = Field(ge=1)
+    note: str
+
+
+class HopTrace(BaseModel):
+    """One step of the agentic query-decomposition trail (feat 1).
+
+    Attributes:
+        subQuery: The decomposed sub-question that was retrieved.
+        citationIds: Ids of the citations this sub-query surfaced.
+    """
+
+    subQuery: str  # noqa: N815 - wire contract field name
+    citationIds: list[str] = Field(default_factory=list)  # noqa: N815 - wire contract field name
+
+
+class Speaker(BaseModel):
+    """Who triggered a turn in meeting mode (feat 4).
+
+    Attributes:
+        id: Stable speaker id, e.g. ``"spk_1"``.
+        label: Human label, e.g. ``"Counsel"``.
+    """
+
+    id: str
+    label: str
+
+
+class MultiHopResult(BaseModel):
+    """The result of a multi-hop retrieval over one (possibly complex) question.
+
+    Composes the single-hop :class:`RetrievalResult` shape: it carries a fused,
+    de-duplicated list of citations spanning sub-queries / documents / pages,
+    the decomposition trail, and a cross-document contradiction flag.
+
+    Attributes:
+        query: The original (complex) user-turn text.
+        citations: Fused, de-duplicated citations (best first), 0..N across docs.
+        hops: The decomposition trail — one :class:`HopTrace` per sub-query.
+        contradiction: Whether two high-confidence citations assert mutually
+            exclusive facts (cross-page / cross-doc).
+        primary_id: The citation id to page-jump to first (best hit), or ``None``
+            when there are no citations.
+        latency_ms: Wall-clock retrieval latency in milliseconds.
+    """
+
+    query: str
+    citations: list[Citation] = Field(default_factory=list)
+    hops: list[HopTrace] = Field(default_factory=list)
+    contradiction: bool = False
+    primary_id: str | None = None
+    latency_ms: float = Field(default=0.0, ge=0.0)
+
+    def to_retrieval_result(self) -> RetrievalResult:
+        """Project down to a single-hop :class:`RetrievalResult` (back-compat)."""
+        return RetrievalResult(
+            query=self.query,
+            citations=list(self.citations),
+            latency_ms=self.latency_ms,
+        )
