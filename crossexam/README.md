@@ -41,9 +41,22 @@ Requires Python 3.10+ and Node.js 20+. From this directory (`crossexam/`):
 make setup     # install backend + pipeline deps (editable) and `npm ci` the frontend
 make test      # run all suites: pytest (backend + pipeline) + vitest (frontend)
 make dev       # run the backend worker AND the frontend dev server together
+make dev-live  # run the HTTP API + worker + frontend together (token + upload + voice)
 ```
 
-Then open http://localhost:5173 . `make dev` runs in mock mode unless you provide keys.
+Then open http://localhost:5173 . `make dev` / `make dev-live` run in mock mode unless you
+provide keys.
+
+The browser talks to a small **HTTP API service** (`crossexam-api`, FastAPI on
+`http://localhost:8000`): it mints LiveKit join tokens (`POST /token`), ingests uploaded
+PDFs (`POST /documents`), and reports readiness (`GET /healthz`, `GET /config`). The frontend
+is **live-by-default**: it reads `VITE_API_URL` (default `http://localhost:8000`), fetches
+`/config`, and connects live as soon as keys are present — falling back to the mock UI
+otherwise. Run just the API with `make api`.
+
+To go fully real, see **[`KEYS.md`](./KEYS.md)** for the exact key list and run
+`make verify-live` — it prints the doctor READY/MISSING/MOCK table and probes `/healthz`
+and `/config`.
 
 > Tip: use an isolated virtualenv for the Python packages:
 > `python3 -m venv .venv && source .venv/bin/activate` before `make setup`.
@@ -58,6 +71,9 @@ make test        # pytest x2 + vitest
 make lint        # ruff (python, advisory) + eslint (frontend)
 make fmt         # ruff format + prettier
 make typecheck   # mypy (python, advisory) + tsc --noEmit
+make api         # run the FastAPI HTTP service (token + upload + config) locally
+make dev-live    # HTTP API + voice worker + frontend dev server together
+make verify-live # doctor READY/MISSING/MOCK table + curl /healthz & /config
 make build       # docker build backend + frontend images
 make index       # offline pipeline dry-run: parse → build-index (no keys)
 make clean       # remove caches / build artifacts
@@ -115,7 +131,10 @@ Full documentation lives in [`.env.example`](./.env.example). Summary:
 | `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` | backend         | Live voice only                    |
 | `UNSILOED_API_KEY`                                  | pipeline           | Real `parse` only (not `--dry-run`)|
 | `MINIMAX_API_KEY` / `AWS_*`                         | backend            | Optional LLM/TTS provider          |
-| `TOP_K`, `ALPHA`, `LOG_LEVEL`, `USE_MOCKS`          | backend            | Optional tuning                    |
+| `TOP_K`, `ALPHA`, `LOG_LEVEL`, `USE_MOCKS`          | backend            | Optional tuning (`USE_MOCKS=false` => real) |
+| `API_HOST`, `API_PORT`, `CORS_ORIGINS`              | backend (HTTP API) | Optional (local-dev defaults)      |
+| `TOKEN_TTL_SECONDS`, `MAX_UPLOAD_MB`, `LIVEKIT_DEFAULT_ROOM` | backend (HTTP API) | Optional (defaults set)    |
+| `VITE_API_URL`                                      | frontend (build)   | Optional (default `http://localhost:8000`) |
 | `VITE_LIVEKIT_URL`, `VITE_LIVEKIT_TOKEN`            | frontend (build)   | Live voice only                    |
 | `VITE_PDF_URL`                                      | frontend (build)   | Optional (PDF to render)           |
 | `VITE_MOCK_MODE`                                    | frontend (build)   | Optional (force mock)              |

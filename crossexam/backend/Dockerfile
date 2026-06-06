@@ -18,10 +18,13 @@ RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
 # Install dependencies first (cached unless project metadata changes), then the
-# package itself. Include the [voice] extra (Deepgram/OpenAI/Cartesia/Silero
-# plugins) so the container can run a real STT->LLM->TTS session, not just mocks.
-# Override with --build-arg INSTALL_EXTRAS="" for a smaller mock-only image.
-ARG INSTALL_EXTRAS="[voice]"
+# package itself. Include the [api,voice] extras so ONE image can run BOTH the
+# LiveKit voice worker (Deepgram/OpenAI/Cartesia/Silero plugins for a real
+# STT->LLM->TTS session) AND the FastAPI HTTP service (`crossexam-api`:
+# token minting via livekit-api + PDF upload via pdfplumber).
+# Override with --build-arg INSTALL_EXTRAS="[voice]" (worker-only) or
+# INSTALL_EXTRAS="" for a smaller mock-only image.
+ARG INSTALL_EXTRAS="[api,voice]"
 COPY pyproject.toml README.md ./
 COPY crossexam_backend ./crossexam_backend
 RUN pip install ".${INSTALL_EXTRAS}"

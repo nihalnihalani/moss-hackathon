@@ -21,13 +21,37 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     restart: unless-stopped
 
+  api:
+    # The FastAPI HTTP service the browser talks to: mints LiveKit tokens and
+    # ingests uploaded PDFs (token + /documents + /config + /healthz). Reuses the
+    # same backend image (built with the [api,voice] extras) but runs the
+    # `crossexam-api` entrypoint instead of the worker.
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: crossexam-backend:local
+    entrypoint: ["crossexam-api"]
+    command: []
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    ports:
+      - "8000:8000"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
       # VITE_* are compile-time; forward them so a `docker compose build` bakes
-      # the right config into the static bundle.
+      # the right config into the static bundle. VITE_API_URL points the SPA at
+      # the `api` service; default to the host-published port for local runs.
       args:
+        VITE_API_URL: ${VITE_API_URL:-http://localhost:8000}
         VITE_LIVEKIT_URL: ${VITE_LIVEKIT_URL:-}
         VITE_LIVEKIT_TOKEN: ${VITE_LIVEKIT_TOKEN:-}
         VITE_PDF_URL: ${VITE_PDF_URL:-}
@@ -36,5 +60,6 @@ services:
     ports:
       - "5173:80"
     depends_on:
+      - api
       - backend
     restart: unless-stopped

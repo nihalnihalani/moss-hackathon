@@ -27,9 +27,15 @@ INDEX_OUT    := $(PIPELINE)/build/index_records.json
 .DEFAULT_GOAL := help
 
 .PHONY: help setup setup-backend setup-pipeline setup-frontend \
-        dev test test-backend test-pipeline test-frontend \
+        dev dev-live api verify-live test test-backend test-pipeline test-frontend \
         lint lint-py lint-frontend fmt typecheck typecheck-py typecheck-frontend \
         build index clean
+
+# API host/port for local `make api` and the `verify-live` curls. Override on
+# the command line, e.g. `make verify-live API_PORT=9000`.
+API_HOST ?= 127.0.0.1
+API_PORT ?= 8000
+API_BASE := http://$(API_HOST):$(API_PORT)
 
 ## help: show this help
 help:
@@ -76,11 +82,32 @@ setup-frontend:
 # dev
 # =============================================================================
 ## dev: run backend worker + frontend dev server together (Ctrl-C stops both)
+## (for the full live stack incl. the HTTP API, use `make dev-live`)
 dev:
 	$(call need_py)
 	$(call need_npm)
 	@echo ">> starting backend worker + frontend dev server (mock mode unless .env set)"
+	@echo ">> (no HTTP API here — token/upload need it; use 'make dev-live' or 'make api')"
 	@trap 'kill 0' EXIT INT TERM; \
+	( $(PY) -m crossexam_backend.server dev & ) ; \
+	cd "$(FRONTEND)" && $(NPM) run dev
+
+## api: run the FastAPI HTTP service (crossexam-api) locally on $(API_BASE)
+## Needs the [api] extra:  pip install -e backend[api,voice]  (see KEYS.md).
+api:
+	$(call need_py)
+	@echo ">> starting crossexam-api on $(API_BASE) (mock mode unless .env set)"
+	cd "$(BACKEND)" && API_HOST=$(API_HOST) API_PORT=$(API_PORT) $(PY) -m crossexam_backend.api
+
+## dev-live: run HTTP API + voice worker + frontend dev server together (Ctrl-C stops all)
+## This is the full "drop in keys -> it's real" loop (token + upload + voice + UI).
+dev-live:
+	$(call need_py)
+	$(call need_npm)
+	@echo ">> starting HTTP API + voice worker + frontend dev server"
+	@echo ">> (mock mode unless .env provides Moss/LiveKit/provider keys)"
+	@trap 'kill 0' EXIT INT TERM; \
+	( cd "$(BACKEND)" && API_HOST=$(API_HOST) API_PORT=$(API_PORT) $(PY) -m crossexam_backend.api & ) ; \
 	( $(PY) -m crossexam_backend.server dev & ) ; \
 	cd "$(FRONTEND)" && $(NPM) run dev
 
@@ -141,6 +168,30 @@ typecheck-py:
 typecheck-frontend:
 	$(call need_npm)
 	cd "$(FRONTEND)" && $(NPM) run typecheck
+
+# =============================================================================
+# verify-live
+# =============================================================================
+## verify-live: preflight (doctor) + best-effort curl of /healthz and /config.
+## Prints the READY/MISSING/MOCK table, then probes the API at $(API_BASE).
+## If the server is not up, it prints guidance (start it with `make api`) and
+## still exits 0 — this target is a read-out, not a hard gate.
+verify-live:
+	$(call need_py)
+	@echo ">> crossexam-backend preflight (doctor — no network calls):"
+	@cd "$(BACKEND)" && $(PY) -m crossexam_backend.doctor || true
+	@echo ""
+	@echo ">> probing HTTP API at $(API_BASE) (best-effort):"
+	@if ! command -v curl >/dev/null 2>&1; then \
+		echo "   curl not found — skipping endpoint probe (install curl to enable)."; \
+	elif curl -fsS --max-time 3 "$(API_BASE)/healthz" >/dev/null 2>&1; then \
+		echo "   GET /healthz ->"; curl -fsS --max-time 3 "$(API_BASE)/healthz"; echo ""; \
+		echo "   GET /config  ->"; curl -fsS --max-time 3 "$(API_BASE)/config"; echo ""; \
+	else \
+		echo "   API not reachable at $(API_BASE)."; \
+		echo "   Start it with 'make api' (or 'make dev-live' / 'docker compose up'),"; \
+		echo "   then re-run 'make verify-live'. See KEYS.md for the key list."; \
+	fi
 
 # =============================================================================
 # build / index

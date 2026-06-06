@@ -153,6 +153,65 @@ def _check_provider(
     return Check(name, Status.MISSING, "; ".join(missing) + ".")
 
 
+def _check_api_service() -> Check:
+    """Check the FastAPI HTTP service deps (``crossexam-api``).
+
+    The service needs ``fastapi`` (+ ``uvicorn``/``python-multipart``) to serve
+    at all, plus ``pdfplumber`` for the PDF upload path — all from the ``[api]``
+    extra. This is independent of keys: it reports whether the service *can run*.
+    """
+    has_fastapi = _module_available("fastapi")
+    has_pdfplumber = _module_available("pdfplumber")
+    if has_fastapi and has_pdfplumber:
+        return Check(
+            "HTTP API (fastapi)",
+            Status.READY,
+            "fastapi + pdfplumber importable; `crossexam-api` can serve /config, "
+            "/healthz, /token and /documents.",
+        )
+    missing = []
+    if not has_fastapi:
+        missing.append("fastapi not installed")
+    if not has_pdfplumber:
+        missing.append("pdfplumber not installed (PDF upload path)")
+    return Check(
+        "HTTP API (fastapi)",
+        Status.MISSING,
+        "; ".join(missing) + " — pip install '.[api,voice]'.",
+    )
+
+
+def _check_token_minting(settings: Settings) -> Check:
+    """Check the ``POST /token`` leg: ``livekit-api`` import + LiveKit creds.
+
+    Token minting needs the ``livekit-api`` package (the ``[api]`` extra) AND the
+    LiveKit credentials. Without creds the endpoint returns a clear 503, so we
+    surface that as MISSING when the real path is requested. In mock mode (no
+    LiveKit creds and ``use_mocks`` resolved true) tokens are not needed, so the
+    row is MOCK rather than MISSING — the API still serves /config and /documents.
+    """
+    has_lib = _module_available("livekit.api")
+    has_creds = settings.has_livekit_credentials
+    if settings.use_mocks and not has_creds:
+        return Check(
+            "Token minting (/token)",
+            Status.MOCK,
+            "Mock mode: no LiveKit creds -> POST /token returns 503; frontend stays mock.",
+        )
+    if has_lib and has_creds:
+        return Check(
+            "Token minting (/token)",
+            Status.READY,
+            "livekit-api importable and LIVEKIT_URL/API_KEY/API_SECRET present.",
+        )
+    missing = []
+    if not has_lib:
+        missing.append("livekit-api not installed ([api] extra)")
+    if not has_creds:
+        missing.append("LiveKit credentials incomplete (POST /token -> 503)")
+    return Check("Token minting (/token)", Status.MISSING, "; ".join(missing) + ".")
+
+
 def _check_silero() -> Check:
     """Check the Silero VAD plugin (no key needed; downloads weights lazily)."""
     if not LIVEKIT_AVAILABLE:
@@ -172,6 +231,9 @@ def run_checks(settings: Settings) -> list[Check]:
     for leg, provider_attr, key_attr, plugin in _PROVIDERS:
         checks.append(_check_provider(settings, leg, provider_attr, key_attr, plugin))
     checks.append(_check_silero())
+    # HTTP API service readiness (deps + token-minting leg).
+    checks.append(_check_api_service())
+    checks.append(_check_token_minting(settings))
     return checks
 
 

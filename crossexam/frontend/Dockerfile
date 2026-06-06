@@ -15,6 +15,7 @@ RUN npm ci
 
 # Build the static site. VITE_* vars are baked in at build time; pass them with
 # `--build-arg` if you need a non-mock production bundle.
+ARG VITE_API_URL
 ARG VITE_LIVEKIT_URL
 ARG VITE_LIVEKIT_TOKEN
 ARG VITE_PDF_URL

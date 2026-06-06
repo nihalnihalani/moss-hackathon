@@ -19,6 +19,14 @@ possible" given that **no live sponsor API keys exist in this environment.**
   - Deterministic network-free fallback; typer CLI (`parse`, `build-index`) with `--dry-run`.
 - **Frontend** (React voice UI + PDF bbox snap) — 19 tests green, `tsc` clean, `vite build` clean, eslint clean.
   - Pure, unit-tested `lib/bbox.ts` (the demo-deciding transform); mock-mode runs the full 90s demo with no backend.
+  - **Live-by-default**: reads `VITE_API_URL` (default `http://localhost:8000`), fetches `/config`,
+    connects live when keys are present, and falls back to mock UI otherwise. Includes a PDF upload widget.
+- **HTTP API** (`crossexam-api`, FastAPI) — the browser-facing service the worker can't provide.
+  - `GET /healthz` + `GET /config` (readiness + public connection info, no secrets),
+    `POST /token` (real LiveKit join token; 503 if unconfigured), `POST /documents`
+    (PDF → parse → index; Moss upsert when keyed, else appends to the mock fixture).
+  - Ships in the `[api]` extra; the backend Docker image now installs `[api,voice]` so one
+    image runs both the worker and the API. Compose adds an `api` service on `:8000`.
 - **Contract** — bbox is **PDF points + page_width/page_height, top-left origin** end-to-end. A
   cross-subsystem test (`pipeline/tests/test_contract.py`) round-trips the backend fixture ↔ pipeline model.
 - **Infra** — Dockerfiles (backend + frontend), docker-compose (boots in mock mode without `.env`),
@@ -31,7 +39,9 @@ possible" given that **no live sponsor API keys exist in this environment.**
   text-layer parser; the 419-chunk fixture is regenerated from it (`make fixture`).
 - Moss + LiveKit provider surfaces **verified against docs and pinned**; recorded-response adapter
   tests lock the shape; Moss errors fail **loudly** when keys are present (no silent empty results).
-- `crossexam-doctor` preflight reports READY/MISSING/MOCK without network calls.
+- `crossexam-doctor` preflight reports READY/MISSING/MOCK without network calls — now ALSO
+  covers HTTP API readiness (fastapi/pdfplumber importable) and the `/token` minting leg
+  (livekit-api import + LiveKit creds). `make verify-live` runs it and probes `/healthz` + `/config`.
 - Frontend renders the real PDF (`VITE_PDF_URL`); a live-citation integration test covers the
   data-channel path; `mockData` coords match the fixture exactly.
 - **Live-mode ranking fixed** (admission → page 12) with a regression test.
@@ -54,6 +64,11 @@ cd crossexam
 make setup     # install backend + pipeline + frontend deps
 make test      # 67 tests, no keys needed
 make dev       # backend worker + frontend dev (mock mode if no keys)
+make dev-live  # HTTP API + worker + frontend (token + upload + voice)
+make verify-live  # doctor READY/MISSING/MOCK + curl /healthz & /config
 make index     # offline parse -> index dry-run
 ```
+To go fully real: fill `crossexam/.env` per **`KEYS.md`** (Moss + LiveKit + voice providers,
+`USE_MOCKS=false`), `pip install '.[api,voice]'`, then `make verify-live`.
+
 Demo walkthrough and architecture: see `README.md` and `../docs/`.
