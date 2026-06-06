@@ -17,8 +17,14 @@ import {
   DOC_DEPOSITION,
   DOC_EXHIBIT,
   DOC_FIELD_NOTES,
+  DOC_CONTRACT,
+  DOC_EMAIL,
   DOC_TITLES,
   DOC_URLS,
+  CONTRACT_CLAUSE_CITATION,
+  EMAIL_ADMISSION_CITATION,
+  CONTRACT_EMAIL_ANCHOR,
+  CONTRACT_EMAIL_HOPS,
 } from './mockData';
 
 describe('mock citations mirror the real fixture', () => {
@@ -97,5 +103,51 @@ describe('mock citations mirror the real fixture', () => {
     expect(DOC_TITLES[DOC_EXHIBIT]).toBe('Exhibit 14: Security Desk Visitor Log');
     expect(DOC_URLS[DOC_EXHIBIT]).toBe('/exhibit-visitor-log.pdf');
     expect(DOC_URLS[DOC_DEPOSITION]).toBe('/sample-deposition.pdf');
+  });
+});
+
+describe('KILLER FEATURE B — contract-vs-email cross-doc beat mirrors the fixture', () => {
+  it('CONTRACT_CLAUSE_CITATION mirrors fixture chunk contract-msa-p7-l1 (clause, p7)', () => {
+    expect(CONTRACT_CLAUSE_CITATION.id).toBe('contract-msa-p7-l1');
+    expect(CONTRACT_CLAUSE_CITATION.documentId).toBe(DOC_CONTRACT);
+    expect(CONTRACT_CLAUSE_CITATION.bbox.page).toBe(7);
+    expect(CONTRACT_CLAUSE_CITATION.bbox).toMatchObject({
+      page: 7, x0: 72, y0: 123.94, x1: 528, y1: 185.94, page_width: 612, page_height: 792,
+    });
+    expect(CONTRACT_CLAUSE_CITATION.text).toContain('Section 4.2 Subcontracting');
+    expect(CONTRACT_CLAUSE_CITATION.text).toContain('prior written consent');
+    expect(CONTRACT_CLAUSE_CITATION.text).toContain('material breach');
+    expect(CONTRACT_CLAUSE_CITATION.quads).toHaveLength(5);
+    expect(CONTRACT_CLAUSE_CITATION.scanned).toBeUndefined();
+  });
+
+  it('EMAIL_ADMISSION_CITATION mirrors fixture chunk email-thread-p1-l2 (admission, p1)', () => {
+    expect(EMAIL_ADMISSION_CITATION.id).toBe('email-thread-p1-l2');
+    expect(EMAIL_ADMISSION_CITATION.documentId).toBe(DOC_EMAIL);
+    expect(EMAIL_ADMISSION_CITATION.bbox.page).toBe(1);
+    expect(EMAIL_ADMISSION_CITATION.bbox).toMatchObject({
+      page: 1, x0: 72, y0: 163.94, x1: 534, y1: 225.94, page_width: 612, page_height: 792,
+    });
+    expect(EMAIL_ADMISSION_CITATION.text).toContain('Acme Labs');
+    expect(EMAIL_ADMISSION_CITATION.text).toContain('never got the formal sign-off');
+    expect(EMAIL_ADMISSION_CITATION.quads).toHaveLength(5);
+    expect(EMAIL_ADMISSION_CITATION.scanned).toBeUndefined();
+  });
+
+  it('the contract-vs-email conflict is cross-document with the §4.2 anchor', () => {
+    expect(CONTRACT_CLAUSE_CITATION.documentId).not.toBe(EMAIL_ADMISSION_CITATION.documentId);
+    expect(CONTRACT_EMAIL_ANCHOR).toBe('§4.2 Subcontracting');
+  });
+
+  it('hops anchor on the clause then the contradicting admission', () => {
+    expect(CONTRACT_EMAIL_HOPS).toHaveLength(2);
+    expect(CONTRACT_EMAIL_HOPS[0]?.citationIds).toEqual([CONTRACT_CLAUSE_CITATION.id]);
+    expect(CONTRACT_EMAIL_HOPS[1]?.citationIds).toEqual([EMAIL_ADMISSION_CITATION.id]);
+  });
+
+  it('maps the contract + email document ids to the served PDFs', () => {
+    expect(DOC_URLS[DOC_CONTRACT]).toBe('/contract-msa.pdf');
+    expect(DOC_URLS[DOC_EMAIL]).toBe('/email-thread.pdf');
+    expect(DOC_TITLES[DOC_CONTRACT]).toBe('Master Services Agreement');
   });
 });

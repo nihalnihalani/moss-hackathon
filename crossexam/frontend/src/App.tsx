@@ -21,7 +21,18 @@ import { ToggleSwitch } from './components/ToggleSwitch';
 import { Logo } from './components/Logo';
 import { useShortcuts } from './hooks/useShortcuts';
 import { Play, RotateCcw, Mic } from 'lucide-react';
-import { DOC_TITLES, DOC_URLS, DEMO_QUESTION, DEMO_CONTRADICTION_QUESTION } from './lib/mockData';
+import {
+  DOC_TITLES,
+  DOC_URLS,
+  DEMO_QUESTION,
+  DEMO_CONTRADICTION_QUESTION,
+  CONTRACT_EMAIL_QUESTION,
+  CONTRACT_EMAIL_ANCHOR,
+  CONTRACT_EMAIL_CONFLICT_NOTE,
+} from './lib/mockData';
+import { ExportMenu } from './components/ExportMenu';
+import { MemoSheet } from './components/MemoSheet';
+import { buildMemo } from './lib/memo';
 import type { UploadResponse } from './lib/api';
 import type { Citation, MemoryRef } from './types';
 
@@ -158,6 +169,29 @@ export function App(): JSX.Element {
 
   const targetPage = activeForDoc?.bbox.page ?? cx.targetPage;
 
+  // ---- KILLER FEATURE B: the cross-document breach. When the conflict spans two
+  // docs, the PRIMARY (amber) is the claim/clause under examination and the
+  // COUNTER (rose) is the other doc that proves the breach. We surface an anchor
+  // banner + a one-line note, and auto-flip to the counter doc to draw its box.
+  const conflictCounter: Citation | null = useMemo(() => {
+    if (!cx.contradiction || cx.citations.length < 2) return null;
+    const counter = cx.citations.find((c) => c.id !== cx.primaryId);
+    if (!counter) return null;
+    // Cross-doc only: a same-doc conflict needs no tab flip.
+    const primary = cx.citations.find((c) => c.id === cx.primaryId) ?? cx.citations[0];
+    if (primary && counter.documentId === primary.documentId) return null;
+    return counter;
+  }, [cx.contradiction, cx.citations, cx.primaryId]);
+
+  // One-line plain-English conflict note. Special-cased for the contract↔email
+  // anchor; otherwise a generic cross-source statement (verbatim quotes live in
+  // the banner chips + the canvas boxes, never paraphrased there).
+  const conflictNote = useMemo(() => {
+    if (!cx.contradiction || cx.citations.length < 2) return null;
+    if (cx.anchor === CONTRACT_EMAIL_ANCHOR) return CONTRACT_EMAIL_CONFLICT_NOTE;
+    return null;
+  }, [cx.contradiction, cx.citations.length, cx.anchor]);
+
   const searching = cx.agentState === 'thinking';
   const hasResult = cx.activeCitation !== null;
   const resolving = session.status === 'resolving';
@@ -170,6 +204,26 @@ export function App(): JSX.Element {
     setManualDocId(citation.documentId);
     setRefocus((n) => n + 1);
   }, []);
+
+  // Auto tab-switch: on a NEW anchored cross-doc breach, hold on the primary
+  // briefly (let its box snap), then flip to the counter doc and draw its box —
+  // visually proving the breach. Fires once per contradiction signal; the user
+  // can still flip back via the doc tabs or the banner chips.
+  const lastBreachKey = useRef<string | null>(null);
+  useEffect(() => {
+    if (!cx.anchor || !conflictCounter) {
+      if (!cx.contradiction) lastBreachKey.current = null;
+      return;
+    }
+    const key = `${cx.anchor}|${cx.primaryId ?? ''}|${conflictCounter.id}`;
+    if (lastBreachKey.current === key) return;
+    lastBreachKey.current = key;
+    const t = setTimeout(() => {
+      setManualDocId(conflictCounter.documentId);
+      setRefocus((n) => n + 1);
+    }, 1500);
+    return () => clearTimeout(t);
+  }, [cx.anchor, cx.primaryId, cx.contradiction, conflictCounter]);
 
   // Flip to a conflicting citation from the contradiction banner.
   const onSelectConflict = useCallback((citation: Citation): void => {
@@ -248,8 +302,25 @@ export function App(): JSX.Element {
 
   // Suggested prompts in the palette: the canonical demo questions in mock.
   const paletteSuggestions = useMemo(
-    () => (cx.isMock ? [DEMO_QUESTION, DEMO_CONTRADICTION_QUESTION] : []),
+    () => (cx.isMock ? [DEMO_QUESTION, DEMO_CONTRADICTION_QUESTION, CONTRACT_EMAIL_QUESTION] : []),
     [cx.isMock],
+  );
+
+  // ---- KILLER FEATURE A: build the legal memo from the live session state. The
+  // model is deterministic + pure; the ExportMenu turns it into Markdown or a
+  // print-to-PDF via the hidden MemoSheet below.
+  const memo = useMemo(
+    () =>
+      buildMemo({
+        question: cx.question,
+        caption: cx.caption,
+        citations: cx.citations,
+        primaryId: cx.primaryId,
+        contradiction: cx.contradiction,
+        anchor: cx.anchor,
+        hops: cx.hops,
+      }),
+    [cx.question, cx.caption, cx.citations, cx.primaryId, cx.contradiction, cx.anchor, cx.hops],
   );
 
   const modeLabel = resolving
@@ -287,6 +358,7 @@ export function App(): JSX.Element {
 
         <div className="cmdbar__controls">
           <DocumentUpload onUploaded={onUploaded} disabled={resolving} />
+          <ExportMenu memo={memo} />
           <ToggleSwitch
             label="Force mock"
             checked={forceMock}
@@ -347,6 +419,9 @@ export function App(): JSX.Element {
             hops={cx.hops}
             activeId={activeForDoc?.id ?? null}
             onSelect={onSelectConflict}
+            primaryId={cx.primaryId}
+            anchor={cx.anchor}
+            conflictNote={conflictNote}
           />
         </section>
 
@@ -378,6 +453,7 @@ export function App(): JSX.Element {
                 onClearCitation={onClearCitation}
                 refocusSignal={refocus}
                 proactive={cx.proactive && activeForDoc?.id === cx.activeCitation?.id}
+                counterId={conflictCounter?.id ?? null}
               />
             </>
           ) : (
@@ -394,6 +470,10 @@ export function App(): JSX.Element {
         suggestions={paletteSuggestions}
       />
       <ShortcutsCheatSheet open={helpOpen} onClose={() => setHelpOpen(false)} isMac={isMac} />
+
+      {/* Killer feature A: the print-only memo sheet. Hidden on screen; isolated
+          and laid out for Letter paper under @media print (window.print()). */}
+      <MemoSheet memo={memo} />
     </div>
   );
 }

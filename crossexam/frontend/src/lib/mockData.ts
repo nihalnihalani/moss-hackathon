@@ -39,12 +39,17 @@ export const DEMO_TOTAL_PAGES = 912;
 export const DOC_DEPOSITION = 'deposition-holloway';
 export const DOC_EXHIBIT = 'exhibit-visitor-log';
 export const DOC_FIELD_NOTES = 'exhibit-field-notes';
+/** KILLER FEATURE B: the contract-vs-email cross-doc pair. */
+export const DOC_CONTRACT = 'contract-msa';
+export const DOC_EMAIL = 'email-thread';
 
 /** Titles mirror the fixture's `documentTitle` for each chunk's documentId. */
 export const DOC_TITLES: Readonly<Record<string, string>> = {
   [DOC_DEPOSITION]: 'Deposition of Raymond T. Holloway',
   [DOC_EXHIBIT]: 'Exhibit 14: Security Desk Visitor Log',
   [DOC_FIELD_NOTES]: 'Exhibit 22: Handwritten Field Notes (scanned)',
+  [DOC_CONTRACT]: 'Master Services Agreement',
+  [DOC_EMAIL]: 'Email Thread — Contractor Correspondence',
 };
 
 /**
@@ -56,6 +61,8 @@ export const DOC_TITLES: Readonly<Record<string, string>> = {
 export const DOC_URLS: Readonly<Record<string, string>> = {
   [DOC_DEPOSITION]: '/sample-deposition.pdf',
   [DOC_EXHIBIT]: '/exhibit-visitor-log.pdf',
+  [DOC_CONTRACT]: '/contract-msa.pdf',
+  [DOC_EMAIL]: '/email-thread.pdf',
 };
 
 /**
@@ -346,6 +353,109 @@ export const NOT_FOUND_CLAIM =
 /** Caption shown alongside the honest-silence (not_found) beat. */
 export const NOT_FOUND_TRANSCRIPT =
   'I could not find that in the document, so I am staying silent rather than guess.';
+
+/* ============================================================================
+ * KILLER FEATURE B — CONTRACT vs EMAIL cross-document breach.
+ *
+ * The §4.2 Subcontracting beat: the contract clause (PRIMARY, contract-msa p.7)
+ * forbids subcontracting without prior written consent; the email (COUNTER,
+ * email-thread p.1) admits handing the work to Acme Labs with no sign-off. Both
+ * citations MIRROR fixture chunks `contract-msa-p7-l1` and `email-thread-p1-l2`
+ * EXACTLY (id/text/page/bbox/quads), so mock == live snaps onto real glyphs.
+ * ========================================================================== */
+
+/** §4.2 clause, contract page 7. Mirrors fixture chunk `contract-msa-p7-l1`. */
+const contractSubcontractQuads: BBox[] = [
+  { page: 7, x0: 72.0, y0: 123.94, x1: 486.0, y1: 133.94, page_width: DEMO_PAGE_WIDTH_PT, page_height: DEMO_PAGE_HEIGHT_PT },
+  { page: 7, x0: 72.0, y0: 136.94, x1: 504.0, y1: 146.94, page_width: DEMO_PAGE_WIDTH_PT, page_height: DEMO_PAGE_HEIGHT_PT },
+  { page: 7, x0: 72.0, y0: 149.94, x1: 528.0, y1: 159.94, page_width: DEMO_PAGE_WIDTH_PT, page_height: DEMO_PAGE_HEIGHT_PT },
+  { page: 7, x0: 72.0, y0: 162.94, x1: 504.0, y1: 172.94, page_width: DEMO_PAGE_WIDTH_PT, page_height: DEMO_PAGE_HEIGHT_PT },
+  { page: 7, x0: 72.0, y0: 175.94, x1: 132.0, y1: 185.94, page_width: DEMO_PAGE_WIDTH_PT, page_height: DEMO_PAGE_HEIGHT_PT },
+];
+
+/**
+ * The PRIMARY citation for the contract-vs-email beat — the §4.2 clause that the
+ * email breaches. Mirrors fixture chunk `contract-msa-p7-l1`.
+ */
+export const CONTRACT_CLAUSE_CITATION: Citation = {
+  id: 'contract-msa-p7-l1',
+  text:
+    'Section 4.2 Subcontracting. Contractor shall not delegate, assign, or ' +
+    'subcontract any of the Services, in whole or in part, to any third party ' +
+    'without the prior written consent of Client. Any purported subcontracting in ' +
+    'violation of this Section 4.2 shall constitute a material breach of this Agreement.',
+  bbox: { page: 7, x0: 72.0, y0: 123.94, x1: 528.0, y1: 185.94, page_width: DEMO_PAGE_WIDTH_PT, page_height: DEMO_PAGE_HEIGHT_PT },
+  quads: contractSubcontractQuads,
+  confidence: 0.9431,
+  score: 0.92,
+  latencyMs: 8,
+  pagesSearched: DEMO_TOTAL_PAGES,
+  faithfulness: { supported: true, score: 0.98, method: 'nli' },
+  documentId: DOC_CONTRACT,
+  documentTitle: DOC_TITLES[DOC_CONTRACT],
+};
+
+/** Acme admission, email page 1. Mirrors fixture chunk `email-thread-p1-l2`. */
+const emailAdmissionQuads: BBox[] = [
+  { page: 1, x0: 72.0, y0: 163.94, x1: 522.0, y1: 173.94, page_width: DEMO_PAGE_WIDTH_PT, page_height: DEMO_PAGE_HEIGHT_PT },
+  { page: 1, x0: 72.0, y0: 176.94, x1: 534.0, y1: 186.94, page_width: DEMO_PAGE_WIDTH_PT, page_height: DEMO_PAGE_HEIGHT_PT },
+  { page: 1, x0: 72.0, y0: 189.94, x1: 516.0, y1: 199.94, page_width: DEMO_PAGE_WIDTH_PT, page_height: DEMO_PAGE_HEIGHT_PT },
+  { page: 1, x0: 72.0, y0: 202.94, x1: 528.0, y1: 212.94, page_width: DEMO_PAGE_WIDTH_PT, page_height: DEMO_PAGE_HEIGHT_PT },
+  { page: 1, x0: 72.0, y0: 215.94, x1: 168.0, y1: 225.94, page_width: DEMO_PAGE_WIDTH_PT, page_height: DEMO_PAGE_HEIGHT_PT },
+];
+
+/**
+ * The COUNTER citation — the email admission that breaches §4.2. This is the
+ * cross-document conflict; the email is born-digital (NOT scanned). Mirrors
+ * fixture chunk `email-thread-p1-l2`.
+ */
+export const EMAIL_ADMISSION_CITATION: Citation = {
+  id: 'email-thread-p1-l2',
+  text:
+    'From: Dana Vance Subject: Re: Section 4.2 / Acme work order -- Just to keep ' +
+    'you in the loop, we already handed the integration work off to Acme Labs last ' +
+    'week so we could hit the deadline. I know we never got the formal sign-off from ' +
+    "your side, but it was faster to just get them started. They're fully up and running now.",
+  bbox: { page: 1, x0: 72.0, y0: 163.94, x1: 534.0, y1: 225.94, page_width: DEMO_PAGE_WIDTH_PT, page_height: DEMO_PAGE_HEIGHT_PT },
+  quads: emailAdmissionQuads,
+  confidence: 0.9465,
+  score: 0.9,
+  latencyMs: 6,
+  pagesSearched: DEMO_TOTAL_PAGES,
+  faithfulness: { supported: true, score: 0.97, method: 'nli' },
+  documentId: DOC_EMAIL,
+  documentTitle: DOC_TITLES[DOC_EMAIL],
+};
+
+/** The shared anchor naming the conflicting clause (drives the anchor banner). */
+export const CONTRACT_EMAIL_ANCHOR = '§4.2 Subcontracting';
+
+/** One-line plain-English statement of the breach (counsel-readable). */
+export const CONTRACT_EMAIL_CONFLICT_NOTE =
+  'The contract forbids subcontracting without prior written consent (a material ' +
+  'breach), yet the email admits work was handed to Acme Labs with no sign-off.';
+
+/** The user question that surfaces the contract-vs-email cross-doc breach. */
+export const CONTRACT_EMAIL_QUESTION =
+  'Does the email contradict the subcontracting clause in the contract?';
+
+/** The caption the agent speaks when it surfaces the breach. */
+export const CONTRACT_EMAIL_TRANSCRIPT =
+  'Yes — Section 4.2 of the contract forbids subcontracting without prior written ' +
+  'consent, but the email admits the integration work was handed to Acme Labs with ' +
+  'no sign-off. That is a cross-document breach.';
+
+/**
+ * Hops for the contract-vs-email beat: the clause under examination, then the
+ * contradicting admission. Anchored on the shared §4.2 subject.
+ */
+export const CONTRACT_EMAIL_HOPS: HopTrace[] = [
+  { subQuery: 'subcontracting clause §4.2', citationIds: [CONTRACT_CLAUSE_CITATION.id] },
+  {
+    subQuery: 'evidence that contradicts subcontracting clause §4.2',
+    citationIds: [EMAIL_ADMISSION_CITATION.id],
+  },
+];
 
 /** Ordered list of demo citations for any UI that wants to step through them. */
 export const DEMO_CITATIONS: readonly Citation[] = [

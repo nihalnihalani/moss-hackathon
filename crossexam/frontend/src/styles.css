@@ -23,6 +23,12 @@
   --amber-soft:  rgba(255, 176, 32, 0.16);
   --amber-glow:  rgba(255, 176, 32, 0.55);
 
+  /* COUNTER accent — Conflict Rose. Rationed to the cross-doc counter passage
+     so a contradiction reads as two distinct sides across a room. */
+  --rose:        #ff5d73;
+  --rose-soft:   rgba(255, 93, 115, 0.16);
+  --rose-glow:   rgba(255, 93, 115, 0.55);
+
   /* Audio-state hues (state legibility, not decoration) */
   --state-listen: #63b3ed; /* cool blue  */
   --state-think:  #ffb020; /* amber      */
@@ -1884,4 +1890,196 @@ body {
   .jump-latest { animation: none !important; transition: none !important; }
   .empty-dropzone__panel[data-drag='active'],
   .empty-dropzone__panel[data-drag='accept'] { transform: none; }
+}
+
+/* ============================================================================
+ * KILLER FEATURE B — CROSS-DOC BREACH: counter (rose) treatments + anchor banner
+ * ========================================================================== */
+/* The COUNTER passage box/quads render rose so the two sides read apart. */
+.bbox-highlight--counter {
+  box-shadow: 0 0 0 1px var(--rose-soft), 0 0 18px var(--rose-soft);
+}
+.bbox-highlight--counter .bbox-highlight__tick { background: var(--rose); box-shadow: 0 0 8px var(--rose-glow); }
+.bbox-highlight--counter .bbox-highlight__label {
+  background: var(--rose);
+  box-shadow: 0 4px 14px var(--rose-soft);
+}
+.bbox-quad--counter {
+  background: var(--rose-soft);
+  border-color: rgba(255, 93, 115, 0.55);
+}
+
+/* Anchor banner inside the contradiction card. */
+.contradiction__anchor {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-start;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--amber);
+  background: var(--amber-soft);
+  border: 1px solid rgba(255, 176, 32, 0.34);
+  border-radius: var(--r-sm);
+  padding: 4px 9px;
+}
+.contradiction__anchor-mark { display: inline-flex; color: var(--amber); filter: drop-shadow(0 0 5px var(--amber-glow)); }
+.contradiction__anchor-label { color: var(--text-dim); }
+.contradiction__anchor-value { color: var(--amber); font-weight: 600; }
+
+.contradiction__note {
+  margin: 0;
+  font-family: var(--font-serif);
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-dim);
+}
+
+/* Role label on the conflicting chips; counter chip = rose. */
+.contradiction__chip-role {
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-mute);
+  padding-right: 4px;
+  border-right: 1px solid var(--hairline);
+}
+.contradiction__chip--counter { border-color: rgba(255, 93, 115, 0.4); }
+.contradiction__chip--counter .contradiction__chip-role { color: var(--rose); }
+.contradiction__chip--counter:hover { color: var(--rose); }
+.contradiction__chip--counter.contradiction__chip--active {
+  color: var(--rose);
+  background: var(--rose-soft);
+  border-color: rgba(255, 93, 115, 0.5);
+}
+.contradiction__chip--counter.contradiction__chip--active .contradiction__chip-page {
+  color: var(--rose);
+  border-color: rgba(255, 93, 115, 0.3);
+}
+
+/* ============================================================================
+ * KILLER FEATURE A — EXPORT MENU (command bar)
+ * ========================================================================== */
+.export-menu { position: relative; display: inline-flex; }
+.export-menu__list {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 60;
+  min-width: 210px;
+  display: flex;
+  flex-direction: column;
+  padding: 6px;
+  background: var(--surface-2);
+  border: 1px solid var(--hairline-st);
+  border-radius: var(--r-md);
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.55);
+  animation: chip-pop var(--dur-fast) var(--ease-emph) both;
+}
+.export-menu__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  color: var(--text-dim);
+  background: transparent;
+  border: none;
+  border-radius: var(--r-sm);
+  padding: 9px 10px;
+  cursor: pointer;
+  text-align: left;
+  transition: background var(--dur-fast) var(--ease-emph), color var(--dur-fast) var(--ease-emph);
+}
+.export-menu__item:hover { background: var(--surface-3); color: var(--text); }
+.export-menu__item svg { color: var(--amber); flex: 0 0 auto; }
+
+/* ============================================================================
+ * KILLER FEATURE A — MEMO SHEET (print-only legal memorandum)
+ * Hidden on screen; the ONLY visible content under @media print.
+ * ========================================================================== */
+.memo-sheet { display: none; }
+
+@media print {
+  @page { size: Letter; margin: 1in; }
+
+  /* Isolate the memo: hide the live app, show only the sheet, force light ink. */
+  body { overflow: visible; background: #ffffff; }
+  .app > *:not(.memo-sheet) { display: none !important; }
+  .atmosphere { display: none !important; }
+
+  .memo-sheet {
+    display: block;
+    position: static;
+    color: #111111;
+    background: #ffffff;
+    font-family: 'Newsreader', Georgia, serif;
+    font-size: 11pt;
+    line-height: 1.5;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  .memo-sheet__heading { text-align: center; margin-bottom: 24pt; }
+  .memo-sheet__title {
+    font-family: 'Fraunces', Georgia, serif;
+    font-size: 15pt;
+    margin: 0 0 6pt;
+    letter-spacing: 0.01em;
+  }
+  .memo-sheet__caption { margin: 0; font-size: 10pt; letter-spacing: 0.06em; text-transform: uppercase; }
+  .memo-sheet__re { margin: 6pt 0 0; font-weight: 600; }
+
+  .memo-section { margin: 0 0 16pt; }
+  .memo-section__title {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11pt;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    border-bottom: 1px solid #999999;
+    padding-bottom: 3pt;
+    margin: 0 0 8pt;
+    break-after: avoid;
+  }
+  .memo-section p { margin: 0 0 8pt; }
+  .memo-empty { font-style: italic; color: #555555; }
+
+  .memo-finding,
+  .memo-conflict,
+  .memo-appendix-item,
+  .memo-cite { break-inside: avoid; }
+
+  .memo-finding { margin: 0 0 12pt; }
+  .memo-finding__title,
+  .memo-conflict__title { font-size: 11pt; font-weight: 700; margin: 0 0 4pt; }
+
+  .memo-cite__head,
+  .memo-appendix-item__head,
+  .memo-conflict__label {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 9.5pt;
+    font-weight: 600;
+    margin: 0 0 3pt;
+  }
+  .memo-cite__grounded { font-weight: 400; color: #555555; }
+
+  .memo-cite__quote,
+  blockquote.memo-cite__quote {
+    margin: 0 0 8pt;
+    padding: 4pt 0 4pt 12pt;
+    border-left: 2px solid #444444;
+    font-style: italic;
+    break-inside: avoid;
+  }
+
+  .memo-conflict { margin: 0 0 14pt; }
+  .memo-conflict__nature { font-weight: 600; }
+  .memo-conflict__side { margin: 0 0 6pt; }
+
+  .memo-appendix-item { margin: 0 0 10pt; }
+  .memo-section--appendix { break-before: page; }
 }

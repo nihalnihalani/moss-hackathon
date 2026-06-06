@@ -170,6 +170,12 @@ export interface Frame {
   primaryId?: string;
   /** The citations conflict (cross-page/cross-doc). */
   contradiction?: boolean;
+  /**
+   * NEW (killer feature B): the shared ANCHOR the conflicting citations hang off
+   * — a clause number, term, or subject (e.g. "§4.2 Subcontracting"). Drives the
+   * "CONFLICT — Anchor: …" banner. Optional; absent for a plain contradiction.
+   */
+  anchor?: string;
   /** The agentic decomposition trail. */
   hops?: HopTrace[];
   /** Recalls referenced this turn. */

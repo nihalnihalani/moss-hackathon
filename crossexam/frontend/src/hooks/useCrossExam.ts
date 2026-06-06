@@ -24,12 +24,18 @@ import type {
 import {
   ANSWER_CITATION,
   ANSWER_TRANSCRIPT,
+  CONTRACT_CLAUSE_CITATION,
+  CONTRACT_EMAIL_ANCHOR,
+  CONTRACT_EMAIL_HOPS,
+  CONTRACT_EMAIL_QUESTION,
+  CONTRACT_EMAIL_TRANSCRIPT,
   CONTRADICTION_CITATION,
   CONTRADICTION_HOPS,
   CONTRADICTION_TRANSCRIPT,
   DEMO_CONTRADICTION_QUESTION,
   DEMO_QUESTION,
   DEMO_TOTAL_PAGES,
+  EMAIL_ADMISSION_CITATION,
   MEMORY_RECALL,
   MEMORY_TRANSCRIPT,
   NOT_FOUND_CLAIM,
@@ -68,6 +74,11 @@ export interface CrossExamState {
   primaryId: string | null;
   /** The surfaced citations conflict (cross-page/cross-doc). */
   contradiction: boolean;
+  /**
+   * The shared ANCHOR the conflicting citations hang off (e.g. "§4.2
+   * Subcontracting"), or null. Drives the "CONFLICT — Anchor: …" banner.
+   */
+  anchor: string | null;
   /** The agentic decomposition trail for "how I found this". */
   hops: HopTrace[];
   /** Memory recalls referenced this turn (render recall chips, no re-snap). */
@@ -133,6 +144,8 @@ interface MutableSnapshot {
   citations: Citation[];
   primaryId: string | null;
   contradiction: boolean;
+  /** Shared anchor for the conflict, or null. */
+  anchor: string | null;
   hops: HopTrace[];
   memory: MemoryRef[];
   speaker: Speaker | null;
@@ -156,6 +169,7 @@ const MOCK_SCRIPT: ScriptStep[] = [
       s.proactive = false;
       s.silenceReason = null;
       s.contradiction = false;
+      s.anchor = null;
       s.hops = [];
       s.memory = [];
       s.speaker = SPEAKER_COUNSEL;
@@ -293,6 +307,59 @@ const MOCK_SCRIPT: ScriptStep[] = [
       s.agentState = 'idle';
     },
   },
+  // ---- KILLER FEATURE B — CONTRACT vs EMAIL cross-document breach. A new
+  // question surfaces the §4.2 clause (PRIMARY, contract p.7) and the email
+  // admission (COUNTER, email p.1) with a shared anchor — the cross-doc breach.
+  {
+    at: 30000,
+    apply: (s) => {
+      s.agentState = 'listening';
+      s.question = CONTRACT_EMAIL_QUESTION;
+      s.caption = '';
+      s.activeCitation = null;
+      s.citations = [];
+      s.primaryId = null;
+      s.contradiction = false;
+      s.anchor = null;
+      s.hops = [];
+      s.memory = [];
+      s.proactive = false;
+      s.silenceReason = null;
+      s.speaker = SPEAKER_COUNSEL;
+    },
+  },
+  {
+    at: 31200,
+    apply: (s) => {
+      s.agentState = 'thinking';
+      s.targetPage = CONTRACT_CLAUSE_CITATION.bbox.page; // jump to the clause
+    },
+  },
+  {
+    at: 32800,
+    apply: (s) => {
+      // THE BREACH: primary is the contract clause; the email admission is the
+      // cross-document counter. Both carried, contradiction + anchor set so the
+      // UI can flip to the counter doc and prove the breach.
+      s.agentState = 'speaking';
+      s.activeCitation = CONTRACT_CLAUSE_CITATION;
+      s.citations = [CONTRACT_CLAUSE_CITATION, EMAIL_ADMISSION_CITATION];
+      s.primaryId = CONTRACT_CLAUSE_CITATION.id;
+      s.caption = CONTRACT_EMAIL_TRANSCRIPT;
+      s.contradiction = true;
+      s.anchor = CONTRACT_EMAIL_ANCHOR;
+      s.hops = CONTRACT_EMAIL_HOPS;
+      s.targetPage = CONTRACT_CLAUSE_CITATION.bbox.page;
+      s.proactive = false;
+      s.lastLatencyMs = EMAIL_ADMISSION_CITATION.latencyMs;
+    },
+  },
+  {
+    at: 37000,
+    apply: (s) => {
+      s.agentState = 'idle';
+    },
+  },
 ];
 
 const IDLE_SNAPSHOT: MutableSnapshot = {
@@ -303,6 +370,7 @@ const IDLE_SNAPSHOT: MutableSnapshot = {
   citations: [],
   primaryId: null,
   contradiction: false,
+  anchor: null,
   hops: [],
   memory: [],
   speaker: null,
@@ -495,6 +563,7 @@ export function useCrossExam(config: CrossExamConfig): CrossExamState {
     citations: snap.citations,
     primaryId: snap.primaryId,
     contradiction: snap.contradiction,
+    anchor: snap.anchor,
     hops: snap.hops,
     memory: snap.memory,
     speaker: snap.speaker,
@@ -538,6 +607,7 @@ function handleLivePayload(
   const latencyMs = typeof msg.latencyMs === 'number' ? msg.latencyMs : undefined;
   const proactive = msg.proactive === true;
   const contradiction = msg.contradiction === true;
+  const anchor = typeof msg.anchor === 'string' ? msg.anchor : null;
   const speaker = isSpeaker(msg.speaker) ? msg.speaker : null;
   const hops = parseHops(msg.hops);
   const memory = parseMemory(msg.memory);
@@ -583,6 +653,7 @@ function handleLivePayload(
         targetPage: primary.bbox.page,
         primaryId: primary.id,
         contradiction,
+        anchor: contradiction ? anchor : null,
         hops: hops ?? prev.hops,
         memory: memory ?? [],
         speaker: speaker ?? prev.speaker,
@@ -617,6 +688,7 @@ function handleLivePayload(
       activeCitation: null,
       primaryId: null,
       contradiction: false,
+      anchor: null,
       hops: [],
       memory: [],
       proactive: false,

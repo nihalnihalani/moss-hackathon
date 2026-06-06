@@ -32,6 +32,12 @@ export interface PdfCanvasProps {
    * box (distinct ring class + an "● SURFACED AUTOMATICALLY" tag on the label).
    */
   proactive?: boolean;
+  /**
+   * KILLER FEATURE B: the id of the COUNTER citation in a cross-doc contradiction.
+   * When the focused citation IS the counter, its box + quads render in rose
+   * (instead of amber) so the breach reads as two distinct sides.
+   */
+  counterId?: string | null;
 }
 
 /** Minimal pdf.js typings we rely on (kept local to avoid a hard import dependency). */
@@ -76,6 +82,7 @@ export function PdfCanvas({
   onClearCitation,
   refocusSignal,
   proactive = false,
+  counterId = null,
 }: PdfCanvasProps): JSX.Element {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -264,6 +271,8 @@ export function PdfCanvas({
   );
 
   const primaryScanned = citation?.scanned === true && citation.bbox.page === page;
+  // The focused citation is the COUNTER side of a cross-doc breach -> render rose.
+  const isCounter = counterId != null && citation?.id === counterId;
 
   return (
     <div className="pdf-canvas" ref={containerRef}>
@@ -335,8 +344,11 @@ export function PdfCanvas({
           <div
             key={citation?.id}
             ref={boxRef}
-            className={`bbox-highlight${proactive ? ' bbox-highlight--ambient' : ''}`}
+            className={`bbox-highlight${proactive ? ' bbox-highlight--ambient' : ''}${
+              isCounter ? ' bbox-highlight--counter' : ''
+            }`}
             data-testid="bbox-highlight"
+            data-counter={isCounter ? 'true' : undefined}
             data-proactive={proactive ? 'true' : undefined}
             style={{
               left: `${overlayRect.left}px`,
@@ -373,7 +385,7 @@ export function PdfCanvas({
         {primaryQuadRects.map((rect, i) => (
           <div
             key={`quad-${citation?.id}-${i}`}
-            className="bbox-quad"
+            className={`bbox-quad${isCounter ? ' bbox-quad--counter' : ''}`}
             data-testid="bbox-quad"
             aria-hidden="true"
             style={{
