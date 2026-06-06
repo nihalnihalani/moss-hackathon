@@ -113,9 +113,9 @@ lint: lint-py lint-frontend
 
 lint-py:
 	$(call need_py)
-	@echo ">> ruff (advisory: newer ruff may flag version-drift style on unchanged source)"
-	-cd "$(BACKEND)"  && $(PY) -m ruff check crossexam_backend
-	-cd "$(PIPELINE)" && $(PY) -m ruff check crossexam_pipeline
+	@echo ">> ruff (strict; pinned ruff==0.15.0)"
+	cd "$(BACKEND)"  && $(PY) -m ruff check crossexam_backend
+	cd "$(PIPELINE)" && $(PY) -m ruff check crossexam_pipeline
 
 lint-frontend:
 	$(call need_npm)
@@ -134,9 +134,9 @@ typecheck: typecheck-py typecheck-frontend
 
 typecheck-py:
 	$(call need_py)
-	@echo ">> mypy (advisory: newer livekit-agents/mypy may flag version-drift on unchanged source)"
-	-cd "$(BACKEND)"  && $(PY) -m mypy crossexam_backend
-	-cd "$(PIPELINE)" && $(PY) -m mypy crossexam_pipeline
+	@echo ">> mypy (strict; pinned mypy==1.19.1)"
+	cd "$(BACKEND)"  && $(PY) -m mypy crossexam_backend
+	cd "$(PIPELINE)" && $(PY) -m mypy crossexam_pipeline
 
 typecheck-frontend:
 	$(call need_npm)
