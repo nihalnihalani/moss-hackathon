@@ -394,10 +394,10 @@ _VISITOR_LOG_LINES: tuple[tuple[int, float, str], ...] = (
         2,
         660.0,
         (
-            "Visitor log entry: Raymond T. Holloway signed in at the downtown "
-            "security desk at 9:40 p.m. on the night of the 14th and signed out "
-            "at 11:20 p.m., having attended the quarterly budget meeting on the "
-            "ninth floor."
+            "Visitor log entry: R. Holloway signed the downtown security desk "
+            "visitor log at 9:40 p.m. on the 14th -- two miles from the Harbor "
+            "Street warehouse -- and signed out at 11:20 p.m., having attended "
+            "the quarterly budget meeting on the ninth floor."
         ),
     ),
     (
@@ -535,8 +535,8 @@ def make_scanned_pdf(path: Path, pages: int = 2) -> Path:
     c.setTitle("Scanned handwritten field notes (synthetic, image-only)")
     scanned_lines = (
         "FIELD NOTES (scanned, handwritten)",
-        "Observed delivery truck at the loading dock near midnight.",
-        "Lighting was poor; could not read the license plate clearly.",
+        "On the night of the 14th: saw R. Holloway downtown around 9:30 p.m.",
+        "He was NOT at the Harbor Street warehouse when I drove past at 10 p.m.",
         "Will follow up with the night supervisor in the morning.",
     )
     for _ in range(max(1, pages)):

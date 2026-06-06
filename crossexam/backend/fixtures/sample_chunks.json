@@ -38,7 +38,7 @@
       "y0": 164.0,
       "y1": 192.0
     },
-    "confidence": 0.6647,
+    "confidence": 0.7037,
     "documentId": "exhibit-field-notes",
     "documentTitle": "Exhibit 22: Handwritten Field Notes (scanned)",
     "id": "exhibit-field-notes-p1-l1",
@@ -55,7 +55,7 @@
       }
     ],
     "scanned": true,
-    "text": "Observed delivery truck at the loading dock near midnight."
+    "text": "On the night of the 14th: saw R. Holloway downtown around 9:30 p.m."
   },
   {
     "bbox": {
@@ -67,7 +67,7 @@
       "y0": 208.0,
       "y1": 236.0
     },
-    "confidence": 0.7204,
+    "confidence": 0.7036,
     "documentId": "exhibit-field-notes",
     "documentTitle": "Exhibit 22: Handwritten Field Notes (scanned)",
     "id": "exhibit-field-notes-p1-l2",
@@ -84,7 +84,7 @@
       }
     ],
     "scanned": true,
-    "text": "Lighting was poor; could not read the license plate clearly."
+    "text": "He was NOT at the Harbor Street warehouse when I drove past at 10 p.m."
   },
   {
     "bbox": {
@@ -605,11 +605,11 @@
       "page_height": 792.0,
       "page_width": 612.0,
       "x0": 72.0,
-      "x1": 540.0,
+      "x1": 534.0,
       "y0": 123.94,
-      "y1": 159.94
+      "y1": 172.94
     },
-    "confidence": 0.9425,
+    "confidence": 0.943,
     "documentId": "exhibit-visitor-log",
     "documentTitle": "Exhibit 14: Security Desk Visitor Log",
     "id": "exhibit-visitor-log-p2-l1",
@@ -620,7 +620,7 @@
         "page_height": 792.0,
         "page_width": 612.0,
         "x0": 72.0,
-        "x1": 540.0,
+        "x1": 528.0,
         "y0": 123.94,
         "y1": 133.94
       },
@@ -629,7 +629,7 @@
         "page_height": 792.0,
         "page_width": 612.0,
         "x0": 72.0,
-        "x1": 516.0,
+        "x1": 534.0,
         "y0": 136.94,
         "y1": 146.94
       },
@@ -638,12 +638,21 @@
         "page_height": 792.0,
         "page_width": 612.0,
         "x0": 72.0,
-        "x1": 414.0,
+        "x1": 534.0,
         "y0": 149.94,
         "y1": 159.94
+      },
+      {
+        "page": 2,
+        "page_height": 792.0,
+        "page_width": 612.0,
+        "x0": 72.0,
+        "x1": 144.0,
+        "y0": 162.94,
+        "y1": 172.94
       }
     ],
-    "text": "Visitor log entry: Raymond T. Holloway signed in at the downtown security desk at 9:40 p.m. on the night of the 14th and signed out at 11:20 p.m., having attended the quarterly budget meeting on the ninth floor."
+    "text": "Visitor log entry: R. Holloway signed the downtown security desk visitor log at 9:40 p.m. on the 14th -- two miles from the Harbor Street warehouse -- and signed out at 11:20 p.m., having attended the quarterly budget meeting on the ninth floor."
   },
   {
     "bbox": {

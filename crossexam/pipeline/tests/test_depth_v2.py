@@ -34,7 +34,7 @@ from crossexam_pipeline.unsiloed import ScannedFallbackParser, UnsiloedParser
 reportlab = pytest.importorskip("reportlab", reason="reportlab not installed")
 pdfplumber = pytest.importorskip("pdfplumber", reason="pdfplumber not installed")
 
-_CONTRADICTION = "signed in at the downtown security desk at 9:40 p.m"
+_CONTRADICTION = "signed the downtown security desk visitor log at 9:40 p.m"
 
 _PIPELINE_ROOT = Path(__file__).resolve().parents[1]
 _CROSSEXAM_ROOT = _PIPELINE_ROOT.parent

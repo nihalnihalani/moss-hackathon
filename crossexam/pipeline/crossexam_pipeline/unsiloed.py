@@ -505,8 +505,8 @@ class ScannedFallbackParser:
 
     DEFAULT_LINES: tuple[str, ...] = (
         "FIELD NOTES (scanned, handwritten)",
-        "Observed delivery truck at the loading dock near midnight.",
-        "Lighting was poor; could not read the license plate clearly.",
+        "On the night of the 14th: saw R. Holloway downtown around 9:30 p.m.",
+        "He was NOT at the Harbor Street warehouse when I drove past at 10 p.m.",
         "Will follow up with the night supervisor in the morning.",
     )
 
