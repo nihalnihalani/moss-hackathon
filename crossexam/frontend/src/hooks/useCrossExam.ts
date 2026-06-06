@@ -105,6 +105,19 @@ export interface CrossExamState {
   runDemo: () => void;
   /** Reset back to the idle/establishing-the-haystack state. */
   reset: () => void;
+  /**
+   * Push-to-talk START (Space held). In mock, flips the orb/pill to the
+   * "listening" visual. In live, best-effort signals the agent to listen.
+   */
+  startListening: () => void;
+  /** Push-to-talk END (Space released). Returns the listening visual to idle. */
+  stopListening: () => void;
+  /**
+   * Ask a typed question (Cmd/Ctrl+K palette). In mock, runs the scripted demo
+   * beat with the typed question surfaced. In live, sends the question to the
+   * agent over the data channel (best-effort; the agent drives the response).
+   */
+  ask: (question: string) => void;
 }
 
 interface ScriptStep {
@@ -174,25 +187,29 @@ const MOCK_SCRIPT: ScriptStep[] = [
       s.agentState = 'thinking';
       // The CANONICAL contradiction follow-up: the exact string the live backend
       // routes multi-hop and resolves to the pdf-p12-l1 + visitor-log cross-doc
-      // pair (mock == live). The first ask stays single-hop above.
+      // pair, with pdf-p12-l1 as the primary anchor (mock == live). The first
+      // ask stays single-hop above.
       s.question = DEMO_CONTRADICTION_QUESTION;
       s.caption = ANSWER_TRANSCRIPT;
-      // Jump into the SEPARATE exhibit document.
-      s.targetPage = CONTRADICTION_CITATION.bbox.page;
+      // Match live primaryId behavior: keep the first jump on the claim under
+      // examination; the contradiction banner lets the user flip to the exhibit.
+      s.targetPage = ANSWER_CITATION.bbox.page;
     },
   },
   {
     at: 7600,
     apply: (s) => {
-      // The cross-document contradiction climax: a second box in the exhibit,
-      // the contradiction banner + the hops trail.
+      // The cross-document contradiction climax: live returns both citations
+      // but primaryId points at the deposition claim under examination. The
+      // exhibit counter-evidence is available through the contradiction chips.
       s.agentState = 'speaking';
-      s.activeCitation = CONTRADICTION_CITATION;
+      s.activeCitation = ANSWER_CITATION;
       s.citations = [ANSWER_CITATION, CONTRADICTION_CITATION];
-      s.primaryId = CONTRADICTION_CITATION.id;
+      s.primaryId = ANSWER_CITATION.id;
       s.caption = CONTRADICTION_TRANSCRIPT;
       s.contradiction = true;
       s.hops = CONTRADICTION_HOPS;
+      s.targetPage = ANSWER_CITATION.bbox.page;
       s.proactive = false;
       s.lastLatencyMs = CONTRADICTION_CITATION.latencyMs;
     },
@@ -306,6 +323,9 @@ export function useCrossExam(config: CrossExamConfig): CrossExamState {
   // The agent's remote (TTS) audio track, surfaced as a MediaStream for the orb.
   const [outputStream, setOutputStream] = useState<MediaStream | null>(null);
   const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
+  // Best-effort publisher for the live data channel, set once a room connects.
+  // Used to forward typed questions / push-to-talk signals to the agent.
+  const publishRef = useRef<((payload: Record<string, unknown>) => void) | null>(null);
 
   const clearTimers = useCallback(() => {
     timers.current.forEach((t) => clearTimeout(t));
@@ -342,6 +362,7 @@ export function useCrossExam(config: CrossExamConfig): CrossExamState {
     if (isMock) {
       setIsConnected(false);
       setOutputStream(null);
+      publishRef.current = null;
       return;
     }
     let disposed = false;
@@ -357,6 +378,20 @@ export function useCrossExam(config: CrossExamConfig): CrossExamState {
           return;
         }
         setIsConnected(true);
+
+        // Expose a best-effort publisher so the UI can forward typed questions
+        // and push-to-talk signals to the agent over the data channel.
+        publishRef.current = (payload: Record<string, unknown>): void => {
+          try {
+            const bytes = new TextEncoder().encode(JSON.stringify(payload));
+            const lp = room.localParticipant as unknown as {
+              publishData?: (data: Uint8Array, opts?: unknown) => void | Promise<void>;
+            };
+            void lp.publishData?.(bytes);
+          } catch {
+            /* best-effort; the agent still drives state if this no-ops */
+          }
+        };
 
         const onData = (payload: Uint8Array): void => {
           try {
@@ -386,6 +421,7 @@ export function useCrossExam(config: CrossExamConfig): CrossExamState {
           room.off(RoomEvent.DataReceived, onData);
           room.off(RoomEvent.TrackSubscribed, onTrackSubscribed);
           room.off(RoomEvent.TrackUnsubscribed, onTrackUnsubscribed);
+          publishRef.current = null;
           setOutputStream(null);
           void room.disconnect();
         };
@@ -412,6 +448,43 @@ export function useCrossExam(config: CrossExamConfig): CrossExamState {
     // trigger point you can wire to a "send prompt" RPC if desired.
   }, [isMock, runMockDemo]);
 
+  // Push-to-talk START (Space held). In mock, flip the listening visual; the
+  // agent state returns to idle on release unless a demo beat overrides it.
+  const startListening = useCallback(() => {
+    if (isMock) {
+      setSnap((prev) => ({ ...prev, agentState: 'listening', silenceReason: null }));
+    } else {
+      publishRef.current?.({ type: 'ptt', state: 'start' });
+    }
+  }, [isMock]);
+
+  // Push-to-talk END (Space released). Return the listening visual to idle in
+  // mock; in live, signal the agent the press ended (it drives the rest).
+  const stopListening = useCallback(() => {
+    if (isMock) {
+      setSnap((prev) => (prev.agentState === 'listening' ? { ...prev, agentState: 'idle' } : prev));
+    } else {
+      publishRef.current?.({ type: 'ptt', state: 'stop' });
+    }
+  }, [isMock]);
+
+  // Ask a typed question (Cmd/Ctrl+K). In mock, surface the question and run the
+  // scripted beat; in live, forward it to the agent over the data channel.
+  const ask = useCallback(
+    (question: string) => {
+      const q = question.trim();
+      if (!q) return;
+      if (isMock) {
+        setSnap((prev) => ({ ...prev, question: q }));
+        runMockDemo();
+      } else {
+        publishRef.current?.({ type: 'ask', question: q });
+        setSnap((prev) => ({ ...prev, question: q, agentState: 'thinking' }));
+      }
+    },
+    [isMock, runMockDemo],
+  );
+
   return {
     isMock,
     isConnected,
@@ -433,6 +506,9 @@ export function useCrossExam(config: CrossExamConfig): CrossExamState {
     outputStream,
     runDemo,
     reset,
+    startListening,
+    stopListening,
+    ask,
   };
 }
 

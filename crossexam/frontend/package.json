@@ -18,11 +18,15 @@
     "@fontsource/ibm-plex-mono": "^5.2.7",
     "@fontsource/newsreader": "^5.2.10",
     "@livekit/components-react": "^2.6.9",
+    "cmdk": "^1.1.1",
+    "framer-motion": "^12.40.0",
     "livekit-client": "^2.7.4",
     "lucide-react": "^1.17.0",
     "pdfjs-dist": "^4.7.76",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "react-dropzone": "^15.0.0",
+    "react-hotkeys-hook": "^5.3.2"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "^6.6.3",

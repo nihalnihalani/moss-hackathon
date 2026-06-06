@@ -13,16 +13,22 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { ApiError, uploadDocument, type UploadResponse } from '../lib/api';
 import { useToast } from './ToastContext';
-import { Upload, Check } from 'lucide-react';
+import { Upload, Check, FilePlus2 } from 'lucide-react';
 
 export interface DocumentUploadProps {
   /** Called once the backend has ingested the PDF. */
   onUploaded: (result: UploadResponse, file: File) => void;
   /** Disable the control (e.g. while a session is still resolving). */
   disabled?: boolean;
+  /**
+   * 'default' is the command-bar "Submit document into evidence" control.
+   * 'compact' is the floating "+ New document" affordance shown over the canvas
+   * once a document is loaded (Quick Win #2) — same picker, smaller chrome.
+   */
+  variant?: 'default' | 'compact';
 }
 
-export function DocumentUpload({ onUploaded, disabled }: DocumentUploadProps): JSX.Element {
+export function DocumentUpload({ onUploaded, disabled, variant = 'default' }: DocumentUploadProps): JSX.Element {
   const inputId = useId();
   const inputRef = useRef<HTMLInputElement | null>(null);
   const [uploading, setUploading] = useState(false);
@@ -96,9 +102,10 @@ export function DocumentUpload({ onUploaded, disabled }: DocumentUploadProps): J
   }, [disabled]);
 
   const pct = progress === undefined ? undefined : Math.round(progress * 100);
+  const compact = variant === 'compact';
 
   return (
-    <div className="doc-upload">
+    <div className={`doc-upload${compact ? ' doc-upload--compact' : ''}`}>
       <input
         ref={inputRef}
         id={inputId}
@@ -121,7 +128,11 @@ export function DocumentUpload({ onUploaded, disabled }: DocumentUploadProps): J
         onDragLeave={() => setDragOver(false)}
         onDrop={onDrop}
         disabled={disabled || uploading}
-        aria-label="Submit a PDF document into evidence. Click to browse or drop a file here."
+        aria-label={
+          compact
+            ? 'Add a new PDF document. Click to browse or drop a file here.'
+            : 'Submit a PDF document into evidence. Click to browse or drop a file here.'
+        }
         aria-busy={uploading}
       >
         {uploading ? (
@@ -134,6 +145,10 @@ export function DocumentUpload({ onUploaded, disabled }: DocumentUploadProps): J
           <>
             <Check size={14} /> In evidence
           </>
+        ) : compact ? (
+          <>
+            <FilePlus2 size={14} /> New document
+          </>
         ) : (
           <>
             <Upload size={14} /> Submit document into evidence
@@ -142,12 +157,9 @@ export function DocumentUpload({ onUploaded, disabled }: DocumentUploadProps): J
       </button>
 
       {uploading ? (
-        <progress
-          className="doc-upload__progress"
-          max={100}
-          value={pct ?? undefined}
-          aria-label="Upload progress"
-        />
+        <div className="animated-progress" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100} aria-label="Upload progress">
+          <div className="animated-progress__fill" style={{ width: `${pct ?? 0}%` }} />
+        </div>
       ) : null}
     </div>
   );

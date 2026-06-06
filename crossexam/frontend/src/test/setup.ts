@@ -47,6 +47,11 @@ if (!Element.prototype.scrollIntoView) {
   Element.prototype.scrollIntoView = (): void => undefined;
 }
 
+// jsdom doesn't implement Element.scrollTo; the stick-to-bottom transcript uses it.
+if (!Element.prototype.scrollTo) {
+  Element.prototype.scrollTo = (): void => undefined;
+}
+
 // matchMedia is consulted by motion-aware components (LatencyChip, Atmosphere).
 if (typeof window.matchMedia !== 'function') {
   window.matchMedia = (query: string): MediaQueryList =>

@@ -13,9 +13,15 @@ import { DocumentUpload } from './components/DocumentUpload';
 import { DocSwitcher } from './components/DocSwitcher';
 import type { DocSwitcherDoc } from './components/DocSwitcher';
 import { ContradictionBanner } from './components/ContradictionBanner';
+import { EmptyDropzone } from './components/EmptyDropzone';
+import { QuestionPalette } from './components/QuestionPalette';
+import { ShortcutsCheatSheet } from './components/ShortcutsCheatSheet';
 import { useToast } from './components/ToastContext';
-import { Play, RotateCcw } from 'lucide-react';
-import { DOC_TITLES, DOC_URLS } from './lib/mockData';
+import { ToggleSwitch } from './components/ToggleSwitch';
+import { Logo } from './components/Logo';
+import { useShortcuts } from './hooks/useShortcuts';
+import { Play, RotateCcw, Mic } from 'lucide-react';
+import { DOC_TITLES, DOC_URLS, DEMO_QUESTION, DEMO_CONTRADICTION_QUESTION } from './lib/mockData';
 import type { UploadResponse } from './lib/api';
 import type { Citation, MemoryRef } from './types';
 
@@ -73,11 +79,16 @@ export function App(): JSX.Element {
   // After an upload, render the freshly-ingested PDF and update corpus info.
   const [docInfo, setDocInfo] = useState<UploadResponse | null>(null);
   const [uploadedUrl, setUploadedUrl] = useState<string | null>(null);
+  // Has the user loaded/surfaced ANY document yet? Drives the empty-state
+  // dropzone vs. the rendered canvas (Quick Win #2). Flipped on first upload or
+  // once a citation/doc is surfaced (e.g. the mock demo).
+  const [docLoaded, setDocLoaded] = useState(false);
 
   const onUploaded = useCallback((result: UploadResponse, file: File): void => {
     setDocInfo(result);
     // Render the uploaded file locally so the canvas reflects the new document.
     setUploadedUrl(URL.createObjectURL(file));
+    setDocLoaded(true);
   }, []);
 
   // ---- FEATURE 1: multi-doc. Derive the set of documents from the citations.
@@ -99,6 +110,12 @@ export function App(): JSX.Element {
     }
     return [...byId.values()];
   }, [cx.citations]);
+
+  // Surfacing any citation (e.g. the mock demo) counts as "a document is loaded",
+  // so the empty-state dropzone steps aside for the rendered canvas.
+  useEffect(() => {
+    if (cx.citations.length > 0) setDocLoaded(true);
+  }, [cx.citations.length]);
 
   // Selected document: follows the primary citation's doc by default, but a
   // manual tab/chip selection sticks until the agent surfaces a new primary.
@@ -180,6 +197,61 @@ export function App(): JSX.Element {
     cx.reset();
   }, [cx]);
 
+  // ---- QUICK WIN #1: keyboard shortcuts ------------------------------------
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
+  // Mic / push-to-talk pressed state, mirrored for aria-pressed + aria-live.
+  const [micActive, setMicActive] = useState(false);
+
+  // Cycle the document tabs by ±1 (wraps). Only meaningful with 2+ docs, which is
+  // also the only time the DocSwitcher renders.
+  const cycleDoc = useCallback(
+    (delta: number): void => {
+      if (docs.length < 2) return;
+      const current = docs.findIndex((d) => d.id === activeDocId);
+      const base = current === -1 ? 0 : current;
+      const nextIndex = (base + delta + docs.length) % docs.length;
+      const next = docs[nextIndex];
+      if (next) setManualDocId(next.id);
+    },
+    [docs, activeDocId],
+  );
+
+  const onTalkStart = useCallback((): void => {
+    setMicActive(true);
+    cx.startListening();
+  }, [cx]);
+  const onTalkEnd = useCallback((): void => {
+    setMicActive(false);
+    cx.stopListening();
+  }, [cx]);
+
+  const onAsk = useCallback(
+    (question: string): void => {
+      cx.ask(question);
+    },
+    [cx],
+  );
+
+  const { isMac } = useShortcuts({
+    onTalkStart,
+    onTalkEnd,
+    onOpenPalette: useCallback(() => setPaletteOpen(true), []),
+    onPrevDoc: useCallback(() => cycleDoc(-1), [cycleDoc]),
+    onNextDoc: useCallback(() => cycleDoc(1), [cycleDoc]),
+    onToggleHelp: useCallback(() => setHelpOpen((v) => !v), []),
+  });
+
+  // The mic affordance is a real button (pointer push-to-talk mirrors Space).
+  const onMicDown = useCallback((): void => onTalkStart(), [onTalkStart]);
+  const onMicUp = useCallback((): void => onTalkEnd(), [onTalkEnd]);
+
+  // Suggested prompts in the palette: the canonical demo questions in mock.
+  const paletteSuggestions = useMemo(
+    () => (cx.isMock ? [DEMO_QUESTION, DEMO_CONTRADICTION_QUESTION] : []),
+    [cx.isMock],
+  );
+
   const modeLabel = resolving
     ? 'CONNECTING…'
     : cx.isMock
@@ -200,6 +272,7 @@ export function App(): JSX.Element {
 
       <header className="cmdbar">
         <div className="cmdbar__brand">
+          <Logo />
           <h1 className="cmdbar__wordmark">CrossExam</h1>
           <span className="cmdbar__case">CASE NO. 2026-CV-0914</span>
         </div>
@@ -214,15 +287,12 @@ export function App(): JSX.Element {
 
         <div className="cmdbar__controls">
           <DocumentUpload onUploaded={onUploaded} disabled={resolving} />
-          <label className="cmdbar__toggle">
-            <input
-              type="checkbox"
-              checked={forceMock}
-              onChange={(e) => setForceMock(e.target.checked)}
-              aria-label="Force mock mode"
-            />
-            Force mock
-          </label>
+          <ToggleSwitch
+            label="Force mock"
+            checked={forceMock}
+            onChange={(e) => setForceMock(e.target.checked)}
+            aria-label="Force mock mode"
+          />
           <button className="btn btn--ghost" onClick={cx.reset} aria-label="Reset session">
             <RotateCcw size={13} /> Reset
           </button>
@@ -236,10 +306,31 @@ export function App(): JSX.Element {
         <section className="rail" aria-label="Voice interface">
           <VoiceOrb
             state={cx.agentState}
-            audioReactive
+            audioReactive={!cx.isMock}
             outputStream={cx.outputStream}
           />
           <StatePill state={cx.agentState} proactive={cx.proactive} />
+
+          {/* Push-to-talk affordance: hold (Space or pointer) to talk. Announced
+              politely so screen-reader users hear "Listening…" / "Mic off". */}
+          <button
+            type="button"
+            className={`mic-control${micActive ? ' mic-control--active' : ''}`}
+            data-testid="mic-control"
+            aria-keyshortcuts="Space"
+            aria-pressed={micActive}
+            aria-label="Push to talk. Hold Space or this button to talk."
+            onPointerDown={onMicDown}
+            onPointerUp={onMicUp}
+            onPointerLeave={() => micActive && onMicUp()}
+          >
+            <Mic size={13} aria-hidden="true" />
+            {micActive ? 'Listening…' : 'Hold Space to talk'}
+          </button>
+          <span className="visually-hidden" role="status" aria-live="polite" data-testid="mic-announce">
+            {micActive ? 'Listening…' : 'Mic off'}
+          </span>
+
           <Captions
             text={cx.caption}
             question={cx.question}
@@ -260,26 +351,49 @@ export function App(): JSX.Element {
         </section>
 
         <section className="docstage" aria-label="Document">
-          <div className="docstage__hud">
-            <DocSwitcher docs={docs} activeId={activeDocId} onSelect={onSelectDoc} />
-            <PageJump active={searching} targetPage={targetPage} totalPages={corpusPages} />
-            <LatencyChip
-              pages={cx.activeCitation?.pagesSearched ?? corpusPages}
-              latencyMs={cx.activeCitation?.latencyMs ?? 7}
-              visible={hasResult}
-            />
-          </div>
-          <PdfCanvas
-            page={targetPage}
-            citation={activeForDoc}
-            citations={docCitations}
-            pdfUrl={pdfUrl}
-            onClearCitation={onClearCitation}
-            refocusSignal={refocus}
-            proactive={cx.proactive && activeForDoc?.id === cx.activeCitation?.id}
-          />
+          {docLoaded ? (
+            <>
+              <div className="docstage__hud">
+                <DocSwitcher docs={docs} activeId={activeDocId} onSelect={onSelectDoc} />
+                <PageJump active={searching} targetPage={targetPage} totalPages={corpusPages} />
+                <LatencyChip
+                  pages={cx.activeCitation?.pagesSearched ?? corpusPages}
+                  latencyMs={cx.activeCitation?.latencyMs ?? 7}
+                  visible={hasResult}
+                />
+              </div>
+
+              {/* + New document: reuses the picker without leaving the canvas. */}
+              <DocumentUpload
+                onUploaded={onUploaded}
+                disabled={resolving}
+                variant="compact"
+              />
+
+              <PdfCanvas
+                page={targetPage}
+                citation={activeForDoc}
+                citations={docCitations}
+                pdfUrl={pdfUrl}
+                onClearCitation={onClearCitation}
+                refocusSignal={refocus}
+                proactive={cx.proactive && activeForDoc?.id === cx.activeCitation?.id}
+              />
+            </>
+          ) : (
+            <EmptyDropzone onUploaded={onUploaded} disabled={resolving} />
+          )}
         </section>
       </main>
+
+      {/* Quick Win #1 overlays: Cmd/Ctrl+K palette + the ? cheat-sheet. */}
+      <QuestionPalette
+        open={paletteOpen}
+        onOpenChange={setPaletteOpen}
+        onAsk={onAsk}
+        suggestions={paletteSuggestions}
+      />
+      <ShortcutsCheatSheet open={helpOpen} onClose={() => setHelpOpen(false)} isMac={isMac} />
     </div>
   );
 }

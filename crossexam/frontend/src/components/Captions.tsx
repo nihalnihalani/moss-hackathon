@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
-import { ScanLine, History, Users } from 'lucide-react';
+import { ScanLine, History, Users, ArrowDown } from 'lucide-react';
 import type { Citation, MemoryRef, SilenceReason, Speaker } from '../types';
 import { NotFoundState } from './NotFoundState';
+import { useStickToBottom } from '../hooks/useStickToBottom';
 
 export interface CaptionsProps {
   /** The agent's spoken line; revealed word-by-word (Newsreader serif). */
@@ -65,8 +66,23 @@ export function Captions({
   const faith = citation?.faithfulness;
   const recalls = memory ?? [];
 
+  // Stick-to-bottom: auto-scroll the transcript to the newest line as it grows,
+  // but yield to the user when they scroll up to read back (Quick Win #3). The
+  // dep recomputes whenever the visible transcript content changes.
+  const contentSignal = `${question ?? ''}|${text}|${recalls.length}|${silenceReason ?? ''}`;
+  const { ref: scrollRef, atBottom, scrollToBottom } = useStickToBottom<HTMLDivElement>({
+    dep: contentSignal,
+  });
+
   return (
-    <div className="captions" role="log" aria-live="polite" aria-atomic="false">
+    <div className="captions-shell">
+    <div
+      className="captions"
+      role="log"
+      aria-live="polite"
+      aria-atomic="false"
+      ref={scrollRef}
+    >
       {speaker ? (
         <div className="meeting-indicator" data-testid="meeting-indicator">
           <Users size={11} aria-hidden="true" />
@@ -167,6 +183,21 @@ export function Captions({
       ) : null}
 
       <NotFoundState visible={silenceReason === 'not_found_in_document'} />
+    </div>
+
+      {/* Quick Win #3: appears only when the user has scrolled up away from the
+          newest line; clicking re-pins and resumes auto-scroll. */}
+      {!atBottom ? (
+        <button
+          type="button"
+          className="jump-latest"
+          data-testid="jump-latest"
+          onClick={scrollToBottom}
+          aria-label="Jump to latest transcript line"
+        >
+          <ArrowDown size={12} aria-hidden="true" /> Jump to latest
+        </button>
+      ) : null}
     </div>
   );
 }
