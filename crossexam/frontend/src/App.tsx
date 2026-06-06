@@ -1,11 +1,14 @@
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import { useCrossExam } from './hooks/useCrossExam';
+import { useBackendSession } from './hooks/useBackendSession';
 import { VoiceOrb } from './components/VoiceOrb';
 import { StatePill } from './components/StatePill';
 import { Captions } from './components/Captions';
 import { PdfCanvas } from './components/PdfCanvas';
 import { LatencyChip } from './components/LatencyChip';
 import { PageJump } from './components/PageJump';
+import { DocumentUpload } from './components/DocumentUpload';
+import type { UploadResponse } from './lib/api';
 
 const ENV = import.meta.env as Record<string, string | undefined>;
 
@@ -21,14 +24,39 @@ export function App(): JSX.Element {
   const envForceMock = ENV.VITE_MOCK_MODE === 'true';
   const [forceMock, setForceMock] = useState<boolean>(envForceMock);
 
+  // Resolve live-vs-mock against the backend on startup (skipped if forceMock).
+  const session = useBackendSession({ forceMock });
+
+  // The hook only enters its LIVE branch when both URL + token are present.
   const cx = useCrossExam({
-    livekitUrl: ENV.VITE_LIVEKIT_URL,
-    livekitToken: ENV.VITE_LIVEKIT_TOKEN,
+    livekitUrl: session.livekitUrl,
+    livekitToken: session.livekitToken,
     forceMock,
   });
 
+  // After an upload, render the freshly-ingested PDF and update corpus info.
+  const [docInfo, setDocInfo] = useState<UploadResponse | null>(null);
+  const [pdfUrl, setPdfUrl] = useState<string>(PDF_URL);
+
+  const onUploaded = useCallback((result: UploadResponse, file: File): void => {
+    setDocInfo(result);
+    // Render the uploaded file locally so the canvas reflects the new document.
+    setPdfUrl(URL.createObjectURL(file));
+  }, []);
+
   const searching = cx.agentState === 'thinking';
   const hasResult = cx.activeCitation !== null;
+  const resolving = session.status === 'resolving';
+
+  const corpusPages = docInfo?.pages ?? cx.totalPages;
+
+  const modeLabel = resolving
+    ? 'CONNECTING…'
+    : cx.isMock
+      ? 'MOCK / OFFLINE'
+      : cx.isConnected
+        ? 'LIVE · CONNECTED'
+        : 'LIVE · CONNECTING…';
 
   return (
     <div className="app">
@@ -39,9 +67,14 @@ export function App(): JSX.Element {
           <span className="app__tagline">Ask the document. It points to the proof.</span>
         </div>
         <div className="app__controls">
-          <span className={`app__mode ${cx.isMock ? 'app__mode--mock' : 'app__mode--live'}`}>
-            {cx.isMock ? 'MOCK MODE' : cx.isConnected ? 'LIVE · CONNECTED' : 'LIVE · CONNECTING…'}
+          <span
+            className={`app__mode ${cx.isMock ? 'app__mode--mock' : 'app__mode--live'}`}
+            title={session.reason ?? undefined}
+            data-testid="mode-badge"
+          >
+            {modeLabel}
           </span>
+          <DocumentUpload onUploaded={onUploaded} disabled={resolving} />
           <label className="app__toggle">
             <input
               type="checkbox"
@@ -68,18 +101,14 @@ export function App(): JSX.Element {
 
         <section className="app__pane app__pane--doc" aria-label="Document">
           <div className="doc__chrome">
-            <PageJump active={searching} targetPage={cx.targetPage} totalPages={cx.totalPages} />
+            <PageJump active={searching} targetPage={cx.targetPage} totalPages={corpusPages} />
             <LatencyChip
-              pages={cx.activeCitation?.pagesSearched ?? cx.totalPages}
+              pages={cx.activeCitation?.pagesSearched ?? corpusPages}
               latencyMs={cx.activeCitation?.latencyMs ?? 7}
               visible={hasResult}
             />
           </div>
-          <PdfCanvas
-            page={cx.targetPage}
-            citation={cx.activeCitation}
-            pdfUrl={PDF_URL}
-          />
+          <PdfCanvas page={cx.targetPage} citation={cx.activeCitation} pdfUrl={pdfUrl} />
         </section>
       </main>
     </div>

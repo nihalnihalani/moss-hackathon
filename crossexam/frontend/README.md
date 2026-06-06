@@ -16,7 +16,23 @@ Open the printed URL. The app lands straight on the document (no sign-in) render
 
 `LISTENING → THINKING (page-jump “searching 912 pages”) → SPEAKING + SNAP (bbox on the warehouse-admission line, chip “found in 912 pages · 7ms”) → contradiction snap on the visitor-log line.`
 
-Mock mode is automatic whenever `VITE_LIVEKIT_URL` / `VITE_LIVEKIT_TOKEN` are unset, or when **Force mock** is toggled. Even in mock mode the canvas renders the real PDF — only the agent state, captions, and citation timings are scripted.
+With no backend running it lands in mock mode automatically. Even in mock mode the canvas renders the real PDF — only the agent state, captions, and citation timings are scripted.
+
+## How live vs mock is decided
+
+On startup `useBackendSession` (see `src/hooks/useBackendSession.ts`) runs this decision **once**:
+
+1. `GET {VITE_API_URL}/config` (`VITE_API_URL` defaults to `http://localhost:8000`).
+2. If the backend answers and `config.live === true`, it `POST`s `{VITE_API_URL}/token` to mint a LiveKit access token, then connects a **REAL** session — the backend agent drives agent-state, captions, and citations over the LiveKit data channel.
+3. On **any** failure — backend unreachable, non-2xx, `live:false`, or no LiveKit URL — it **falls back to the scripted mock** so the offline demo still works.
+
+The header badge surfaces the resolved mode: **LIVE · CONNECTED / CONNECTING…** vs **MOCK / OFFLINE** (hover for the fallback reason). Toggling **Force mock** skips the backend entirely and pins mock mode (also settable at build time via `VITE_MOCK_MODE=true`).
+
+The typed backend client lives in `src/lib/api.ts` (`fetchConfig`, `requestToken`, `uploadDocument`, `checkHealth`) — all responses are runtime-narrowed and throw `ApiError` on failure; the base URL is `VITE_API_URL`.
+
+## Uploading a document
+
+The header has a **⬆ Upload PDF** control (click or drag-and-drop) that `POST`s the file to `{VITE_API_URL}/documents` (multipart), shows determinate progress, and on success renders the uploaded PDF on the canvas and updates the corpus page count from the ingest result (`pages`, `chunks_indexed`, `mode`). It works in both live and mock modes — in mock mode the backend's offline ingest still indexes it. Errors (non-PDF, network, non-2xx) are announced in an `aria-live` status line.
 
 ### The real PDF + bbox alignment
 
@@ -28,14 +44,23 @@ For the snap to land on real text, the mock citations’ `page` + point bbox in 
 
 ## Run against a live backend
 
-Copy `.env.example` to `.env` and fill in:
+Start the backend FastAPI service, then run the frontend. By default the frontend points at `http://localhost:8000` — no `.env` needed. To target a different host, copy `.env.example` to `.env` and set `VITE_API_URL`.
+
+The backend must expose:
+
+| Endpoint | Returns |
+|---|---|
+| `GET {VITE_API_URL}/config` | `{ livekit_url: string\|null, live: boolean }` |
+| `POST {VITE_API_URL}/token` | body `{ room?, identity? }` → `{ token, url, room }` |
+| `POST {VITE_API_URL}/documents` | multipart PDF → `{ document_id, pages, chunks_indexed, mode }` |
+| `GET {VITE_API_URL}/healthz` | `200` when up |
 
 | Var | Meaning |
 |---|---|
-| `VITE_LIVEKIT_URL` | LiveKit server WS URL, e.g. `wss://you.livekit.cloud` |
-| `VITE_LIVEKIT_TOKEN` | Short-lived room access token from your token endpoint |
-| `VITE_MOCK_MODE` | `true` to force mock regardless of the above |
-| `VITE_PDF_URL` | URL of the PDF to render. **Defaults to `/sample-deposition.pdf`** (the real sample served from `public/`). Set this to point at a different document; on fetch/worker failure the canvas falls back to a placeholder page |
+| `VITE_API_URL` | Backend base URL. **Defaults to `http://localhost:8000`.** Drives `/config`, `/token`, `/documents` |
+| `VITE_MOCK_MODE` | `true` to force mock and skip the backend entirely |
+| `VITE_PDF_URL` | Initial PDF to render. **Defaults to `/sample-deposition.pdf`** (the real sample served from `public/`); uploads replace it. On fetch/worker failure the canvas falls back to a placeholder page |
+| `VITE_LIVEKIT_URL` / `VITE_LIVEKIT_TOKEN` | _Optional/legacy._ Direct-connect overrides that bypass the backend token flow |
 
 In live mode the hook connects to the LiveKit room and listens on the data channel. The backend should publish JSON frames shaped like:
 
@@ -85,17 +110,24 @@ Helpers: `normalizeBBox` (orders corners), `clampBBoxToPage` (validates finitene
 ```
 src/
   types.ts                 Citation, BBox, AgentState, PageRenderGeometry
+  lib/api.ts               typed backend client (fetchConfig/requestToken/uploadDocument)
+  lib/api.test.ts          config/token/upload happy + error paths
   lib/bbox.ts              THE transform (pure, tested)
   lib/bbox.test.ts         scale / offset / dpr / clamp / projector fixture
   lib/mockData.ts          scripted demo: warehouse answer + visitor-log contradiction
+  hooks/useBackendSession.ts  startup live-vs-mock resolver (config -> token)
   hooks/useCrossExam.ts    LiveKit wiring + mock sequence driver
   hooks/__tests__/
     liveCitation.integration.test.tsx  live DataReceived → PdfCanvas snap
+  __tests__/
+    App.session.test.tsx   App enters live on config.live, falls back to mock
   components/
     VoiceOrb.tsx StatePill.tsx Captions.tsx
+    DocumentUpload.tsx       PDF upload control (POST /documents, progress)
+    DocumentUpload.test.tsx  (under __tests__/) upload success/error UI
     PdfCanvas.tsx           renders page (real PDF or placeholder) + snaps the bbox overlay
     LatencyChip.tsx PageJump.tsx
-    __tests__/PdfCanvas.test.tsx
+    __tests__/PdfCanvas.test.tsx __tests__/DocumentUpload.test.tsx
   App.tsx main.tsx styles.css
 public/
   sample-deposition.pdf    the real sample rendered by default (VITE_PDF_URL)
