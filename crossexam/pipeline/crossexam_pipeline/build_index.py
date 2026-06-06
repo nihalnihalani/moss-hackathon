@@ -26,7 +26,9 @@ from crossexam_pipeline.models import ParsedChunk, chunks_to_index_records
 logger = logging.getLogger(__name__)
 
 ENV_PROJECT_ID = "MOSS_PROJECT_ID"
-ENV_API_KEY = "MOSS_API_KEY"
+# Use the SAME var name the backend reads (crossexam_backend.config.Settings.moss_project_key)
+# so a single filled .env drives both the pipeline upsert and the runtime query.
+ENV_API_KEY = "MOSS_PROJECT_KEY"
 ENV_INDEX_NAME = "MOSS_INDEX_NAME"
 
 # Default location the backend mock index reads from.

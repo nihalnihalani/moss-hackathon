@@ -18,10 +18,13 @@ RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
 # Install dependencies first (cached unless project metadata changes), then the
-# package itself.
+# package itself. Include the [voice] extra (Deepgram/OpenAI/Cartesia/Silero
+# plugins) so the container can run a real STT->LLM->TTS session, not just mocks.
+# Override with --build-arg INSTALL_EXTRAS="" for a smaller mock-only image.
+ARG INSTALL_EXTRAS="[voice]"
 COPY pyproject.toml README.md ./
 COPY crossexam_backend ./crossexam_backend
-RUN pip install .
+RUN pip install ".${INSTALL_EXTRAS}"
 
 # ---- Stage 2: runtime — minimal image, non-root -----------------------------
 FROM python:3.12-slim AS runtime

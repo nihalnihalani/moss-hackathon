@@ -154,7 +154,16 @@ build:
 	docker build -t crossexam-backend:local  "$(BACKEND)"
 	docker build -t crossexam-frontend:local "$(FRONTEND)"
 
-## index: run the offline pipeline end-to-end in --dry-run mode (no keys needed)
+## fixture: regenerate the REAL demo fixture (sample PDF -> text parse -> backend/fixtures)
+## This is the canonical regen command. `make index` is a separate dry-run smoke test that
+## writes only to pipeline/build/ and must NOT be pointed at backend/fixtures/sample_chunks.json.
+fixture:
+	$(call need_py)
+	@echo ">> generating sample-deposition.pdf + regenerating backend/fixtures/sample_chunks.json"
+	cd "$(PIPELINE)" && $(PY) -m crossexam_pipeline.make_sample_pdf
+
+## index: offline pipeline smoke test in --dry-run mode (no keys); writes ONLY to pipeline/build/.
+## Does NOT regenerate the committed demo fixture — use `make fixture` for that.
 index:
 	$(call need_py)
 	@echo ">> parse (deterministic fallback) -> chunks -> build-index (dry-run)"
