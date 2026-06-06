@@ -42,6 +42,52 @@ voice (LiveKit STT) ──▶ on_user_turn_completed()  ◀── LiveKit Agents
 | `crossexam_backend/agent.py` | `CrossExamAgent` with `on_user_turn_completed()`; guarded LiveKit imports |
 | `crossexam_backend/server.py` | LiveKit worker entrypoint with prewarm; builds STT/LLM/TTS providers |
 | `crossexam_backend/doctor.py` | Preflight/doctor — prints a READY/MISSING/MOCK status table (no network) |
+| `crossexam_backend/api.py` | FastAPI HTTP service — LiveKit token minting + document upload/index |
+| `crossexam_backend/ingest.py` | PDF text-layer parse to backend chunk records (prefers the pipeline parser, falls back to `pdfplumber`) |
+
+## HTTP API service (`crossexam-api`)
+
+The LiveKit *worker* speaks audio inside a room, but the browser still needs a
+way to **get a join token** and to **upload a document** to index. The FastAPI
+service in `crossexam_backend/api.py` provides exactly that. It imports and tests
+without live keys or optional deps (the LiveKit token lib import is guarded; the
+ingest path uses the offline fixture + `MockIndex` when Moss is absent).
+
+### Endpoints
+
+| Method & path | Body | Returns | Needs |
+|---------------|------|---------|-------|
+| `GET /healthz` | – | `{status, mode: "live"\|"mock", livekit_configured, moss_configured}` | nothing |
+| `GET /config` | – | `{livekit_url, live}` — public connection info, **never secrets** | nothing |
+| `POST /token` | `{room?, identity?}` | `{token, room, identity, livekit_url}` | `LIVEKIT_URL`/`LIVEKIT_API_KEY`/`LIVEKIT_API_SECRET` **and** the `livekit-api` package, else **503** |
+| `POST /documents` | multipart `file` (PDF) | `{document_id, pages, chunks_indexed, mode}` | `pdfplumber` to parse; Moss creds (+ `crossexam-pipeline`) to upsert to Moss, else writes the fixture and reloads `MockIndex` offline |
+
+`/documents` validates the content type and the `%PDF-` header, enforces the
+`MAX_UPLOAD_MB` size limit, parses the text layer to chunks, and either upserts
+to Moss (live) or appends to the fixture and hot-swaps the in-memory `MockIndex`
+(offline) so the uploaded document is immediately queryable. Errors are explicit:
+`415` non-PDF, `400` empty, `413` too large, `422` no extractable text, `503`
+when a required live dependency is missing.
+
+### Which parts need which keys
+
+- `GET /healthz`, `GET /config` — **no keys**; always available (report mode).
+- `POST /token` — needs all three LiveKit env vars **and** `livekit-api`
+  installed; otherwise returns **503** with a clear message.
+- `POST /documents` — needs `pdfplumber` (in the `[api]` extra) to parse. With
+  Moss credentials set **and** `crossexam-pipeline` installed it upserts to Moss
+  (`mode: "moss"`); otherwise it indexes into the offline `MockIndex`
+  (`mode: "mock"`) — no keys required.
+
+### Running the API
+
+```bash
+pip install -e '.[api]'      # fastapi, uvicorn, python-multipart, livekit-api, pdfplumber
+crossexam-api                # or: python -m crossexam_backend.api
+```
+
+It binds `API_HOST:API_PORT` (default `0.0.0.0:8000`) and enables CORS for
+`CORS_ORIGINS` (default `http://localhost:5173`, the Vite dev origin).
 
 ## Verified API surfaces (pinned adapters)
 
@@ -172,8 +218,14 @@ tests run with only `pydantic` + stdlib.
 | `TOP_K` | `5` | Citations per turn |
 | `ALPHA` | `0.8` | Hybrid weight (1.0 = pure semantic, 0.0 = pure keyword) |
 | `USE_MOCKS` | auto | Auto-`true` when Moss keys are missing; set explicitly to override |
-| `MOCK_FIXTURE_PATH` | `fixtures/sample_chunks.json` | Mock corpus |
+| `MOCK_FIXTURE_PATH` | `fixtures/sample_chunks.json` | Mock corpus (also the offline `/documents` write target) |
 | `LOG_LEVEL` | `INFO` | |
+| `API_HOST` | `0.0.0.0` | Bind host for `crossexam-api` |
+| `API_PORT` | `8000` | Bind port for `crossexam-api` |
+| `CORS_ORIGINS` | `http://localhost:5173` | Comma-separated allowed frontend origins |
+| `LIVEKIT_DEFAULT_ROOM` | `crossexam` | Room used by `/token` when the body omits `room` |
+| `TOKEN_TTL_SECONDS` | `3600` | TTL for minted LiveKit tokens (applied via `with_ttl` on the real SDK) |
+| `MAX_UPLOAD_MB` | `25` | Max accepted `/documents` upload size |
 
 Copy these into a `.env` file in this directory; `pydantic-settings` loads it
 automatically.

@@ -33,10 +33,22 @@ voice = [
     "livekit-plugins-cartesia>=0.4,<1.0",
     "livekit-plugins-silero>=0.7,<1.0",
 ]
+# HTTP API service (token minting + document upload). Optional so the worker /
+# test path installs without web deps; required to run `crossexam-api`. The
+# document-ingest path also needs `pdfplumber` (for the real PDF text-layer
+# parse). Install with: pip install 'crossexam-backend[api]'.
+api = [
+    "fastapi>=0.110,<1.0",
+    "uvicorn>=0.27,<1.0",
+    "python-multipart>=0.0.9,<1.0",
+    "livekit-api>=0.5,<2.0",
+    "pdfplumber>=0.10,<1.0",
+]
 
 [project.scripts]
 crossexam-worker = "crossexam_backend.server:main"
 crossexam-doctor = "crossexam_backend.doctor:main"
+crossexam-api = "crossexam_backend.api:main"
 
 [tool.setuptools.packages.find]
 include = ["crossexam_backend*"]

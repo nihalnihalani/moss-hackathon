@@ -78,6 +78,25 @@ class Settings(BaseSettings):
 
     log_level: str = Field(default="INFO")
 
+    # --- HTTP API service ---------------------------------------------------
+    # The FastAPI service (crossexam_backend.api) mints LiveKit tokens and
+    # ingests documents. These have sane local-dev defaults.
+    api_host: str = Field(default="0.0.0.0")  # noqa: S104 - bind-all is intended for the dev/container service  # noqa: E501
+    api_port: int = Field(default=8000, ge=1, le=65535)
+    # Comma-separated list of allowed CORS origins for the browser frontend.
+    cors_origins: str = Field(default="http://localhost:5173")
+    # Default room a /token request joins when the body omits ``room``.
+    livekit_default_room: str = Field(default="crossexam")
+    # Token TTL in seconds for minted LiveKit access tokens.
+    token_ttl_seconds: int = Field(default=3600, ge=60, le=86400)
+    # Max accepted upload size for POST /documents, in megabytes.
+    max_upload_mb: int = Field(default=25, ge=1, le=200)
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        """Return ``cors_origins`` split into a clean list of origins."""
+        return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
     @property
     def has_moss_credentials(self) -> bool:
         """Return ``True`` when both Moss credentials are configured."""
