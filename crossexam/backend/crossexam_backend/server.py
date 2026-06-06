@@ -1,0 +1,104 @@
+"""LiveKit worker entrypoint for the CrossExam voice agent.
+
+Run with::
+
+    python -m crossexam_backend.server dev
+
+When ``livekit-agents`` is installed and LiveKit credentials are configured the
+module wires up a real worker (STT -> LLM -> TTS) whose agent grounds each turn
+via the retrieval index. When LiveKit is not installed it prints a helpful
+message instead of crashing, so the package remains importable and runnable for
+development and testing without the full real-time stack.
+"""
+
+from __future__ import annotations
+
+import logging
+import sys
+
+from crossexam_backend.agent import LIVEKIT_AVAILABLE, CrossExamAgent
+from crossexam_backend.config import Settings, get_settings
+from crossexam_backend.retrieval.base import RetrievalIndex
+from crossexam_backend.retrieval.factory import get_index
+
+logger = logging.getLogger(__name__)
+
+
+def configure_logging(settings: Settings) -> None:
+    """Configure structured-ish stdlib logging at the configured level."""
+    logging.basicConfig(
+        level=getattr(logging, settings.log_level.upper(), logging.INFO),
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    )
+
+
+def build_index(settings: Settings) -> RetrievalIndex:
+    """Build the retrieval index for the worker (Moss or mock)."""
+    return get_index(settings)
+
+
+def build_agent(settings: Settings, index: RetrievalIndex) -> CrossExamAgent:
+    """Build the :class:`CrossExamAgent` from settings and an index."""
+    return CrossExamAgent(index, top_k=settings.top_k, alpha=settings.alpha)
+
+
+def main() -> int:
+    """Process entrypoint. Returns a POSIX exit code."""
+    settings = get_settings()
+    configure_logging(settings)
+
+    index = build_index(settings)
+    logger.info(
+        "crossexam.boot use_mocks=%s livekit_available=%s index=%s",
+        settings.use_mocks,
+        LIVEKIT_AVAILABLE,
+        type(index).__name__,
+    )
+
+    if not LIVEKIT_AVAILABLE:
+        print(
+            "livekit-agents is not installed, so the real-time voice worker "
+            "cannot start.\n"
+            "Install it with:  pip install 'livekit-agents'\n"
+            f"Retrieval index ready: {type(index).__name__} "
+            f"(use_mocks={settings.use_mocks}).",
+            file=sys.stderr,
+        )
+        return 0
+
+    return _run_livekit_worker(settings, index)
+
+
+def _run_livekit_worker(settings: Settings, index: RetrievalIndex) -> int:
+    """Start the LiveKit worker. Imported lazily so the module stays portable."""
+    # Imports are local on purpose: they only exist when livekit is installed.
+    from livekit.agents import (  # type: ignore[import-not-found]
+        AgentSession,
+        JobContext,
+        WorkerOptions,
+        cli,
+    )
+
+    async def entrypoint(ctx: JobContext) -> None:
+        """Per-room LiveKit job: connect, prewarm, and run the voice session."""
+        await ctx.connect()
+        await index.prewarm()
+        agent = build_agent(settings, index)
+        session = AgentSession()
+        await session.start(agent=agent, room=ctx.room)
+
+    async def prewarm(_proc: object) -> None:
+        """Worker prewarm: eagerly load the index before serving jobs."""
+        await index.prewarm()
+
+    cli.run_app(
+        WorkerOptions(
+            entrypoint_fnc=entrypoint,
+            prewarm_fnc=prewarm,
+        )
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

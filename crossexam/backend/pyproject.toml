@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "crossexam-backend"
+version = "0.1.0"
+description = "CrossExam voice-agent backend: a LiveKit voice agent that interrogates large documents using Moss sub-10ms in-process semantic retrieval."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "CrossExam" }]
+dependencies = [
+    "livekit-agents>=0.12.0,<1.0.0",
+    "pydantic>=2.6,<3.0",
+    "pydantic-settings>=2.2,<3.0",
+    "python-dotenv>=1.0,<2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0,<10.0",
+    "pytest-asyncio>=0.23,<1.0",
+    "ruff>=0.4,<1.0",
+    "mypy>=1.9,<2.0",
+]
+
+[project.scripts]
+crossexam-worker = "crossexam_backend.server:main"
+
+[tool.setuptools.packages.find]
+include = ["crossexam_backend*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "ANN", "D"]
+ignore = ["D203", "D213", "ANN101", "ANN102"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+warn_unused_ignores = true
+ignore_missing_imports = true

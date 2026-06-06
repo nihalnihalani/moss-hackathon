@@ -1,0 +1,79 @@
+[
+  {
+    "id": "dep-0001",
+    "text": "Q. Where were you on the night of the 14th? A. I was at the Harbor Street warehouse from approximately 9:00 p.m. until well past midnight, conducting the inventory count with Mr. Reyes.",
+    "page": 12,
+    "bbox": { "page": 12, "x0": 72.0, "y0": 120.0, "x1": 540.0, "y1": 168.0, "page_width": 612.0, "page_height": 792.0 },
+    "confidence": 0.98
+  },
+  {
+    "id": "dep-0002",
+    "text": "The witness confirmed that the loading dock at the Harbor Street warehouse was illuminated by the overhead sodium lamps throughout the entire evening of the fourteenth.",
+    "page": 12,
+    "bbox": { "page": 12, "x0": 72.0, "y0": 200.0, "x1": 540.0, "y1": 236.0, "page_width": 612.0, "page_height": 792.0 },
+    "confidence": 0.97
+  },
+  {
+    "id": "dep-0003",
+    "text": "Q. Did anyone else have access to the warehouse keys that night? A. Only Mr. Reyes and the night security guard, Daniel Cole, carried keys to the Harbor Street facility.",
+    "page": 13,
+    "bbox": { "page": 13, "x0": 72.0, "y0": 96.0, "x1": 540.0, "y1": 144.0, "page_width": 612.0, "page_height": 792.0 },
+    "confidence": 0.96
+  },
+  {
+    "id": "dep-0004",
+    "text": "Counsel introduced Exhibit 7, the keycard access log, which records every entry to the Harbor Street warehouse between 6:00 p.m. and 6:00 a.m.",
+    "page": 14,
+    "bbox": { "page": 14, "x0": 72.0, "y0": 300.0, "x1": 540.0, "y1": 336.0, "page_width": 612.0, "page_height": 792.0 },
+    "confidence": 0.95
+  },
+  {
+    "id": "dep-0005",
+    "text": "On further questioning the witness stated, contrary to his earlier testimony, that on the night of the 14th he had actually left the Harbor Street warehouse before 8:00 p.m. and spent the rest of the evening at home.",
+    "page": 41,
+    "bbox": { "page": 41, "x0": 72.0, "y0": 150.0, "x1": 540.0, "y1": 210.0, "page_width": 612.0, "page_height": 792.0 },
+    "confidence": 0.94
+  },
+  {
+    "id": "dep-0006",
+    "text": "When confronted with the inconsistency, the witness explained that he had confused the night of the 14th with the prior week and could no longer recall the exact time he departed the warehouse.",
+    "page": 41,
+    "bbox": { "page": 41, "x0": 72.0, "y0": 250.0, "x1": 540.0, "y1": 298.0, "page_width": 612.0, "page_height": 792.0 },
+    "confidence": 0.93
+  },
+  {
+    "id": "dep-0007",
+    "text": "Mr. Reyes testified that the inventory count on the fourteenth was cancelled and that no one performed any count at the warehouse that night.",
+    "page": 52,
+    "bbox": { "page": 52, "x0": 72.0, "y0": 110.0, "x1": 540.0, "y1": 146.0, "page_width": 612.0, "page_height": 792.0 },
+    "confidence": 0.92
+  },
+  {
+    "id": "con-0001",
+    "text": "Section 4.2 Indemnification. The Supplier shall indemnify and hold harmless the Buyer against any losses arising out of defective goods delivered to the warehouse.",
+    "page": 3,
+    "bbox": { "page": 3, "x0": 90.0, "y0": 400.0, "x1": 522.0, "y1": 448.0, "page_width": 612.0, "page_height": 792.0 },
+    "confidence": 0.99
+  },
+  {
+    "id": "con-0002",
+    "text": "Section 9.1 Termination. Either party may terminate this Agreement upon thirty days written notice delivered to the registered address of the other party.",
+    "page": 8,
+    "bbox": { "page": 8, "x0": 90.0, "y0": 220.0, "x1": 522.0, "y1": 268.0, "page_width": 612.0, "page_height": 792.0 },
+    "confidence": 0.99
+  },
+  {
+    "id": "dep-0008",
+    "text": "The security guard Daniel Cole stated that he saw the witness enter the Harbor Street warehouse at 9:05 p.m. on the night of the 14th and did not see him leave until after midnight.",
+    "page": 27,
+    "bbox": { "page": 27, "x0": 72.0, "y0": 180.0, "x1": 540.0, "y1": 228.0, "page_width": 612.0, "page_height": 792.0 },
+    "confidence": 0.96
+  },
+  {
+    "id": "dep-0009",
+    "text": "The expert witness reviewed the surveillance footage timestamps and concluded the warehouse cameras were offline between 10:30 p.m. and 11:45 p.m. on the evening in question.",
+    "page": 33,
+    "bbox": { "page": 33, "x0": 72.0, "y0": 140.0, "x1": 540.0, "y1": 188.0, "page_width": 612.0, "page_height": 792.0 },
+    "confidence": 0.91
+  }
+]
