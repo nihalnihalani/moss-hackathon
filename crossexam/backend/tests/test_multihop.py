@@ -200,6 +200,145 @@ def test_no_contradiction_when_no_opposing_predicates() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# Generalized cross-document conflict: OBLIGATION + NUMERIC TERM (contract vs   #
+# email). SELF-CONTAINED inline fixtures — independent of the shipped fixture.  #
+# --------------------------------------------------------------------------- #
+# These mirror the spec's anchor/text exactly (§4.2 consent vs Acme-without-
+# sign-off; Net-30 vs Net-60) so the detector is exercised on the principled
+# cues, not on a regenerated fixture.
+_CONTRACT_42 = (
+    "Section 4.2 Subcontracting. Contractor shall not delegate, assign, or "
+    "subcontract any of the Services, in whole or in part, to any third party "
+    "without the prior written consent of Client. Any purported subcontracting "
+    "in violation of this Section 4.2 shall constitute a material breach of "
+    "this Agreement."
+)
+_EMAIL_ACME = (
+    "Re: Section 4.2 / Acme work order -- Just to keep you in the loop, we "
+    "already handed the integration work off to Acme Labs last week so we could "
+    "hit the deadline. I know we never got the formal sign-off from your side, "
+    "but it was faster to just get them started."
+)
+_CONTRACT_61 = (
+    "Section 6.1 Payment. Client shall pay each undisputed invoice in full "
+    "within thirty (30) days of receipt (Net-30). Payment terms may not be "
+    "modified except by a written amendment signed by both parties."
+)
+_EMAIL_NET60 = (
+    "Re: Invoice #2231 / payment -- Heads up on Invoice #2231, cash flow is "
+    "tight this quarter, so we're going to pay this one on a Net-60 basis "
+    "instead. We didn't sign anything to change the terms, but 60 days is just "
+    "how it has to be for now."
+)
+
+
+def test_obligation_conflict_contract_clause_vs_email_admission() -> None:
+    """§4.2 (shall-not subcontract without consent) vs the email Acme admission.
+
+    Shared anchor (clause §4.2 / the subcontracting term / "Acme") + opposing
+    obligation (prohibition vs. acting without the required sign-off). The
+    governing CONTRACT clause must be the PRIMARY; the EMAIL is the cross-doc
+    counter.
+    """
+    from crossexam_backend.retrieval.mock_index import _chunk_to_citation
+
+    contract = _chunk("contract-42", _CONTRACT_42, 7, "contract-msa")
+    email = _chunk("email-acme", _EMAIL_ACME, 1, "email-thread")
+    cits = [
+        _chunk_to_citation(contract, 0.95),
+        _chunk_to_citation(email, 0.92),
+    ]
+    contradiction, primary, cross = detect_contradiction(cits)
+    assert contradiction is True
+    assert cross is True
+    assert primary == "contract-42"  # the governing clause anchors
+
+
+def test_numeric_term_conflict_net30_vs_net60() -> None:
+    """Net-30 contract term vs the email's Net-60 admission for the same invoice.
+
+    Shared anchor (the Net- payment term / Invoice #2231) + DIFFERENT numeric
+    values (30 vs. 60). The CONTRACT clause (which also locks the term behind a
+    written amendment) is the PRIMARY; the EMAIL is the cross-doc counter.
+    """
+    from crossexam_backend.retrieval.mock_index import _chunk_to_citation
+
+    contract = _chunk("contract-61", _CONTRACT_61, 9, "contract-msa")
+    email = _chunk("email-net60", _EMAIL_NET60, 1, "email-thread")
+    cits = [
+        _chunk_to_citation(contract, 0.95),
+        _chunk_to_citation(email, 0.92),
+    ]
+    contradiction, primary, cross = detect_contradiction(cits)
+    assert contradiction is True
+    assert cross is True
+    assert primary == "contract-61"  # the defining contract term anchors
+
+
+def test_obligation_pair_builds_cross_document_frame() -> None:
+    """build_frame carries contradiction + crossDocument for the §4.2 pair.
+
+    Mirrors the live path: a contradiction MultiHopResult whose primary is the
+    contract clause and whose counter is the email admission must produce a
+    frame with ``contradiction: True``, ``crossDocument: True`` and
+    ``primaryId`` = the contract clause.
+    """
+    from crossexam_backend.agent import build_frame
+    from crossexam_backend.models import MultiHopResult
+    from crossexam_backend.retrieval.mock_index import _chunk_to_citation
+
+    contract = _chunk("contract-42", _CONTRACT_42, 7, "contract-msa")
+    email = _chunk("email-acme", _EMAIL_ACME, 1, "email-thread")
+    cits = [_chunk_to_citation(contract, 0.95), _chunk_to_citation(email, 0.92)]
+    contradiction, primary, cross = detect_contradiction(cits)
+    result = MultiHopResult(
+        query="Does the email contradict the contract on subcontracting?",
+        citations=cits,
+        hops=[],
+        contradiction=contradiction,
+        cross_document=cross,
+        primary_id=primary,
+        latency_ms=0.0,
+    )
+    frame = build_frame(
+        result,
+        answer_text="The contract bars subcontracting without prior written consent.",
+    )
+    assert frame["contradiction"] is True
+    assert frame["crossDocument"] is True
+    assert frame["primaryId"] == "contract-42"
+    by_id = {c["id"]: c for c in frame["citations"]}
+    assert "contract-42" in by_id
+    assert "email-acme" in by_id  # the counter survives
+    assert by_id["contract-42"]["documentId"] != by_id["email-acme"]["documentId"]
+
+
+def test_same_net_term_is_not_a_conflict() -> None:
+    """Two passages naming the SAME Net- value agree (no numeric conflict)."""
+    from crossexam_backend.retrieval.mock_index import _chunk_to_citation
+
+    contract = _chunk("contract-61", _CONTRACT_61, 9, "contract-msa")
+    email = _chunk(
+        "email-net30",
+        "Re: Invoice #2231 -- confirming we will pay Invoice #2231 on Net-30 as "
+        "the agreement requires.",
+        1,
+        "email-thread",
+    )
+    cits = [_chunk_to_citation(contract, 0.95), _chunk_to_citation(email, 0.92)]
+    contradiction, _primary, _cross = detect_contradiction(cits)
+    assert contradiction is False
+
+
+def test_obligation_routing_questions_are_multihop() -> None:
+    """Obligation/term-conflict questions route through the multi-hop path."""
+    dec = QueryDecomposer()
+    assert dec.is_multihop("Does the email contradict the contract?")
+    assert dec.is_multihop("Did the contractor breach the subcontracting clause?")
+    assert dec.is_multihop("Is the payment term consistent across the file?")
+
+
+# --------------------------------------------------------------------------- #
 # MultiHopRetriever                                                            #
 # --------------------------------------------------------------------------- #
 async def test_multihop_returns_multiple_citations_and_flags_contradiction(

@@ -5,6 +5,217 @@
       "page_height": 792.0,
       "page_width": 612.0,
       "x0": 72.0,
+      "x1": 534.0,
+      "y0": 123.94,
+      "y1": 159.94
+    },
+    "confidence": 0.949,
+    "documentId": "contract-msa",
+    "documentTitle": "Master Services Agreement",
+    "id": "contract-msa-p1-l1",
+    "page": 1,
+    "quads": [
+      {
+        "page": 1,
+        "page_height": 792.0,
+        "page_width": 612.0,
+        "x0": 72.0,
+        "x1": 534.0,
+        "y0": 123.94,
+        "y1": 133.94
+      },
+      {
+        "page": 1,
+        "page_height": 792.0,
+        "page_width": 612.0,
+        "x0": 72.0,
+        "x1": 534.0,
+        "y0": 136.94,
+        "y1": 146.94
+      },
+      {
+        "page": 1,
+        "page_height": 792.0,
+        "page_width": 612.0,
+        "x0": 72.0,
+        "x1": 342.0,
+        "y0": 149.94,
+        "y1": 159.94
+      }
+    ],
+    "text": "This Master Services Agreement (the Agreement) is entered into by and between Meridian Logistics, Inc. (Client) and Vance Integration Partners (Contractor) and governs all Services performed hereunder."
+  },
+  {
+    "bbox": {
+      "page": 1,
+      "page_height": 792.0,
+      "page_width": 612.0,
+      "x0": 72.0,
+      "x1": 540.0,
+      "y0": 83.94,
+      "y1": 119.94
+    },
+    "confidence": 0.947,
+    "documentId": "email-thread",
+    "documentTitle": "Email Thread — Contractor Correspondence",
+    "id": "email-thread-p1-l1",
+    "page": 1,
+    "quads": [
+      {
+        "page": 1,
+        "page_height": 792.0,
+        "page_width": 612.0,
+        "x0": 72.0,
+        "x1": 534.0,
+        "y0": 83.94,
+        "y1": 93.94
+      },
+      {
+        "page": 1,
+        "page_height": 792.0,
+        "page_width": 612.0,
+        "x0": 72.0,
+        "x1": 540.0,
+        "y0": 96.94,
+        "y1": 106.94
+      },
+      {
+        "page": 1,
+        "page_height": 792.0,
+        "page_width": 612.0,
+        "x0": 72.0,
+        "x1": 246.0,
+        "y0": 109.94,
+        "y1": 119.94
+      }
+    ],
+    "text": "From: Dana Vance Subject: Re: Kickoff scheduling -- Thanks for the intro call yesterday; the team is excited to get the project moving and we will send over the revised timeline shortly."
+  },
+  {
+    "bbox": {
+      "page": 1,
+      "page_height": 792.0,
+      "page_width": 612.0,
+      "x0": 72.0,
+      "x1": 534.0,
+      "y0": 163.94,
+      "y1": 225.94
+    },
+    "confidence": 0.9465,
+    "documentId": "email-thread",
+    "documentTitle": "Email Thread — Contractor Correspondence",
+    "id": "email-thread-p1-l2",
+    "page": 1,
+    "quads": [
+      {
+        "page": 1,
+        "page_height": 792.0,
+        "page_width": 612.0,
+        "x0": 72.0,
+        "x1": 522.0,
+        "y0": 163.94,
+        "y1": 173.94
+      },
+      {
+        "page": 1,
+        "page_height": 792.0,
+        "page_width": 612.0,
+        "x0": 72.0,
+        "x1": 534.0,
+        "y0": 176.94,
+        "y1": 186.94
+      },
+      {
+        "page": 1,
+        "page_height": 792.0,
+        "page_width": 612.0,
+        "x0": 72.0,
+        "x1": 516.0,
+        "y0": 189.94,
+        "y1": 199.94
+      },
+      {
+        "page": 1,
+        "page_height": 792.0,
+        "page_width": 612.0,
+        "x0": 72.0,
+        "x1": 528.0,
+        "y0": 202.94,
+        "y1": 212.94
+      },
+      {
+        "page": 1,
+        "page_height": 792.0,
+        "page_width": 612.0,
+        "x0": 72.0,
+        "x1": 168.0,
+        "y0": 215.94,
+        "y1": 225.94
+      }
+    ],
+    "text": "From: Dana Vance Subject: Re: Section 4.2 / Acme work order -- Just to keep you in the loop, we already handed the integration work off to Acme Labs last week so we could hit the deadline. I know we never got the formal sign-off from your side, but it was faster to just get them started. They're fully up and running now."
+  },
+  {
+    "bbox": {
+      "page": 1,
+      "page_height": 792.0,
+      "page_width": 612.0,
+      "x0": 72.0,
+      "x1": 540.0,
+      "y0": 313.94,
+      "y1": 362.94
+    },
+    "confidence": 0.9507,
+    "documentId": "email-thread",
+    "documentTitle": "Email Thread — Contractor Correspondence",
+    "id": "email-thread-p1-l3",
+    "page": 1,
+    "quads": [
+      {
+        "page": 1,
+        "page_height": 792.0,
+        "page_width": 612.0,
+        "x0": 72.0,
+        "x1": 528.0,
+        "y0": 313.94,
+        "y1": 323.94
+      },
+      {
+        "page": 1,
+        "page_height": 792.0,
+        "page_width": 612.0,
+        "x0": 72.0,
+        "x1": 522.0,
+        "y0": 326.94,
+        "y1": 336.94
+      },
+      {
+        "page": 1,
+        "page_height": 792.0,
+        "page_width": 612.0,
+        "x0": 72.0,
+        "x1": 540.0,
+        "y0": 339.94,
+        "y1": 349.94
+      },
+      {
+        "page": 1,
+        "page_height": 792.0,
+        "page_width": 612.0,
+        "x0": 72.0,
+        "x1": 270.0,
+        "y0": 352.94,
+        "y1": 362.94
+      }
+    ],
+    "text": "From: Dana Vance Subject: Re: Invoice #2231 / payment -- Heads up on Invoice #2231, cash flow is tight this quarter, so we're going to pay this one on a Net-60 basis instead. We didn't sign anything to change the terms, but 60 days is just how it has to be for now."
+  },
+  {
+    "bbox": {
+      "page": 1,
+      "page_height": 792.0,
+      "page_width": 612.0,
+      "x0": 72.0,
       "x1": 540.0,
       "y0": 120.0,
       "y1": 148.0
@@ -568,6 +779,144 @@
       "page_height": 792.0,
       "page_width": 612.0,
       "x0": 72.0,
+      "x1": 540.0,
+      "y0": 123.94,
+      "y1": 159.94
+    },
+    "confidence": 0.946,
+    "documentId": "contract-msa",
+    "documentTitle": "Master Services Agreement",
+    "id": "contract-msa-p2-l1",
+    "page": 2,
+    "quads": [
+      {
+        "page": 2,
+        "page_height": 792.0,
+        "page_width": 612.0,
+        "x0": 72.0,
+        "x1": 522.0,
+        "y0": 123.94,
+        "y1": 133.94
+      },
+      {
+        "page": 2,
+        "page_height": 792.0,
+        "page_width": 612.0,
+        "x0": 72.0,
+        "x1": 540.0,
+        "y0": 136.94,
+        "y1": 146.94
+      },
+      {
+        "page": 2,
+        "page_height": 792.0,
+        "page_width": 612.0,
+        "x0": 72.0,
+        "x1": 162.0,
+        "y0": 149.94,
+        "y1": 159.94
+      }
+    ],
+    "text": "Section 1.1 Definitions. Services means the integration, configuration, and support work described in each Statement of Work executed by the parties under this Agreement."
+  },
+  {
+    "bbox": {
+      "page": 2,
+      "page_height": 792.0,
+      "page_width": 612.0,
+      "x0": 72.0,
+      "x1": 522.0,
+      "y0": 83.94,
+      "y1": 119.94
+    },
+    "confidence": 0.9457,
+    "documentId": "email-thread",
+    "documentTitle": "Email Thread — Contractor Correspondence",
+    "id": "email-thread-p2-l1",
+    "page": 2,
+    "quads": [
+      {
+        "page": 2,
+        "page_height": 792.0,
+        "page_width": 612.0,
+        "x0": 72.0,
+        "x1": 522.0,
+        "y0": 83.94,
+        "y1": 93.94
+      },
+      {
+        "page": 2,
+        "page_height": 792.0,
+        "page_width": 612.0,
+        "x0": 72.0,
+        "x1": 516.0,
+        "y0": 96.94,
+        "y1": 106.94
+      },
+      {
+        "page": 2,
+        "page_height": 792.0,
+        "page_width": 612.0,
+        "x0": 72.0,
+        "x1": 120.0,
+        "y0": 109.94,
+        "y1": 119.94
+      }
+    ],
+    "text": "From: Sam Okafor Subject: Re: Office logistics -- The badge access for your on-site engineers is approved; reception will have the passes ready Monday morning."
+  },
+  {
+    "bbox": {
+      "page": 2,
+      "page_height": 792.0,
+      "page_width": 612.0,
+      "x0": 72.0,
+      "x1": 534.0,
+      "y0": 163.94,
+      "y1": 199.94
+    },
+    "confidence": 0.952,
+    "documentId": "email-thread",
+    "documentTitle": "Email Thread — Contractor Correspondence",
+    "id": "email-thread-p2-l2",
+    "page": 2,
+    "quads": [
+      {
+        "page": 2,
+        "page_height": 792.0,
+        "page_width": 612.0,
+        "x0": 72.0,
+        "x1": 534.0,
+        "y0": 163.94,
+        "y1": 173.94
+      },
+      {
+        "page": 2,
+        "page_height": 792.0,
+        "page_width": 612.0,
+        "x0": 72.0,
+        "x1": 534.0,
+        "y0": 176.94,
+        "y1": 186.94
+      },
+      {
+        "page": 2,
+        "page_height": 792.0,
+        "page_width": 612.0,
+        "x0": 72.0,
+        "x1": 132.0,
+        "y0": 189.94,
+        "y1": 199.94
+      }
+    ],
+    "text": "From: Dana Vance Subject: Re: Status report -- Attached is the rollout status report. Overall the rollout remains on track and a further summary will be circulated on Friday."
+  },
+  {
+    "bbox": {
+      "page": 2,
+      "page_height": 792.0,
+      "page_width": 612.0,
+      "x0": 72.0,
       "x1": 261.54,
       "y0": 40.86,
       "y1": 61.66
@@ -1042,6 +1391,52 @@
       "page_height": 792.0,
       "page_width": 612.0,
       "x0": 72.0,
+      "x1": 540.0,
+      "y0": 123.94,
+      "y1": 159.94
+    },
+    "confidence": 0.9483,
+    "documentId": "contract-msa",
+    "documentTitle": "Master Services Agreement",
+    "id": "contract-msa-p3-l1",
+    "page": 3,
+    "quads": [
+      {
+        "page": 3,
+        "page_height": 792.0,
+        "page_width": 612.0,
+        "x0": 72.0,
+        "x1": 540.0,
+        "y0": 123.94,
+        "y1": 133.94
+      },
+      {
+        "page": 3,
+        "page_height": 792.0,
+        "page_width": 612.0,
+        "x0": 72.0,
+        "x1": 486.0,
+        "y0": 136.94,
+        "y1": 146.94
+      },
+      {
+        "page": 3,
+        "page_height": 792.0,
+        "page_width": 612.0,
+        "x0": 72.0,
+        "x1": 360.0,
+        "y0": 149.94,
+        "y1": 159.94
+      }
+    ],
+    "text": "Section 2.1 Term. This Agreement commences on the Effective Date and continues for an initial term of twelve (12) months, renewing automatically for successive twelve-month terms unless terminated."
+  },
+  {
+    "bbox": {
+      "page": 3,
+      "page_height": 792.0,
+      "page_width": 612.0,
+      "x0": 72.0,
       "x1": 261.54,
       "y0": 40.86,
       "y1": 61.66
@@ -1274,6 +1669,52 @@
       "page_height": 792.0,
       "page_width": 612.0,
       "x0": 72.0,
+      "x1": 534.0,
+      "y0": 123.94,
+      "y1": 159.94
+    },
+    "confidence": 0.9383,
+    "documentId": "contract-msa",
+    "documentTitle": "Master Services Agreement",
+    "id": "contract-msa-p4-l1",
+    "page": 4,
+    "quads": [
+      {
+        "page": 4,
+        "page_height": 792.0,
+        "page_width": 612.0,
+        "x0": 72.0,
+        "x1": 534.0,
+        "y0": 123.94,
+        "y1": 133.94
+      },
+      {
+        "page": 4,
+        "page_height": 792.0,
+        "page_width": 612.0,
+        "x0": 72.0,
+        "x1": 504.0,
+        "y0": 136.94,
+        "y1": 146.94
+      },
+      {
+        "page": 4,
+        "page_height": 792.0,
+        "page_width": 612.0,
+        "x0": 72.0,
+        "x1": 186.0,
+        "y0": 149.94,
+        "y1": 159.94
+      }
+    ],
+    "text": "Section 3.1 Standard of Performance. Contractor shall perform all Services in a professional and workmanlike manner consistent with generally accepted industry standards."
+  },
+  {
+    "bbox": {
+      "page": 4,
+      "page_height": 792.0,
+      "page_width": 612.0,
+      "x0": 72.0,
       "x1": 408.0,
       "y0": 101.94,
       "y1": 111.94
@@ -1491,6 +1932,52 @@
       }
     ],
     "text": "A. I do."
+  },
+  {
+    "bbox": {
+      "page": 5,
+      "page_height": 792.0,
+      "page_width": 612.0,
+      "x0": 72.0,
+      "x1": 534.0,
+      "y0": 123.94,
+      "y1": 159.94
+    },
+    "confidence": 0.9452,
+    "documentId": "contract-msa",
+    "documentTitle": "Master Services Agreement",
+    "id": "contract-msa-p5-l1",
+    "page": 5,
+    "quads": [
+      {
+        "page": 5,
+        "page_height": 792.0,
+        "page_width": 612.0,
+        "x0": 72.0,
+        "x1": 534.0,
+        "y0": 123.94,
+        "y1": 133.94
+      },
+      {
+        "page": 5,
+        "page_height": 792.0,
+        "page_width": 612.0,
+        "x0": 72.0,
+        "x1": 522.0,
+        "y0": 136.94,
+        "y1": 146.94
+      },
+      {
+        "page": 5,
+        "page_height": 792.0,
+        "page_width": 612.0,
+        "x0": 72.0,
+        "x1": 198.0,
+        "y0": 149.94,
+        "y1": 159.94
+      }
+    ],
+    "text": "Section 3.2 Personnel. Contractor shall assign qualified personnel to perform the Services and shall remain responsible for the acts and omissions of all personnel it assigns."
   },
   {
     "bbox": {
@@ -1722,6 +2209,52 @@
       "page_height": 792.0,
       "page_width": 612.0,
       "x0": 72.0,
+      "x1": 528.0,
+      "y0": 123.94,
+      "y1": 159.94
+    },
+    "confidence": 0.961,
+    "documentId": "contract-msa",
+    "documentTitle": "Master Services Agreement",
+    "id": "contract-msa-p6-l1",
+    "page": 6,
+    "quads": [
+      {
+        "page": 6,
+        "page_height": 792.0,
+        "page_width": 612.0,
+        "x0": 72.0,
+        "x1": 528.0,
+        "y0": 123.94,
+        "y1": 133.94
+      },
+      {
+        "page": 6,
+        "page_height": 792.0,
+        "page_width": 612.0,
+        "x0": 72.0,
+        "x1": 522.0,
+        "y0": 136.94,
+        "y1": 146.94
+      },
+      {
+        "page": 6,
+        "page_height": 792.0,
+        "page_width": 612.0,
+        "x0": 72.0,
+        "x1": 132.0,
+        "y0": 149.94,
+        "y1": 159.94
+      }
+    ],
+    "text": "Section 4.1 Performance by Contractor. Contractor shall perform the Services itself using its own employees, except as expressly permitted under Section 4.2 below."
+  },
+  {
+    "bbox": {
+      "page": 6,
+      "page_height": 792.0,
+      "page_width": 612.0,
+      "x0": 72.0,
       "x1": 372.0,
       "y0": 101.94,
       "y1": 111.94
@@ -1939,6 +2472,70 @@
       }
     ],
     "text": "A. Certainly."
+  },
+  {
+    "bbox": {
+      "page": 7,
+      "page_height": 792.0,
+      "page_width": 612.0,
+      "x0": 72.0,
+      "x1": 528.0,
+      "y0": 123.94,
+      "y1": 185.94
+    },
+    "confidence": 0.9431,
+    "documentId": "contract-msa",
+    "documentTitle": "Master Services Agreement",
+    "id": "contract-msa-p7-l1",
+    "page": 7,
+    "quads": [
+      {
+        "page": 7,
+        "page_height": 792.0,
+        "page_width": 612.0,
+        "x0": 72.0,
+        "x1": 486.0,
+        "y0": 123.94,
+        "y1": 133.94
+      },
+      {
+        "page": 7,
+        "page_height": 792.0,
+        "page_width": 612.0,
+        "x0": 72.0,
+        "x1": 504.0,
+        "y0": 136.94,
+        "y1": 146.94
+      },
+      {
+        "page": 7,
+        "page_height": 792.0,
+        "page_width": 612.0,
+        "x0": 72.0,
+        "x1": 528.0,
+        "y0": 149.94,
+        "y1": 159.94
+      },
+      {
+        "page": 7,
+        "page_height": 792.0,
+        "page_width": 612.0,
+        "x0": 72.0,
+        "x1": 504.0,
+        "y0": 162.94,
+        "y1": 172.94
+      },
+      {
+        "page": 7,
+        "page_height": 792.0,
+        "page_width": 612.0,
+        "x0": 72.0,
+        "x1": 132.0,
+        "y0": 175.94,
+        "y1": 185.94
+      }
+    ],
+    "text": "Section 4.2 Subcontracting. Contractor shall not delegate, assign, or subcontract any of the Services, in whole or in part, to any third party without the prior written consent of Client. Any purported subcontracting in violation of this Section 4.2 shall constitute a material breach of this Agreement."
   },
   {
     "bbox": {
@@ -2170,6 +2767,52 @@
       "page_height": 792.0,
       "page_width": 612.0,
       "x0": 72.0,
+      "x1": 534.0,
+      "y0": 123.94,
+      "y1": 159.94
+    },
+    "confidence": 0.9456,
+    "documentId": "contract-msa",
+    "documentTitle": "Master Services Agreement",
+    "id": "contract-msa-p8-l1",
+    "page": 8,
+    "quads": [
+      {
+        "page": 8,
+        "page_height": 792.0,
+        "page_width": 612.0,
+        "x0": 72.0,
+        "x1": 474.0,
+        "y0": 123.94,
+        "y1": 133.94
+      },
+      {
+        "page": 8,
+        "page_height": 792.0,
+        "page_width": 612.0,
+        "x0": 72.0,
+        "x1": 534.0,
+        "y0": 136.94,
+        "y1": 146.94
+      },
+      {
+        "page": 8,
+        "page_height": 792.0,
+        "page_width": 612.0,
+        "x0": 72.0,
+        "x1": 402.0,
+        "y0": 149.94,
+        "y1": 159.94
+      }
+    ],
+    "text": "Section 5.1 Confidentiality. Each party shall hold the Confidential Information of the other party in strict confidence and shall not disclose it to any third party without prior written authorization."
+  },
+  {
+    "bbox": {
+      "page": 8,
+      "page_height": 792.0,
+      "page_width": 612.0,
+      "x0": 72.0,
       "x1": 540.0,
       "y0": 211.94,
       "y1": 234.94
@@ -2200,6 +2843,52 @@
       }
     ],
     "text": "Section 9.1 Termination. Either party may terminate this Agreement upon thirty days written notice delivered to the registered address of the other party."
+  },
+  {
+    "bbox": {
+      "page": 9,
+      "page_height": 792.0,
+      "page_width": 612.0,
+      "x0": 72.0,
+      "x1": 540.0,
+      "y0": 123.94,
+      "y1": 159.94
+    },
+    "confidence": 0.9499,
+    "documentId": "contract-msa",
+    "documentTitle": "Master Services Agreement",
+    "id": "contract-msa-p9-l1",
+    "page": 9,
+    "quads": [
+      {
+        "page": 9,
+        "page_height": 792.0,
+        "page_width": 612.0,
+        "x0": 72.0,
+        "x1": 528.0,
+        "y0": 123.94,
+        "y1": 133.94
+      },
+      {
+        "page": 9,
+        "page_height": 792.0,
+        "page_width": 612.0,
+        "x0": 72.0,
+        "x1": 540.0,
+        "y0": 136.94,
+        "y1": 146.94
+      },
+      {
+        "page": 9,
+        "page_height": 792.0,
+        "page_width": 612.0,
+        "x0": 72.0,
+        "x1": 348.0,
+        "y0": 149.94,
+        "y1": 159.94
+      }
+    ],
+    "text": "Section 6.1 Payment. Client shall pay each undisputed invoice in full within thirty (30) days of receipt (Net-30). Payment terms may not be modified except by a written amendment signed by both parties."
   },
   {
     "bbox": {
@@ -2424,6 +3113,52 @@
       }
     ],
     "text": "Q. Please state your full name for the record."
+  },
+  {
+    "bbox": {
+      "page": 10,
+      "page_height": 792.0,
+      "page_width": 612.0,
+      "x0": 72.0,
+      "x1": 528.0,
+      "y0": 123.94,
+      "y1": 159.94
+    },
+    "confidence": 0.9464,
+    "documentId": "contract-msa",
+    "documentTitle": "Master Services Agreement",
+    "id": "contract-msa-p10-l1",
+    "page": 10,
+    "quads": [
+      {
+        "page": 10,
+        "page_height": 792.0,
+        "page_width": 612.0,
+        "x0": 72.0,
+        "x1": 528.0,
+        "y0": 123.94,
+        "y1": 133.94
+      },
+      {
+        "page": 10,
+        "page_height": 792.0,
+        "page_width": 612.0,
+        "x0": 72.0,
+        "x1": 516.0,
+        "y0": 136.94,
+        "y1": 146.94
+      },
+      {
+        "page": 10,
+        "page_height": 792.0,
+        "page_width": 612.0,
+        "x0": 72.0,
+        "x1": 240.0,
+        "y0": 149.94,
+        "y1": 159.94
+      }
+    ],
+    "text": "Section 7.1 Governing Law. This Agreement shall be governed by and construed in accordance with the laws of the State of Delaware without regard to its conflict-of-laws principles."
   },
   {
     "bbox": {

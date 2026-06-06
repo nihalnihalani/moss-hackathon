@@ -336,8 +336,12 @@ def _build_sample_fixture_chunks(include_scanned: bool = True) -> list[ParsedChu
     with tempfile.TemporaryDirectory() as tmp:
         dep_pdf = Path(tmp) / "deposition.pdf"
         log_pdf = Path(tmp) / "visitor-log.pdf"
+        contract_pdf = Path(tmp) / "contract-msa.pdf"
+        email_pdf = Path(tmp) / "email-thread.pdf"
         msp.make_pdf(dep_pdf)
         msp.make_visitor_log_pdf(log_pdf)
+        msp.make_contract_pdf(contract_pdf)
+        msp.make_email_thread_pdf(email_pdf)
         # Deposition keeps the historical "pdf" id prefix so pdf-p12-l1 etc.
         # survive for the existing demo ranking + eval gold ids.
         chunks += PdfTextParser(
@@ -351,6 +355,21 @@ def _build_sample_fixture_chunks(include_scanned: bool = True) -> list[ParsedChu
             id_prefix="exhibit-visitor-log",
             document_id=msp.VISITOR_LOG_DOC_ID,
             document_title=msp.VISITOR_LOG_DOC_TITLE,
+        ).parse()
+        # Contract-vs-email demo (feat: multi-doc cross-exam). Chunk-id prefixes
+        # match the documentId so cross-exam pairs land on contract-msa-pNN-lN /
+        # email-thread-pNN-lN, which the backend + frontend target.
+        chunks += PdfTextParser(
+            contract_pdf,
+            id_prefix="contract-msa",
+            document_id=msp.CONTRACT_DOC_ID,
+            document_title=msp.CONTRACT_DOC_TITLE,
+        ).parse()
+        chunks += PdfTextParser(
+            email_pdf,
+            id_prefix="email-thread",
+            document_id=msp.EMAIL_DOC_ID,
+            document_title=msp.EMAIL_DOC_TITLE,
         ).parse()
     if include_scanned:
         chunks += ScannedFallbackParser().parse()

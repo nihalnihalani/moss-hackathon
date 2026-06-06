@@ -76,6 +76,24 @@ _CONTRADICTION_CUES = frozenset(
         "differs",
         "different",
         "versus",
+        # Obligation / term-conflict framings (contract vs. email): a question
+        # asking whether a party BREACHED a clause, whether two docs are
+        # CONSISTENT, or VIOLATED an obligation is contradiction-seeking too.
+        "breach",
+        "breached",
+        "breaching",
+        "violate",
+        "violates",
+        "violated",
+        "violation",
+        "consistent",
+        "consistency",
+        "match",
+        "matches",
+        "align",
+        "aligns",
+        "agree",
+        "agrees",
     }
 )
 
@@ -112,9 +130,10 @@ _MIN_SUBJECT_OVERLAP = 2
 
 # How many candidates to fetch per hop for CONTRADICTION DETECTION (independent
 # of how many are published). Wide enough that an independent corroborating /
-# contradicting exhibit that ranks below the published top_k is still in the
+# contradicting exhibit (or a contract clause / email admission in a large
+# multi-document corpus) that ranks below the published top_k is still in the
 # pool the structural detector reasons over.
-_CONTRADICTION_POOL_K = 12
+_CONTRADICTION_POOL_K = 20
 
 # Spelled-out / numeric day words we normalise so "the 14th", "the fourteenth"
 # and "night of the 14th" collapse to the same temporal anchor.
@@ -271,6 +290,267 @@ def _locations_incompatible(left_text: str, right_text: str) -> bool:
     # Otherwise: the two place the subject in different sets of location classes
     # for the same time — mutually exclusive presence (e.g. warehouse vs. home).
     return left_classes != right_classes
+
+
+# --------------------------------------------------------------------------- #
+# Generalized conflict extraction: shared ANCHOR + opposing obligation OR a    #
+# different numeric term for the same governed subject (contract vs. email).   #
+# --------------------------------------------------------------------------- #
+# A clause reference: "§4.2", "Section 4.2", "Section 4", "Sec. 6" — normalised
+# to a canonical anchor token ("clause:4.2") so the contract's "§4.2" and the
+# email's "Section 4.2" / "the subcontracting clause" can be matched.
+_CLAUSE_RE = re.compile(r"(?:§|\bsec(?:tion|\.)?\b)\s*(\d+(?:\.\d+)?)", re.IGNORECASE)
+
+# A "Net-N" payment term ("Net-30", "Net 60", "net30") — normalised to
+# "term:net<N>" so the contract's Net-30 and the email's Net-60 share the
+# *subject* "net payment term" while asserting DIFFERENT values.
+_NET_RE = re.compile(r"\bnet[\s-]?(\d{1,3})\b", re.IGNORECASE)
+
+# An invoice reference ("Invoice #2231", "invoice 2231", "inv. 2231") —
+# normalised to "invoice:2231" so the two sides anchor on the same invoice.
+_INVOICE_RE = re.compile(r"\binv(?:oice)?\.?\s*#?\s*(\d{2,})\b", re.IGNORECASE)
+
+# Salient named entities: capitalised words/sequences (e.g. "Acme", "Acme
+# Labs", "Reyes"). Used as a shared anchor when a clause/invoice token is
+# absent but both sides name the same party/subject. Drops sentence-initial
+# noise via the stopword/discourse filters at comparison time.
+_NAMED_ENTITY_RE = re.compile(r"\b([A-Z][a-z]{2,}(?:\s+[A-Z][a-z]{2,})*)\b")
+
+# Generic, non-salient capitalised words that begin sentences or frame
+# discourse — never treated as a shared named-entity anchor on their own.
+_ENTITY_STOP = frozenset(
+    {
+        "the", "a", "an", "we", "i", "he", "she", "they", "this", "that",
+        "contractor", "client", "company", "section", "exhibit", "invoice",
+        "net", "agreement", "contract", "email", "subject", "from", "date",
+        "please", "regards", "thanks", "hi", "hello", "dear", "best",
+        "without", "instead", "anyway", "however", "note", "per", "and", "or",
+        "shall", "must", "may", "prior", "written", "consent", "amendment",
+        "material", "breach", "payment", "terms", "days", "day", "basis",
+    }
+)
+
+# Cues that a passage states a PROHIBITION or a REQUIREMENT — the normative /
+# governing side of an obligation conflict (typically the contract clause).
+_PROHIBITION_CUES: tuple[str, ...] = (
+    "shall not",
+    "must not",
+    "may not",
+    "shall refrain",
+    "is prohibited",
+    "are prohibited",
+    "not be modified except",
+    "only by written amendment",
+    "only by a written amendment",
+    "except by a written amendment",
+    "except by written amendment",
+)
+_REQUIREMENT_CUES: tuple[str, ...] = (
+    "prior written consent",
+    "prior written approval",
+    "written sign-off",
+    "written sign off",
+    "written amendment",
+    "written consent",
+    "written approval",
+    "must obtain",
+    "shall obtain",
+    "requires the consent",
+    "subject to the consent",
+)
+
+# Cues that a passage ADMITS doing the prohibited thing / acting WITHOUT the
+# required step — the admission side (typically the email).
+_ADMISSION_CUES: tuple[str, ...] = (
+    "we already",
+    "already handed",
+    "already gave",
+    "already sent",
+    "already started",
+    "went ahead",
+    "without sign-off",
+    "without sign off",
+    "without the sign-off",
+    "without consent",
+    "without written",
+    "without approval",
+    "without getting",
+    "never got",
+    "never obtained",
+    "never received",
+    "didn't get",
+    "didn't sign",
+    "did not sign",
+    "didn't obtain",
+    "not sign anything",
+    "anything to change",
+    "anyway",
+    "instead",
+    "going to pay",
+    "we're going to",
+    "handed the",
+    "handed off",
+    "subcontracted",
+    "subbed out",
+)
+
+# A defined-term / requirement anchor that an admission can breach even when no
+# clause number is shared. Maps a contract-side keyword to the email-side cue
+# family it conflicts with, so "prior written consent ... subcontract" (contract)
+# collides with "handed ... to Acme ... never got the sign-off" (email).
+_SUBCONTRACT_TERMS: frozenset[str] = frozenset(
+    {"subcontract", "subcontracting", "subcontractor", "subcontracted",
+     "assign", "delegate", "outsource", "hand", "handed", "subbed"}
+)
+
+
+def _clause_anchors(text: str) -> frozenset[str]:
+    """Clause-reference anchors in ``text`` (``§4.2`` / ``Section 4.2``)."""
+    return frozenset(f"clause:{m.group(1)}" for m in _CLAUSE_RE.finditer(text))
+
+
+def _invoice_anchors(text: str) -> frozenset[str]:
+    """Invoice-reference anchors in ``text`` (``Invoice #2231``)."""
+    return frozenset(f"invoice:{m.group(1)}" for m in _INVOICE_RE.finditer(text))
+
+
+def _net_terms(text: str) -> frozenset[int]:
+    """The distinct ``Net-N`` day values asserted in ``text`` (e.g. ``{30}``)."""
+    return frozenset(int(m.group(1)) for m in _NET_RE.finditer(text))
+
+
+def _named_entities(text: str) -> frozenset[str]:
+    """Salient capitalised named entities in ``text`` (e.g. ``acme``).
+
+    Lower-cased for matching; sentence-initial / discourse-framing capitalised
+    words are dropped via ``_ENTITY_STOP`` so only genuine party/subject names
+    (``Acme``, ``Reyes``) survive as a shared anchor.
+    """
+    out: set[str] = set()
+    for m in _NAMED_ENTITY_RE.finditer(text):
+        for word in m.group(1).split():
+            low = word.lower()
+            if low not in _ENTITY_STOP and len(low) >= 3:
+                out.add(low)
+    return frozenset(out)
+
+
+def _shared_anchors(left_text: str, right_text: str) -> frozenset[str]:
+    """Anchors common to BOTH passages — the thing the two are both *about*.
+
+    A real cross-document conflict turns on a SHARED anchor: the same clause
+    (``§4.2``/``Section 4.2``), the same invoice (``Invoice #2231``), the same
+    governed subject (a shared ``Net-`` payment term), or a shared salient named
+    entity (``Acme``). Returns the intersection (empty when they share none).
+    """
+    left = (
+        _clause_anchors(left_text)
+        | _invoice_anchors(left_text)
+        | _named_entities(left_text)
+        | frozenset(
+            {"term:net"} if _net_terms(left_text) else set()
+        )
+        | frozenset(
+            {"term:subcontract"}
+            if set(_TOKEN_RE.findall(left_text.lower())) & _SUBCONTRACT_TERMS
+            else set()
+        )
+    )
+    right = (
+        _clause_anchors(right_text)
+        | _invoice_anchors(right_text)
+        | _named_entities(right_text)
+        | frozenset(
+            {"term:net"} if _net_terms(right_text) else set()
+        )
+        | frozenset(
+            {"term:subcontract"}
+            if set(_TOKEN_RE.findall(right_text.lower())) & _SUBCONTRACT_TERMS
+            else set()
+        )
+    )
+    return left & right
+
+
+def _has_any(text: str, cues: tuple[str, ...]) -> bool:
+    """Whether ``text`` (case-insensitive) contains any of ``cues``."""
+    lowered = text.lower()
+    return any(cue in lowered for cue in cues)
+
+
+def _states_obligation(text: str) -> bool:
+    """Whether ``text`` states a PROHIBITION or a REQUIREMENT (normative side)."""
+    return _has_any(text, _PROHIBITION_CUES) or _has_any(text, _REQUIREMENT_CUES)
+
+
+def _admits_violation(text: str) -> bool:
+    """Whether ``text`` ADMITS doing the prohibited / unauthorised act."""
+    return _has_any(text, _ADMISSION_CUES)
+
+
+def _obligation_conflict(left_text: str, right_text: str) -> bool:
+    """Whether one passage states an obligation the OTHER admits violating.
+
+    Direction-agnostic: fires when one side carries a prohibition/requirement
+    cue (the governing clause) and the other carries an admission cue (the email
+    acting without consent / doing the prohibited thing). Requires a shared
+    anchor (checked by the caller) so it never fires on unrelated obligations.
+    """
+    left_obl, right_obl = _states_obligation(left_text), _states_obligation(right_text)
+    left_adm, right_adm = _admits_violation(left_text), _admits_violation(right_text)
+    return (left_obl and right_adm) or (right_obl and left_adm)
+
+
+def _numeric_term_conflict(left_text: str, right_text: str) -> bool:
+    """Whether the two passages assert DIFFERENT values for the same term.
+
+    Currently the ``Net-N`` payment term: both name a ``Net-`` value and the
+    value sets differ (``Net-30`` vs. ``Net-60``). Two passages naming the SAME
+    ``Net-`` value agree (no conflict). General over the numeric-term family;
+    the caller still requires a shared anchor.
+    """
+    left_net, right_net = _net_terms(left_text), _net_terms(right_text)
+    if left_net and right_net and left_net != right_net:
+        return True
+    return False
+
+
+def _claims_conflict(left_text: str, right_text: str) -> bool:
+    """Whether two passages make conflicting claims about a shared anchor.
+
+    The generalized (non-location) cross-document conflict test. Returns ``True``
+    when the two passages share an anchor (clause #, invoice #, ``Net-`` term, or
+    a salient named entity) AND either
+
+    * assert OPPOSING obligations — one states a prohibition/requirement, the
+      other admits doing the prohibited thing / acting without the required step
+      (:func:`_obligation_conflict`), or
+    * assert DIFFERENT numeric values for the same governed term — e.g. ``Net-30``
+      vs. ``Net-60`` (:func:`_numeric_term_conflict`).
+
+    A shared anchor with no opposing claim (mere corroboration) is NOT a
+    conflict.
+    """
+    if not _shared_anchors(left_text, right_text):
+        return False
+    return _obligation_conflict(left_text, right_text) or _numeric_term_conflict(
+        left_text, right_text
+    )
+
+
+def _is_governing_clause(text: str) -> bool:
+    """Whether ``text`` is the NORMATIVE / governing statement of a conflict.
+
+    The contract clause that states the prohibition/requirement or defines the
+    term value — the PRIMARY of an obligation/numeric conflict (the email
+    admission is the cross-doc counter). True when the passage states an
+    obligation and does NOT itself read as an admission, or when it defines a
+    numeric term inside an amendment-locking clause ("not be modified except by
+    a written amendment").
+    """
+    states = _states_obligation(text)
+    admits = _admits_violation(text)
+    return states and not admits
 
 
 # A decomposition hook: takes the question, returns a list of sub-queries (or
@@ -533,48 +813,73 @@ def contradiction_pair(
         in_exam_doc = 0 if (exam_doc is not None and c.documentId == exam_doc) else 1
         return (anchorable, in_exam_doc, -c.score)
 
-    # (primary_rank, separation, cross_document, combined_score,
-    #  primary_id, other_id, cross_bool).
+    def clause_rank(c: Citation) -> tuple[int, int, float]:
+        """How good an anchor ``c`` is for an OBLIGATION/NUMERIC conflict.
+
+        Mirrors :func:`presence_rank` but the "clean anchor" is the GOVERNING
+        clause — the contract statement that prohibits/requires or defines the
+        term value — rather than a presence claim. The email ADMISSION (acting
+        without consent, "going to pay Net-60", "didn't sign anything") is never
+        the primary: it can only be the counter. Ties prefer the
+        under-examination (largest) document, then the higher score.
+        """
+        governing = _is_governing_clause(c.chunk.text) and not c.scanned
+        anchorable = 0 if governing else 1
+        in_exam_doc = 0 if (exam_doc is not None and c.documentId == exam_doc) else 1
+        return (anchorable, in_exam_doc, -c.score)
+
+    # (kind, primary_rank, separation, cross_document, combined_score,
+    #  primary_id, other_id, cross_bool). ``kind`` orders conflict CLASSES: a
+    # location/time conflict (0) is preferred over an obligation/numeric one (1)
+    # only as a final, deterministic tie-break between otherwise-equal pairs, so
+    # the existing deposition demo is unchanged while the new classes still fire.
     candidates: list[
-        tuple[tuple[int, int, float], int, int, float, str, str, bool]
+        tuple[int, tuple[int, int, float], int, int, float, str, str, bool]
     ] = []
     for i, left in enumerate(eligible):
-        left_tokens = set(_content_tokens(left.chunk.text))
-        left_times = _temporal_anchors(left.chunk.text)
+        left_text = left.chunk.text
+        left_tokens = set(_content_tokens(left_text))
+        left_times = _temporal_anchors(left_text)
         for right in eligible[i + 1 :]:
+            right_text = right.chunk.text
             same_place = (
                 left.documentId == right.documentId
                 and left.chunk.page == right.chunk.page
             )
             if same_place:
                 continue
-            right_tokens = set(_content_tokens(right.chunk.text))
-            if len(left_tokens & right_tokens) < _MIN_SUBJECT_OVERLAP:
+
+            # PATH A — LOCATION/TIME conflict: shared subject + shared temporal
+            # anchor + incompatible locations. PRIMARY = the clean presence claim
+            # under examination; COUNTER = the separating evidence.
+            location_pair = (
+                len(left_tokens & set(_content_tokens(right_text)))
+                >= _MIN_SUBJECT_OVERLAP
+                and bool(left_times & _temporal_anchors(right_text))
+                and _locations_incompatible(left_text, right_text)
+            )
+            # PATH B — OBLIGATION / NUMERIC-TERM conflict: a shared anchor (clause
+            # #, invoice #, Net- term, named entity) + opposing obligations OR a
+            # different numeric value for the same governed term. PRIMARY = the
+            # governing contract clause; COUNTER = the email admission.
+            claim_pair = _claims_conflict(left_text, right_text)
+
+            if not (location_pair or claim_pair):
                 continue
-            # (b) shared temporal anchor — same day under discussion.
-            if not (left_times & _temporal_anchors(right.chunk.text)):
-                continue
-            # (c) incompatible locations for the subject at that time.
-            if not _locations_incompatible(left.chunk.text, right.chunk.text):
-                continue
-            # PRIMARY = the better anchor of the two (the presence claim under
-            # examination); COUNTER = the other (the contradicting evidence).
-            # presence_rank deterministically prefers a non-scanned,
-            # under-examination, non-separating citation; ties on chunk id.
-            if (presence_rank(left), left.chunk.id) <= (
-                presence_rank(right),
-                right.chunk.id,
-            ):
+
+            rank_fn = presence_rank if location_pair else clause_rank
+            # PRIMARY = the better anchor of the two; COUNTER = the other.
+            if (rank_fn(left), left.chunk.id) <= (rank_fn(right), right.chunk.id):
                 primary, other = left, right
             else:
                 primary, other = right, left
-            sep = _has_separation_cue(left.chunk.text) or _has_separation_cue(
-                right.chunk.text
-            )
+            sep = _has_separation_cue(left_text) or _has_separation_cue(right_text)
             cross = left.documentId != right.documentId
+            kind = 0 if location_pair else 1
             candidates.append(
                 (
-                    presence_rank(primary),
+                    kind,
+                    rank_fn(primary),
                     0 if sep else 1,
                     0 if cross else 1,
                     left.score + right.score,
@@ -585,11 +890,16 @@ def contradiction_pair(
             )
     if not candidates:
         return None
+    # Selection priority (smaller is better): the best-anchored pair first
+    # (c[1] primary_rank), then an explicit separation cue (c[2]), then a
+    # cross-document conflict over a same-doc one (c[3]), then conflict CLASS as
+    # a final tie-break (c[0] kind: location before obligation), then the highest
+    # combined score (-c[4]); ties break on the chunk ids (c[5], c[6]).
     best = min(
         candidates,
-        key=lambda c: (c[0], c[1], c[2], -c[3], c[4], c[5]),
+        key=lambda c: (c[1], c[2], c[3], c[0], -c[4], c[5], c[6]),
     )
-    return best[4], best[5], best[6]
+    return best[5], best[6], best[7]
 
 
 class MultiHopRetriever:

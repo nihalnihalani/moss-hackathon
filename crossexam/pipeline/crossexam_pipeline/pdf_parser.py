@@ -45,6 +45,12 @@ _CHROME_PREFIXES = (
     "DEPOSITION OF",
     "Vance v. Meridian",
     "Page ",
+    # Contract (contract-msa) running header + party caption.
+    "MASTER SERVICES AGREEMENT",
+    "Meridian Logistics, Inc. (Client)",
+    # Email thread (email-thread) running header + caption.
+    "EMAIL THREAD - CONTRACTOR CORRESPONDENCE",
+    "Meridian Logistics, Inc. and Vance Integration Partners",
 )
 
 

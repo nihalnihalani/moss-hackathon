@@ -503,6 +503,334 @@ def make_visitor_log_pdf(path: Path) -> Path:
     return path
 
 
+# --- Third document: a Master Services Agreement (feat: contract vs email) ---
+# A short multi-page MSA whose §4.2 (p.7) and §6.1 (p.9) carry the obligations
+# the email thread later violates. ``baseline_y_bottom`` is the reportlab
+# (bottom-left) baseline of the clause's FIRST line; wrapped continuation lines
+# flow downward with PARAGRAPH_LEADING so the parser regroups them into ONE
+# chunk.
+CONTRACT_DOC_ID = "contract-msa"
+CONTRACT_DOC_TITLE = "Master Services Agreement"
+CONTRACT_ASSET_PATH = _CROSSEXAM_ROOT / "assets" / "contract-msa.pdf"
+CONTRACT_FRONTEND_PATH = _CROSSEXAM_ROOT / "frontend" / "public" / "contract-msa.pdf"
+_CONTRACT_TOTAL_PAGES = 10
+
+_CONTRACT_HEADER = "MASTER SERVICES AGREEMENT"
+_CONTRACT_CASE = "Meridian Logistics, Inc. (Client) and Vance Integration Partners (Contractor)"
+
+# Per-page clause text. Each entry: (page, baseline_y_bottom, text). The two
+# demo-critical clauses are §4.2 Subcontracting (p.7) and §6.1 Payment (p.9);
+# the remaining clauses are realistic filler so the document reads like an MSA.
+_CONTRACT_LINES: tuple[tuple[int, float, str], ...] = (
+    (
+        1,
+        660.0,
+        (
+            "This Master Services Agreement (the Agreement) is entered into by and "
+            "between Meridian Logistics, Inc. (Client) and Vance Integration "
+            "Partners (Contractor) and governs all Services performed hereunder."
+        ),
+    ),
+    (
+        2,
+        660.0,
+        (
+            "Section 1.1 Definitions. Services means the integration, configuration, "
+            "and support work described in each Statement of Work executed by the "
+            "parties under this Agreement."
+        ),
+    ),
+    (
+        3,
+        660.0,
+        (
+            "Section 2.1 Term. This Agreement commences on the Effective Date and "
+            "continues for an initial term of twelve (12) months, renewing "
+            "automatically for successive twelve-month terms unless terminated."
+        ),
+    ),
+    (
+        4,
+        660.0,
+        (
+            "Section 3.1 Standard of Performance. Contractor shall perform all "
+            "Services in a professional and workmanlike manner consistent with "
+            "generally accepted industry standards."
+        ),
+    ),
+    (
+        5,
+        660.0,
+        (
+            "Section 3.2 Personnel. Contractor shall assign qualified personnel to "
+            "perform the Services and shall remain responsible for the acts and "
+            "omissions of all personnel it assigns."
+        ),
+    ),
+    (
+        6,
+        660.0,
+        (
+            "Section 4.1 Performance by Contractor. Contractor shall perform the "
+            "Services itself using its own employees, except as expressly permitted "
+            "under Section 4.2 below."
+        ),
+    ),
+    # ---- Demo-critical clause #1: §4.2 Subcontracting (page 7) ----
+    (
+        7,
+        660.0,
+        (
+            "Section 4.2 Subcontracting. Contractor shall not delegate, assign, or "
+            "subcontract any of the Services, in whole or in part, to any third "
+            "party without the prior written consent of Client. Any purported "
+            "subcontracting in violation of this Section 4.2 shall constitute a "
+            "material breach of this Agreement."
+        ),
+    ),
+    (
+        8,
+        660.0,
+        (
+            "Section 5.1 Confidentiality. Each party shall hold the Confidential "
+            "Information of the other party in strict confidence and shall not "
+            "disclose it to any third party without prior written authorization."
+        ),
+    ),
+    # ---- Demo-critical clause #2: §6.1 Payment / Net-30 (page 9) ----
+    (
+        9,
+        660.0,
+        (
+            "Section 6.1 Payment. Client shall pay each undisputed invoice in full "
+            "within thirty (30) days of receipt (Net-30). Payment terms may not be "
+            "modified except by a written amendment signed by both parties."
+        ),
+    ),
+    (
+        10,
+        660.0,
+        (
+            "Section 7.1 Governing Law. This Agreement shall be governed by and "
+            "construed in accordance with the laws of the State of Delaware without "
+            "regard to its conflict-of-laws principles."
+        ),
+    ),
+)
+
+# Page -> chunk_id of the demo-critical clauses (printed by ``main``).
+CONTRACT_ANCHOR_PAGES = {"sec-4-2": 7, "sec-6-1": 9}
+
+
+def _draw_contract_header(canvas: object, page_no: int) -> None:
+    """Draw the MSA running header, party caption, and page footer."""
+    canvas.setFont("Helvetica-Bold", 9)  # type: ignore[attr-defined]
+    canvas.drawString(LEFT_MARGIN, PAGE_HEIGHT - 48.0, _CONTRACT_HEADER)  # type: ignore[attr-defined]
+    canvas.setFont("Helvetica", 8)  # type: ignore[attr-defined]
+    canvas.drawString(LEFT_MARGIN, PAGE_HEIGHT - 60.0, _CONTRACT_CASE)  # type: ignore[attr-defined]
+    canvas.drawRightString(  # type: ignore[attr-defined]
+        PAGE_WIDTH - RIGHT_MARGIN, 36.0, f"Page {page_no} of {_CONTRACT_TOTAL_PAGES}"
+    )
+    canvas.setLineWidth(0.5)  # type: ignore[attr-defined]
+    canvas.line(  # type: ignore[attr-defined]
+        LEFT_MARGIN, PAGE_HEIGHT - 66.0, PAGE_WIDTH - RIGHT_MARGIN, PAGE_HEIGHT - 66.0
+    )
+
+
+def make_contract_pdf(path: Path) -> Path:
+    """Render the synthetic Master Services Agreement to ``path``.
+
+    A short multi-page MSA whose §4.2 (p.7, no subcontracting without written
+    consent) and §6.1 (p.9, Net-30, no change without a signed amendment) carry
+    the obligations the email thread later violates.
+
+    Args:
+        path: Output PDF path. Parent directories are created.
+
+    Returns:
+        The ``path`` written.
+
+    Raises:
+        ImportError: If ``reportlab`` is not installed.
+    """
+    try:
+        from reportlab.pdfgen import canvas as _canvas
+    except ImportError as exc:  # pragma: no cover - dev-only dependency
+        raise ImportError(
+            "reportlab is required to generate the sample PDF. "
+            "Install it with `pip install reportlab`."
+        ) from exc
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    c = _canvas.Canvas(str(path), pagesize=(PAGE_WIDTH, PAGE_HEIGHT))
+    c.setTitle("Master Services Agreement (synthetic)")
+    c.setAuthor("CrossExam pipeline")
+    c.setSubject("Synthetic contract for the CrossExam contract-vs-email demo")
+
+    by_page: dict[int, list[tuple[float, str]]] = {
+        p: [] for p in range(1, _CONTRACT_TOTAL_PAGES + 1)
+    }
+    for page, y, text in _CONTRACT_LINES:
+        by_page[page].append((y, text))
+
+    for page_no in range(1, _CONTRACT_TOTAL_PAGES + 1):
+        _draw_contract_header(c, page_no)
+        c.setFont(FONT_NAME, FONT_SIZE)
+        for y, text in by_page[page_no]:
+            cur_y = y
+            for physical in _wrap(text):
+                c.drawString(LEFT_MARGIN, cur_y, physical)
+                cur_y -= PARAGRAPH_LEADING
+        c.showPage()
+
+    c.save()
+    logger.info("Wrote %d-page contract PDF -> %s", _CONTRACT_TOTAL_PAGES, path)
+    return path
+
+
+# --- Fourth document: the contractor email thread (feat: contract vs email) --
+# A short email thread whose page-1 messages ADMIT the two breaches: handing the
+# integration work to Acme Labs without sign-off (violates §4.2) and unilaterally
+# paying Invoice #2231 Net-60 (violates §6.1). The benign filler emails carry no
+# anchor tokens so the cross-doc detector keys only on the two real conflicts.
+EMAIL_DOC_ID = "email-thread"
+EMAIL_DOC_TITLE = "Email Thread — Contractor Correspondence"
+EMAIL_ASSET_PATH = _CROSSEXAM_ROOT / "assets" / "email-thread.pdf"
+EMAIL_FRONTEND_PATH = _CROSSEXAM_ROOT / "frontend" / "public" / "email-thread.pdf"
+_EMAIL_TOTAL_PAGES = 2
+
+_EMAIL_HEADER = "EMAIL THREAD - CONTRACTOR CORRESPONDENCE"
+_EMAIL_CASE = "Meridian Logistics, Inc. and Vance Integration Partners"
+
+# Each entry: (page, baseline_y_bottom, text). A "From/Subject" header line and
+# the message body are drawn as separate paragraphs (LARGE gap between messages,
+# tight leading within a wrapped body) so each message body parses to its own
+# chunk. The two demo-critical admissions are on page 1.
+_EMAIL_LINES: tuple[tuple[int, float, str], ...] = (
+    # Benign filler email (no anchor tokens).
+    (
+        1,
+        700.0,
+        (
+            "From: Dana Vance  Subject: Re: Kickoff scheduling -- Thanks for the "
+            "intro call yesterday; the team is excited to get the project moving "
+            "and we will send over the revised timeline shortly."
+        ),
+    ),
+    # Demo-critical admission #1: subcontracting to Acme without sign-off (§4.2).
+    (
+        1,
+        620.0,
+        (
+            "From: Dana Vance  Subject: Re: Section 4.2 / Acme work order -- Just "
+            "to keep you in the loop, we already handed the integration work off "
+            "to Acme Labs last week so we could hit the deadline. I know we never "
+            "got the formal sign-off from your side, but it was faster to just get "
+            "them started. They're fully up and running now."
+        ),
+    ),
+    # Demo-critical admission #2: unilateral Net-60 on Invoice #2231 (§6.1).
+    (
+        1,
+        470.0,
+        (
+            "From: Dana Vance  Subject: Re: Invoice #2231 / payment -- Heads up on "
+            "Invoice #2231, cash flow is tight this quarter, so we're going to "
+            "pay this one on a Net-60 basis instead. We didn't sign anything to "
+            "change the terms, but 60 days is just how it has to be for now."
+        ),
+    ),
+    # Benign filler email (no anchor tokens).
+    (
+        2,
+        700.0,
+        (
+            "From: Sam Okafor  Subject: Re: Office logistics -- The badge access "
+            "for your on-site engineers is approved; reception will have the "
+            "passes ready Monday morning."
+        ),
+    ),
+    (
+        2,
+        620.0,
+        (
+            "From: Dana Vance  Subject: Re: Status report -- Attached is this "
+            "week's status report. Overall the rollout is on track and we will "
+            "circulate the next update on Friday."
+        ),
+    ),
+)
+
+# Page -> chunk_id of the demo-critical admissions (printed by ``main``).
+EMAIL_ANCHOR_PAGES = {"acme-subcontract": 1, "net60-invoice": 1}
+
+
+def _draw_email_header(canvas: object, page_no: int) -> None:
+    """Draw the email-thread running header, caption, and page footer."""
+    canvas.setFont("Helvetica-Bold", 9)  # type: ignore[attr-defined]
+    canvas.drawString(LEFT_MARGIN, PAGE_HEIGHT - 48.0, _EMAIL_HEADER)  # type: ignore[attr-defined]
+    canvas.setFont("Helvetica", 8)  # type: ignore[attr-defined]
+    canvas.drawString(LEFT_MARGIN, PAGE_HEIGHT - 60.0, _EMAIL_CASE)  # type: ignore[attr-defined]
+    canvas.drawRightString(  # type: ignore[attr-defined]
+        PAGE_WIDTH - RIGHT_MARGIN, 36.0, f"Page {page_no} of {_EMAIL_TOTAL_PAGES}"
+    )
+    canvas.setLineWidth(0.5)  # type: ignore[attr-defined]
+    canvas.line(  # type: ignore[attr-defined]
+        LEFT_MARGIN, PAGE_HEIGHT - 66.0, PAGE_WIDTH - RIGHT_MARGIN, PAGE_HEIGHT - 66.0
+    )
+
+
+def make_email_thread_pdf(path: Path) -> Path:
+    """Render the synthetic contractor email thread to ``path``.
+
+    A short email thread whose page-1 messages admit the two breaches of the MSA:
+    subcontracting to Acme Labs without sign-off (violates §4.2) and unilaterally
+    switching Invoice #2231 to Net-60 (violates §6.1).
+
+    Args:
+        path: Output PDF path. Parent directories are created.
+
+    Returns:
+        The ``path`` written.
+
+    Raises:
+        ImportError: If ``reportlab`` is not installed.
+    """
+    try:
+        from reportlab.pdfgen import canvas as _canvas
+    except ImportError as exc:  # pragma: no cover - dev-only dependency
+        raise ImportError(
+            "reportlab is required to generate the sample PDF. "
+            "Install it with `pip install reportlab`."
+        ) from exc
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    c = _canvas.Canvas(str(path), pagesize=(PAGE_WIDTH, PAGE_HEIGHT))
+    c.setTitle("Email Thread — Contractor Correspondence (synthetic)")
+    c.setAuthor("CrossExam pipeline")
+    c.setSubject("Synthetic email thread for the CrossExam contract-vs-email demo")
+
+    by_page: dict[int, list[tuple[float, str]]] = {
+        p: [] for p in range(1, _EMAIL_TOTAL_PAGES + 1)
+    }
+    for page, y, text in _EMAIL_LINES:
+        by_page[page].append((y, text))
+
+    for page_no in range(1, _EMAIL_TOTAL_PAGES + 1):
+        _draw_email_header(c, page_no)
+        c.setFont(FONT_NAME, FONT_SIZE)
+        for y, text in by_page[page_no]:
+            cur_y = y
+            for physical in _wrap(text):
+                c.drawString(LEFT_MARGIN, cur_y, physical)
+                cur_y -= PARAGRAPH_LEADING
+        c.showPage()
+
+    c.save()
+    logger.info("Wrote %d-page email-thread PDF -> %s", _EMAIL_TOTAL_PAGES, path)
+    return path
+
+
 def make_scanned_pdf(path: Path, pages: int = 2) -> Path:
     """Render a SCANNED-style PDF with NO extractable text layer (feat 3).
 
@@ -568,10 +896,23 @@ def main() -> None:
     VISITOR_LOG_FRONTEND_PATH.parent.mkdir(parents=True, exist_ok=True)
     VISITOR_LOG_FRONTEND_PATH.write_bytes(VISITOR_LOG_ASSET_PATH.read_bytes())
     logger.info("Copied visitor-log exhibit -> %s", VISITOR_LOG_FRONTEND_PATH)
+    # Contract-vs-email demo: the MSA and the contractor email thread.
+    make_contract_pdf(CONTRACT_ASSET_PATH)
+    CONTRACT_FRONTEND_PATH.parent.mkdir(parents=True, exist_ok=True)
+    CONTRACT_FRONTEND_PATH.write_bytes(CONTRACT_ASSET_PATH.read_bytes())
+    logger.info("Copied contract -> %s", CONTRACT_FRONTEND_PATH)
+    make_email_thread_pdf(EMAIL_ASSET_PATH)
+    EMAIL_FRONTEND_PATH.parent.mkdir(parents=True, exist_ok=True)
+    EMAIL_FRONTEND_PATH.write_bytes(EMAIL_ASSET_PATH.read_bytes())
+    logger.info("Copied email thread -> %s", EMAIL_FRONTEND_PATH)
     print(f"deposition PDF written: {ASSET_PDF_PATH}")
     print(f"deposition PDF copied:  {FRONTEND_PDF_PATH}")
     print(f"visitor-log PDF written: {VISITOR_LOG_ASSET_PATH}")
     print(f"visitor-log PDF copied:  {VISITOR_LOG_FRONTEND_PATH}")
+    print(f"contract PDF written: {CONTRACT_ASSET_PATH}")
+    print(f"contract PDF copied:  {CONTRACT_FRONTEND_PATH}")
+    print(f"email-thread PDF written: {EMAIL_ASSET_PATH}")
+    print(f"email-thread PDF copied:  {EMAIL_FRONTEND_PATH}")
 
 
 if __name__ == "__main__":  # pragma: no cover
