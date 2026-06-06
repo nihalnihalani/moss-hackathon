@@ -78,3 +78,65 @@ async def test_retrieve_caches_result(agent: CrossExamAgent) -> None:
     result = await agent.retrieve("termination notice thirty days")
     assert result is agent.latest_result
     assert result.query == "termination notice thirty days"
+
+
+class _RecordingRoom:
+    """Captures frames published to the data channel for assertions."""
+
+    def __init__(self) -> None:
+        self.frames: list[dict[str, object]] = []
+        self.local_participant = self
+
+    async def publish_data(self, data: bytes) -> None:
+        import json
+
+        self.frames.append(json.loads(data.decode("utf-8")))
+
+
+async def test_speculative_prefetch_then_retrieve_hits_cache(
+    agent: CrossExamAgent,
+) -> None:
+    """A prefetched partial is consumed by retrieve() for the final transcript."""
+    await agent.prefetch_partial("where were you on the night of the")
+    result = await agent.retrieve("where were you on the night of the 14th?")
+    assert result is agent.latest_result
+    assert result.citations  # the cached speculative result carried citations
+
+
+async def test_speculative_disabled_via_flag() -> None:
+    """With speculative disabled, prefetch is a no-op and retrieve still works."""
+    index = MockIndex.from_fixture(FIXTURE)
+    a = CrossExamAgent(index, top_k=3, speculative_enabled=False)
+    await a.prefetch_partial("where were you")  # no-op, no crash
+    result = await a.retrieve("where were you on the night of the 14th warehouse")
+    assert result.citations
+
+
+async def test_proactive_publishes_unprompted_on_claim(
+    agent: CrossExamAgent,
+) -> None:
+    """A spoken claim the document supports is published with proactive=true."""
+    room = _RecordingRoom()
+    agent.room = room
+    # A declarative assertion (claim) that echoes the warehouse passage.
+    await agent.on_user_turn_completed(
+        ShimChatContext(),
+        "The warehouse keys were accessed on the night of the 14th.",
+    )
+    assert room.frames, "expected a proactive citation frame to be published"
+    frame = room.frames[-1]
+    assert frame.get("proactive") is True
+    assert frame["citation"] is not None
+    assert "latencyMs" in frame
+
+
+async def test_question_does_not_trigger_proactive(agent: CrossExamAgent) -> None:
+    """A question publishes a normal (non-proactive) citation frame."""
+    room = _RecordingRoom()
+    agent.room = room
+    await agent.on_user_turn_completed(
+        ShimChatContext(), "where were you on the night of the 14th?"
+    )
+    assert room.frames
+    frame = room.frames[-1]
+    assert frame.get("proactive") is None

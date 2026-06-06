@@ -69,6 +69,7 @@ export const ANSWER_CITATION: Citation = {
   confidence: 0.94,
   latencyMs: 7,
   pagesSearched: DEMO_TOTAL_PAGES,
+  faithfulness: { supported: true, score: 0.99, method: 'nli' },
 };
 
 /** The follow-up contradiction surfaced later in the deposition. */
@@ -79,6 +80,23 @@ export const CONTRADICTION_CITATION: Citation = {
   confidence: 0.89,
   latencyMs: 6,
   pagesSearched: DEMO_TOTAL_PAGES,
+  faithfulness: { supported: true, score: 0.96, method: 'nli' },
+};
+
+/**
+ * The PROACTIVE / AMBIENT beat. The witness later utters a CLAIM aloud and the
+ * co-pilot snaps the contradicting source UNPROMPTED — no question was asked.
+ * Real line box from sample-deposition.pdf (pipeline chunk `pdf-p41-l1`), reused
+ * because it is the contradicting downtown-log line the claim collides with.
+ */
+export const PROACTIVE_CITATION: Citation = {
+  id: 'pdf-p41-l1-proactive',
+  text: 'Visitor log, downtown office: signature recorded at 9:40 p.m. on the 14th — two miles from the Harbor Street warehouse.',
+  bbox: { ...contradictionBBox },
+  confidence: 0.92,
+  latencyMs: 9,
+  pagesSearched: DEMO_TOTAL_PAGES,
+  faithfulness: { supported: true, score: 0.98, method: 'nli' },
 };
 
 /** The streamed answer caption that plays alongside the first snap. */
@@ -95,5 +113,32 @@ export const CONTRADICTION_TRANSCRIPT =
   `But there is a contradiction: on page ${contradictionBBox.page}, the same witness signed the ` +
   'downtown visitor log at 9:40 p.m. that night — two miles away.';
 
+/**
+ * The CLAIM the witness speaks aloud that the co-pilot answers UNPROMPTED. Shown
+ * as the user/heard line above the proactively-surfaced citation.
+ */
+export const PROACTIVE_CLAIM =
+  'I was nowhere near downtown that whole night — I never left the warehouse.';
+
+/** The caption the co-pilot speaks when it surfaces the proactive citation. */
+export const PROACTIVE_TRANSCRIPT =
+  `Flagging this unprompted: page ${PROACTIVE_CITATION.bbox.page} has the witness signing the ` +
+  'downtown visitor log at 9:40 p.m. — which contradicts the claim just made.';
+
+/**
+ * A query that has NO grounded source in the corpus. The co-pilot stays silent
+ * rather than fabricate a box — surfaced as the honest empty state.
+ */
+export const NOT_FOUND_CLAIM =
+  'Was there ever any mention of a second vehicle at the scene?';
+
+/** Caption shown alongside the honest-silence (not_found) beat. */
+export const NOT_FOUND_TRANSCRIPT =
+  'I could not find that in the document, so I am staying silent rather than guess.';
+
 /** Ordered list of demo citations for any UI that wants to step through them. */
-export const DEMO_CITATIONS: readonly Citation[] = [ANSWER_CITATION, CONTRADICTION_CITATION];
+export const DEMO_CITATIONS: readonly Citation[] = [
+  ANSWER_CITATION,
+  CONTRADICTION_CITATION,
+  PROACTIVE_CITATION,
+];

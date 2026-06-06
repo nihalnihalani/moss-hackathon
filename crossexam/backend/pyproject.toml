@@ -60,6 +60,16 @@ eval = [
     "ragas>=0.1,<1.0",
     "datasets>=2.0,<4.0",
 ]
+# Observability: OpenTelemetry spans exported to Langfuse for the hot path
+# (retrieve -> verify -> publish). Optional and OFF by default: the mock/test
+# path runs with a zero-overhead no-op tracer and needs NO keys. Install + set
+# OBS_ENABLED=true and LANGFUSE_PUBLIC_KEY/LANGFUSE_SECRET_KEY to export traces.
+# Install with: pip install 'crossexam-backend[obs]'.
+obs = [
+    "opentelemetry-sdk>=1.20,<2.0",
+    "opentelemetry-exporter-otlp-proto-http>=1.20,<2.0",
+    "langfuse>=2.0,<4.0",
+]
 
 [project.scripts]
 crossexam-worker = "crossexam_backend.server:main"

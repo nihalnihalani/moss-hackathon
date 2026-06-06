@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import type { Citation } from '../types';
+import type { Citation, SilenceReason } from '../types';
+import { NotFoundState } from './NotFoundState';
 
 export interface CaptionsProps {
   /** The agent's spoken line; revealed word-by-word (Newsreader serif). */
@@ -10,6 +11,10 @@ export interface CaptionsProps {
   citation?: Citation | null;
   /** Re-fire the snap to a citation's page when its chip is activated. */
   onJump?: (citation: Citation) => void;
+  /** The active citation was surfaced UNPROMPTED — show the ambient tag. */
+  proactive?: boolean;
+  /** Honest-silence reason; renders the "staying silent" empty state when set. */
+  silenceReason?: SilenceReason | null;
 }
 
 /** Reveal stagger per word (ms), matching the spec's 35ms cadence. */
@@ -23,12 +28,20 @@ const WORD_STEP_MS = 35;
  * The live region (`role=log`, polite, non-atomic) is pre-rendered empty in the
  * DOM so assistive tech is already observing it before the first word lands.
  */
-export function Captions({ text, question, citation, onJump }: CaptionsProps): JSX.Element {
+export function Captions({
+  text,
+  question,
+  citation,
+  onJump,
+  proactive,
+  silenceReason,
+}: CaptionsProps): JSX.Element {
   // Re-key the reveal so the stagger restarts whenever the spoken line changes.
   const [revealKey, setRevealKey] = useState(0);
   useEffect(() => setRevealKey((k) => k + 1), [text]);
 
   const words = text ? text.split(/(\s+)/) : [];
+  const faith = citation?.faithfulness;
 
   return (
     <div className="captions" role="log" aria-live="polite" aria-atomic="false">
@@ -40,6 +53,13 @@ export function Captions({ text, question, citation, onJump }: CaptionsProps): J
 
       {text ? (
         <div className="caption-line caption-line--agent">
+          {proactive && citation ? (
+            <span className="ambient-tag" data-testid="ambient-tag">
+              <span className="ambient-tag__dot" aria-hidden="true" />
+              Surfaced automatically
+            </span>
+          ) : null}
+
           <p className="caption-line__agent" key={revealKey}>
             {words.map((w, i) =>
               /^\s+$/.test(w) ? (
@@ -57,17 +77,34 @@ export function Captions({ text, question, citation, onJump }: CaptionsProps): J
           </p>
 
           {citation ? (
-            <button
-              type="button"
-              className="pageref"
-              onClick={() => onJump?.(citation)}
-              aria-label={`Jump to citation on page ${citation.bbox.page}`}
-            >
-              p.{citation.bbox.page} · {Math.round(citation.confidence * 100)}%
-            </button>
+            <div className="caption-line__provenance">
+              <button
+                type="button"
+                className="pageref"
+                onClick={() => onJump?.(citation)}
+                aria-label={`Jump to citation on page ${citation.bbox.page}`}
+              >
+                p.{citation.bbox.page} · {Math.round(citation.confidence * 100)}%
+              </button>
+              {faith ? (
+                <span
+                  className={`grounded${faith.supported ? ' grounded--supported' : ' grounded--unsupported'}`}
+                  title={`Faithfulness check: ${faith.method}`}
+                  data-testid="grounded-indicator"
+                  aria-label={`Grounded confidence ${faith.score.toFixed(2)}${
+                    faith.supported ? ', supported' : ', unsupported'
+                  }`}
+                >
+                  <span className="grounded__mark" aria-hidden="true" />
+                  grounded {faith.score.toFixed(2)}
+                </span>
+              ) : null}
+            </div>
           ) : null}
         </div>
       ) : null}
+
+      <NotFoundState visible={silenceReason === 'not_found_in_document'} />
     </div>
   );
 }

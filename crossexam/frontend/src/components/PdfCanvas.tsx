@@ -21,6 +21,11 @@ export interface PdfCanvasProps {
   onClearCitation?: () => void;
   /** Bump to re-center + focus the active box (e.g. a transcript chip click). */
   refocusSignal?: number;
+  /**
+   * The active citation was surfaced UNPROMPTED. Adds an ambient treatment to the
+   * box (distinct ring class + an "● SURFACED AUTOMATICALLY" tag on the label).
+   */
+  proactive?: boolean;
 }
 
 /** Minimal pdf.js typings we rely on (kept local to avoid a hard import dependency). */
@@ -58,6 +63,7 @@ export function PdfCanvas({
   renderScale = DEFAULT_SCALE,
   onClearCitation,
   refocusSignal,
+  proactive = false,
 }: PdfCanvasProps): JSX.Element {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -250,8 +256,9 @@ export function PdfCanvas({
           <div
             key={citation?.id}
             ref={boxRef}
-            className="bbox-highlight"
+            className={`bbox-highlight${proactive ? ' bbox-highlight--ambient' : ''}`}
             data-testid="bbox-highlight"
+            data-proactive={proactive ? 'true' : undefined}
             style={{
               left: `${overlayRect.left}px`,
               top: `${overlayRect.top}px`,
@@ -260,10 +267,19 @@ export function PdfCanvas({
             }}
             tabIndex={0}
             role="button"
-            aria-label={`Cited text: ${citation?.text ?? ''}`}
+            aria-label={`${proactive ? 'Surfaced automatically. ' : ''}Cited text: ${citation?.text ?? ''}`}
             onKeyDown={onBoxKeyDown}
           >
             <span className="bbox-highlight__tick" aria-hidden="true" />
+            {proactive ? (
+              <span
+                className={`bbox-highlight__ambient${labelAbove ? ' bbox-highlight__ambient--above' : ''}`}
+                data-testid="bbox-ambient-tag"
+              >
+                <span className="bbox-highlight__ambient-dot" aria-hidden="true" />
+                Surfaced automatically
+              </span>
+            ) : null}
             <span className={`bbox-highlight__label${labelAbove ? ' bbox-highlight__label--above' : ''}`}>
               p.{citation?.bbox.page} · {Math.round((citation?.confidence ?? 0) * 100)}%
             </span>

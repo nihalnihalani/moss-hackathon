@@ -20,6 +20,7 @@ from crossexam_backend.agent import LIVEKIT_AVAILABLE, CrossExamAgent
 from crossexam_backend.config import Settings, get_settings
 from crossexam_backend.retrieval.base import RetrievalIndex
 from crossexam_backend.retrieval.factory import get_index
+from crossexam_backend.tracing import get_tracer
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +40,15 @@ def build_index(settings: Settings) -> RetrievalIndex:
 
 def build_agent(settings: Settings, index: RetrievalIndex) -> CrossExamAgent:
     """Build the :class:`CrossExamAgent` from settings and an index."""
-    return CrossExamAgent(index, top_k=settings.top_k, alpha=settings.alpha)
+    return CrossExamAgent(
+        index,
+        top_k=settings.top_k,
+        alpha=settings.alpha,
+        speculative_enabled=settings.speculative_enabled,
+        proactive_enabled=settings.proactive_enabled,
+        faithfulness_threshold=settings.faithfulness_threshold,
+        tracer=get_tracer(settings),
+    )
 
 
 def main() -> int:
@@ -147,6 +156,27 @@ def _build_tts(settings: Settings) -> object:
     )
 
 
+def _build_turn_detection() -> object | None:
+    """Construct LiveKit's model-based turn detector, or ``None`` if absent.
+
+    Uses the ``livekit-plugins-turn-detector`` multilingual model to decide
+    end-of-turn from the transcript context rather than raw silence. Imported
+    lazily and guarded: when the plugin is not installed this returns ``None``
+    and the session falls back to VAD-based turn detection. This ONLY runs
+    inside a live LiveKit worker session.
+    """
+    try:  # pragma: no cover - needs the turn-detector plugin installed
+        from livekit.plugins.turn_detector.multilingual import MultilingualModel
+
+        model: object = MultilingualModel()
+        return model
+    except ImportError:  # pragma: no cover - plugin not in mock/test env
+        logger.info(
+            "turn-detector plugin not installed; session uses VAD turn detection."
+        )
+        return None
+
+
 def _run_livekit_worker(settings: Settings, index: RetrievalIndex) -> int:
     """Start the LiveKit worker. Imported lazily so the module stays portable."""
     # Imports are local on purpose: they only exist when livekit is installed.
@@ -174,7 +204,26 @@ def _run_livekit_worker(settings: Settings, index: RetrievalIndex) -> int:
         stt = _build_stt(settings)
         llm = _build_llm(settings)
         tts = _build_tts(settings)
-        session = AgentSession(stt=stt, llm=llm, tts=tts)
+
+        # TURN DETECTION + BARGE-IN. The session uses LiveKit's model-based
+        # multilingual turn detector to decide when the user has truly finished
+        # speaking (beats raw VAD silence on conversational pauses), and enables
+        # interruptions so the user can barge in over the agent's TTS. These
+        # kwargs are assembled into a dict and only attached when the plugin /
+        # support is present — they ONLY activate in a real LiveKit session
+        # (never in mock/test, where this whole function is not reached).
+        session_kwargs: dict[str, object] = {
+            "stt": stt,
+            "llm": llm,
+            "tts": tts,
+            # Barge-in: allow the user to interrupt the agent mid-utterance.
+            "allow_interruptions": True,
+        }
+        turn_detection = _build_turn_detection()
+        if turn_detection is not None:
+            session_kwargs["turn_detection"] = turn_detection
+
+        session = AgentSession(**session_kwargs)
         await session.start(agent=agent, room=ctx.room)
 
     async def prewarm(_proc: object) -> None:

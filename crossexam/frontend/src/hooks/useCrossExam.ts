@@ -12,7 +12,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { AgentState, Citation } from '../types';
+import type { AgentState, Citation, SilenceReason } from '../types';
 import {
   ANSWER_CITATION,
   ANSWER_TRANSCRIPT,
@@ -20,6 +20,11 @@ import {
   CONTRADICTION_TRANSCRIPT,
   DEMO_QUESTION,
   DEMO_TOTAL_PAGES,
+  NOT_FOUND_CLAIM,
+  NOT_FOUND_TRANSCRIPT,
+  PROACTIVE_CITATION,
+  PROACTIVE_CLAIM,
+  PROACTIVE_TRANSCRIPT,
 } from '../lib/mockData';
 
 export interface CrossExamConfig {
@@ -49,6 +54,22 @@ export interface CrossExamState {
   targetPage: number;
   /** Total corpus size for the latency/“searched N pages” chip. */
   totalPages: number;
+  /**
+   * Whether the active citation was surfaced UNPROMPTED (ambient co-pilot). Drives
+   * the "● SURFACED AUTOMATICALLY" tag + orb/pill pulse. Cleared on reset/new ask.
+   */
+  proactive: boolean;
+  /**
+   * The LAST retrieval latency observed (ms), persisted across snaps. Drives the
+   * always-on live latency badge — distinct from the per-snap LatencyChip.
+   * Undefined until the first retrieval lands.
+   */
+  lastLatencyMs: number | undefined;
+  /**
+   * Set when the agent declined to surface a box (honest silence). Drives the
+   * "No grounded source — staying silent" empty state. Cleared on any new snap.
+   */
+  silenceReason: SilenceReason | null;
   /** Kick off the scripted demo (mock) or send a prompt (live, best-effort). */
   runDemo: () => void;
   /** Reset back to the idle/establishing-the-haystack state. */
@@ -67,6 +88,12 @@ interface MutableSnapshot {
   activeCitation: Citation | null;
   citations: Citation[];
   targetPage: number;
+  /** Did the active citation arrive unprompted? */
+  proactive: boolean;
+  /** Last retrieval latency in ms (persists across snaps). */
+  lastLatencyMs: number | undefined;
+  /** Honest-silence reason, or null. */
+  silenceReason: SilenceReason | null;
 }
 
 /** The scripted 90s beats, compressed for a live demo cadence. */
@@ -77,6 +104,8 @@ const MOCK_SCRIPT: ScriptStep[] = [
       s.agentState = 'listening';
       s.question = DEMO_QUESTION;
       s.caption = '';
+      s.proactive = false;
+      s.silenceReason = null;
     },
   },
   {
@@ -94,6 +123,8 @@ const MOCK_SCRIPT: ScriptStep[] = [
       s.activeCitation = ANSWER_CITATION;
       s.citations = [ANSWER_CITATION];
       s.caption = ANSWER_TRANSCRIPT;
+      s.proactive = false;
+      s.lastLatencyMs = ANSWER_CITATION.latencyMs;
     },
   },
   {
@@ -112,10 +143,57 @@ const MOCK_SCRIPT: ScriptStep[] = [
       s.activeCitation = CONTRADICTION_CITATION;
       s.citations = [ANSWER_CITATION, CONTRADICTION_CITATION];
       s.caption = CONTRADICTION_TRANSCRIPT;
+      s.proactive = false;
+      s.lastLatencyMs = CONTRADICTION_CITATION.latencyMs;
+    },
+  },
+  // ---- AMBIENT / PROACTIVE BEAT: the co-pilot answers a spoken claim UNPROMPTED.
+  {
+    at: 11800,
+    apply: (s) => {
+      s.agentState = 'listening';
+      s.question = PROACTIVE_CLAIM;
+      s.caption = '';
+      s.activeCitation = null;
+      s.proactive = false;
+      s.silenceReason = null;
     },
   },
   {
-    at: 11500,
+    at: 13000,
+    apply: (s) => {
+      // No question was asked — the agent surfaces this on its own.
+      s.agentState = 'speaking';
+      s.activeCitation = PROACTIVE_CITATION;
+      s.citations = [ANSWER_CITATION, CONTRADICTION_CITATION, PROACTIVE_CITATION];
+      s.caption = PROACTIVE_TRANSCRIPT;
+      s.targetPage = PROACTIVE_CITATION.bbox.page;
+      s.proactive = true;
+      s.lastLatencyMs = PROACTIVE_CITATION.latencyMs;
+    },
+  },
+  // ---- HONEST-SILENCE BEAT: a claim with no grounded source. No box; stay quiet.
+  {
+    at: 17500,
+    apply: (s) => {
+      s.agentState = 'thinking';
+      s.question = NOT_FOUND_CLAIM;
+      s.caption = '';
+      s.proactive = false;
+    },
+  },
+  {
+    at: 18800,
+    apply: (s) => {
+      s.agentState = 'idle';
+      s.activeCitation = null;
+      s.silenceReason = 'not_found_in_document';
+      s.caption = NOT_FOUND_TRANSCRIPT;
+      s.proactive = false;
+    },
+  },
+  {
+    at: 23000,
     apply: (s) => {
       s.agentState = 'idle';
     },
@@ -129,6 +207,9 @@ const IDLE_SNAPSHOT: MutableSnapshot = {
   activeCitation: null,
   citations: [],
   targetPage: 1,
+  proactive: false,
+  lastLatencyMs: undefined,
+  silenceReason: null,
 };
 
 export function useCrossExam(config: CrossExamConfig): CrossExamState {
@@ -230,18 +311,38 @@ export function useCrossExam(config: CrossExamConfig): CrossExamState {
     citations: snap.citations,
     targetPage: snap.targetPage,
     totalPages: DEMO_TOTAL_PAGES,
+    proactive: snap.proactive,
+    lastLatencyMs: snap.lastLatencyMs,
+    silenceReason: snap.silenceReason,
     runDemo,
     reset,
   };
 }
 
-/** Narrow an unknown LiveKit data payload into a state update. Defensive by design. */
+/**
+ * Narrow an unknown LiveKit data payload into a state update. Defensive by design.
+ *
+ * Parses the shared wire frame EXACTLY:
+ *   { citation, proactive?, latencyMs?, reason?, agentState?, caption? }
+ *
+ * Three branches:
+ *   1. A valid `citation` => snap it, capture `proactive` + `latencyMs`, pass
+ *      faithfulness through, clear any silence state.
+ *   2. `citation: null` + `reason: "not_found_in_document"` => honest silence:
+ *      clear the box, set the silence reason (still capture latencyMs — the
+ *      retrieval ran, it just found nothing grounded).
+ *   3. Neither => only the agentState/caption fields (if any) are applied.
+ */
 function handleLivePayload(
   parsed: unknown,
   setSnap: React.Dispatch<React.SetStateAction<MutableSnapshot>>,
 ): void {
   if (typeof parsed !== 'object' || parsed === null) return;
   const msg = parsed as Record<string, unknown>;
+
+  // Frame-level retrieval latency (persists across snaps via lastLatencyMs).
+  const latencyMs = typeof msg.latencyMs === 'number' ? msg.latencyMs : undefined;
+  const proactive = msg.proactive === true;
 
   if (typeof msg.agentState === 'string') {
     const state = msg.agentState as AgentState;
@@ -255,6 +356,7 @@ function handleLivePayload(
     const question = msg.question;
     setSnap((prev) => ({ ...prev, question }));
   }
+
   if (isCitation(msg.citation)) {
     const citation = msg.citation;
     setSnap((prev) => ({
@@ -262,10 +364,32 @@ function handleLivePayload(
       activeCitation: citation,
       agentState: 'speaking',
       targetPage: citation.bbox.page,
+      proactive,
+      silenceReason: null,
+      lastLatencyMs: latencyMs ?? citation.latencyMs ?? prev.lastLatencyMs,
       citations: prev.citations.some((c) => c.id === citation.id)
         ? prev.citations
         : [...prev.citations, citation],
     }));
+    return;
+  }
+
+  // Honest-silence: an explicit null citation with a not_found reason. The agent
+  // stayed quiet rather than show a wrong box — clear any prior box, flag silence.
+  if (msg.citation === null && msg.reason === 'not_found_in_document') {
+    setSnap((prev) => ({
+      ...prev,
+      activeCitation: null,
+      proactive: false,
+      silenceReason: 'not_found_in_document',
+      lastLatencyMs: latencyMs ?? prev.lastLatencyMs,
+    }));
+    return;
+  }
+
+  // A frame may carry latency without a citation (e.g. a retrieval heartbeat).
+  if (latencyMs !== undefined) {
+    setSnap((prev) => ({ ...prev, lastLatencyMs: latencyMs }));
   }
 }
 

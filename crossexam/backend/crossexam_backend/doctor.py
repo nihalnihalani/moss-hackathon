@@ -27,14 +27,21 @@ from enum import Enum
 
 from crossexam_backend.agent import LIVEKIT_AVAILABLE
 from crossexam_backend.config import Settings, get_settings
+from crossexam_backend.tracing import tracing_status
 
 
 class Status(str, Enum):
-    """Tri-state status for a single preflight check."""
+    """Status for a single preflight check.
+
+    ``OFF`` marks an optional feature that is intentionally disabled (e.g.
+    tracing without the [obs] extra/keys, or proactive surfacing toggled off);
+    unlike ``MISSING`` it never fails the run.
+    """
 
     READY = "READY"
     MISSING = "MISSING"
     MOCK = "MOCK"
+    OFF = "OFF"
 
 
 @dataclass(frozen=True)
@@ -225,6 +232,51 @@ def _check_silero() -> Check:
     )
 
 
+def _check_tracing(settings: Settings) -> Check:
+    """Check observability tracing readiness (OpenTelemetry -> Langfuse).
+
+    READY when OBS_ENABLED, the [obs] extra is importable AND Langfuse keys are
+    present. Otherwise OFF — a zero-overhead no-op tracer is used and nothing is
+    exported. Never MISSING: tracing is always optional.
+    """
+    if tracing_status(settings) == "READY":
+        return Check(
+            "Tracing (Langfuse)",
+            Status.READY,
+            "OBS_ENABLED, opentelemetry-sdk importable and Langfuse keys present; "
+            "retrieve/publish spans export to Langfuse.",
+        )
+    reasons = []
+    if not settings.obs_enabled:
+        reasons.append("OBS_ENABLED is false")
+    if not _module_available("opentelemetry.sdk"):
+        reasons.append("opentelemetry-sdk not installed ([obs] extra)")
+    if not settings.has_langfuse_credentials:
+        reasons.append("LANGFUSE_PUBLIC_KEY/SECRET_KEY not set")
+    return Check(
+        "Tracing (Langfuse)",
+        Status.OFF,
+        ("No-op tracer — " + "; ".join(reasons) + ".") if reasons else "No-op tracer.",
+    )
+
+
+def _check_proactive(settings: Settings) -> Check:
+    """Check proactive / ambient citation surfacing readiness (config toggle)."""
+    if settings.proactive_enabled:
+        return Check(
+            "Proactive surfacing",
+            Status.READY,
+            "PROACTIVE_ENABLED: claims (not questions) confidently supported by "
+            f"the document are surfaced unprompted (faithfulness>="
+            f"{settings.faithfulness_threshold:.2f}).",
+        )
+    return Check(
+        "Proactive surfacing",
+        Status.OFF,
+        "PROACTIVE_ENABLED is false; citations are only published on request.",
+    )
+
+
 def run_checks(settings: Settings) -> list[Check]:
     """Run every preflight check against ``settings`` (no network calls)."""
     checks = [_check_retrieval(settings), _check_livekit(settings)]
@@ -234,6 +286,9 @@ def run_checks(settings: Settings) -> list[Check]:
     # HTTP API service readiness (deps + token-minting leg).
     checks.append(_check_api_service())
     checks.append(_check_token_minting(settings))
+    # Technical-depth feature readiness (never fails the run).
+    checks.append(_check_tracing(settings))
+    checks.append(_check_proactive(settings))
     return checks
 
 

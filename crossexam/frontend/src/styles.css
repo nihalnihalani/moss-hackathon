@@ -178,9 +178,17 @@ body {
   white-space: nowrap;
 }
 
+/* center cluster: mode badge + persistent live-latency badge */
+.cmdbar__center {
+  justify-self: center;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s3);
+  min-width: 0;
+}
+
 /* center HUD readout */
 .hud {
-  justify-self: center;
   display: inline-flex;
   align-items: center;
   gap: var(--s2);
@@ -209,6 +217,55 @@ body {
   animation: hud-pulse 1.4s var(--ease-emph) infinite;
 }
 @keyframes hud-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+/* ---------- persistent live retrieval-latency badge (#6) ---------- */
+/* The always-on proof-on-screen. Distinct from the per-snap .latency-chip:
+ * this lives in the command bar and shows the LAST retrieval ms, persistently. */
+.live-latency {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s2);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  padding: 6px var(--s3);
+  border-radius: var(--r-full);
+  border: 1px solid var(--hairline);
+  background: rgba(19, 22, 29, 0.5);
+  color: var(--text-mute);
+  white-space: nowrap;
+}
+.live-latency__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-mute);
+}
+.live-latency__label {
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--text-mute);
+}
+.live-latency__value {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
+  font-weight: 600;
+}
+/* Once a retrieval has landed, the badge goes amber + the dot breathes. */
+.live-latency--active {
+  border-color: rgba(255, 176, 32, 0.3);
+  color: var(--amber);
+}
+.live-latency--active .live-latency__value { color: var(--amber); }
+.live-latency--active .live-latency__dot {
+  background: var(--amber);
+  box-shadow: 0 0 8px var(--amber-glow);
+  animation: live-latency-pulse 1.8s var(--ease-emph) infinite;
+}
+@keyframes live-latency-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(0.8); }
+}
 
 .cmdbar__controls {
   justify-self: end;
@@ -431,6 +488,30 @@ body {
 .state-pill--speaking .state-pill__dot { background: var(--state-speak); }
 .state-pill--idle .state-pill__ping { display: none; }
 
+/* ---------- ambient / unprompted treatment (#3) ---------- */
+/* When the agent acts WITHOUT being asked, the pill gains an amber glow ring
+ * and an UNPROMPTED tag — proof it surfaced something on its own. */
+.state-pill--ambient {
+  border-color: rgba(255, 176, 32, 0.45);
+  box-shadow: 0 0 0 1px var(--amber-soft), 0 0 18px var(--amber-soft);
+  animation: ambient-breathe 2.2s var(--ease-emph) infinite;
+}
+@keyframes ambient-breathe {
+  0%, 100% { box-shadow: 0 0 0 1px var(--amber-soft), 0 0 14px var(--amber-soft); }
+  50% { box-shadow: 0 0 0 1px var(--amber-glow), 0 0 26px var(--amber-glow); }
+}
+.state-pill__ambient {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: #1a1206;
+  background: var(--amber);
+  border-radius: var(--r-sm);
+  padding: 2px 6px;
+  margin-left: 2px;
+}
+
 /* ============================================================================
  * CAPTIONS — agent serif voice w/ word-stagger + page-ref chips
  * ========================================================================== */
@@ -498,6 +579,118 @@ body {
 }
 .pageref:hover { background: rgba(255, 176, 32, 0.26); transform: translateY(-1px); }
 .pageref::before { content: '⤷'; opacity: 0.7; }
+
+/* provenance row: page-ref chip + grounded-confidence indicator, side by side */
+.caption-line__provenance {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--s2);
+  margin-top: var(--s2);
+}
+.caption-line__provenance .pageref { margin-top: 0; }
+
+/* ---------- ambient tag on the caption card (#3) ---------- */
+.ambient-tag {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--amber);
+  background: var(--amber-soft);
+  border: 1px solid rgba(255, 176, 32, 0.32);
+  border-radius: var(--r-full);
+  padding: 3px 9px 3px 7px;
+  margin-bottom: var(--s2);
+}
+.ambient-tag__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--amber);
+  box-shadow: 0 0 8px var(--amber-glow);
+  animation: ambient-dot 1.6s var(--ease-emph) infinite;
+}
+@keyframes ambient-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+/* ---------- grounded-confidence indicator (#5) ---------- */
+.grounded {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  padding: 3px 8px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--hairline);
+}
+.grounded__mark {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+/* Supported => amber (trustworthy grounding). Unsupported => muted slate. */
+.grounded--supported {
+  color: var(--amber);
+  background: var(--amber-soft);
+  border-color: rgba(255, 176, 32, 0.3);
+}
+.grounded--supported .grounded__mark {
+  background: var(--amber);
+  box-shadow: 0 0 6px var(--amber-glow);
+}
+.grounded--unsupported {
+  color: var(--text-mute);
+  background: var(--surface-2);
+}
+.grounded--unsupported .grounded__mark { background: var(--text-mute); }
+
+/* ---------- honest not-found empty state (#5) ---------- */
+/* A trust feature, not an error: calm, muted, "the agent stayed silent". */
+.not-found {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s3);
+  padding: var(--s3) var(--s4);
+  border-radius: var(--r-md);
+  border: 1px dashed var(--hairline-st);
+  background: var(--surface-2);
+  animation: not-found-in var(--dur-med) var(--ease-decel) both;
+}
+@keyframes not-found-in { from { opacity: 0; transform: translateY(6px); } }
+.not-found__mark {
+  flex: 0 0 auto;
+  margin-top: 3px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1.5px solid var(--text-mute);
+  background: transparent;
+}
+.not-found__body { min-width: 0; }
+.not-found__title {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+}
+.not-found__sub {
+  margin: 4px 0 0;
+  font-family: var(--font-serif);
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-mute);
+}
 
 /* ============================================================================
  * RIGHT STAGE — "paper under lamp"
@@ -736,6 +929,45 @@ body {
   top: -30px;
 }
 
+/* ---------- ambient box treatment: surfaced unprompted (#3) ---------- */
+/* A breathing amber ring + a top-anchored "SURFACED AUTOMATICALLY" tag, so a
+ * proactively-surfaced box reads differently from one the user asked for. */
+.bbox-highlight--ambient {
+  animation: bbox-snap var(--dur-snap) var(--ease-snap) both,
+    bbox-ambient-ring 2.2s var(--ease-emph) 420ms infinite;
+}
+@keyframes bbox-ambient-ring {
+  0%, 100% { box-shadow: 0 0 0 0 var(--amber-soft); }
+  50% { box-shadow: 0 0 0 4px var(--amber-soft); }
+}
+.bbox-highlight__ambient {
+  position: absolute;
+  top: -30px;
+  left: -1px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #1a1206;
+  background: var(--amber);
+  padding: 3px 9px;
+  border-radius: var(--r-sm);
+  white-space: nowrap;
+  box-shadow: 0 4px 14px var(--amber-soft);
+}
+/* When the value label flips above, push the ambient tag higher so they stack. */
+.bbox-highlight__ambient--above { top: -58px; }
+.bbox-highlight__ambient-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #1a1206;
+  animation: ambient-dot 1.6s var(--ease-emph) infinite;
+}
+
 /* ============================================================================
  * DOCUMENT UPLOAD — amber-glow dropzone
  * ========================================================================== */
@@ -862,7 +1094,8 @@ body {
   .rail { border-right: none; border-bottom: 1px solid var(--hairline); }
   .docstage { min-height: 640px; }
   .cmdbar { grid-template-columns: 1fr; gap: var(--s3); padding: var(--s4); }
-  .hud, .cmdbar__controls { justify-self: start; }
+  .cmdbar__center, .cmdbar__controls { justify-self: start; }
+  .cmdbar__center { flex-wrap: wrap; }
   .cmdbar__controls { flex-wrap: wrap; }
 }
 
@@ -903,4 +1136,18 @@ body {
   /* page-jump scan + skeleton shimmer → static */
   .page-jump__scan { animation: none; opacity: 0.5; }
   .pdf-skeleton { animation: none; background: #f4f4f5; }
+
+  /* ambient + grounded + not-found: keep color/state, drop motion (#3/#5/#6) */
+  .live-latency--active .live-latency__dot { animation: none; }
+  .state-pill--ambient {
+    animation: none;
+    box-shadow: 0 0 0 1px var(--amber-glow);
+  }
+  .ambient-tag__dot,
+  .bbox-highlight__ambient-dot { animation: none !important; }
+  .bbox-highlight--ambient {
+    animation: bbox-fade var(--dur-med) linear both;
+    box-shadow: 0 0 0 3px var(--amber-soft);
+  }
+  .not-found { animation: none; }
 }

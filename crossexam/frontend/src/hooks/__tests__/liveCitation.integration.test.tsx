@@ -15,6 +15,8 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, act, waitFor } from '@testing-library/react';
 import { PdfCanvas } from '../../components/PdfCanvas';
+import { Captions } from '../../components/Captions';
+import { LiveLatencyBadge } from '../../components/LiveLatencyBadge';
 import { useCrossExam } from '../useCrossExam';
 import { pdfBBoxToCanvasRect } from '../../lib/bbox';
 import { DEMO_PAGE_HEIGHT_PT, DEMO_PAGE_WIDTH_PT } from '../../lib/mockData';
@@ -59,7 +61,22 @@ function Harness(): JSX.Element {
       <span data-testid="mode">{cx.isMock ? 'mock' : 'live'}</span>
       <span data-testid="connected">{String(cx.isConnected)}</span>
       <span data-testid="agent-state">{cx.agentState}</span>
-      <PdfCanvas page={cx.targetPage} citation={cx.activeCitation} renderScale={RENDER_SCALE} />
+      <span data-testid="proactive">{String(cx.proactive)}</span>
+      <span data-testid="silence">{cx.silenceReason ?? 'none'}</span>
+      <LiveLatencyBadge latencyMs={cx.lastLatencyMs} />
+      <Captions
+        text={cx.caption}
+        question={cx.question}
+        citation={cx.activeCitation}
+        proactive={cx.proactive}
+        silenceReason={cx.silenceReason}
+      />
+      <PdfCanvas
+        page={cx.targetPage}
+        citation={cx.activeCitation}
+        renderScale={RENDER_SCALE}
+        proactive={cx.proactive}
+      />
     </div>
   );
 }
@@ -129,6 +146,82 @@ describe('live citation path (LiveKit DataReceived -> PdfCanvas)', () => {
     expect(box.style.width).toBe(`${expected.width}px`);
     expect(box.style.height).toBe(`${expected.height}px`);
     expect(box).toHaveAttribute('aria-label', `Cited text: ${LIVE_CITATION.text}`);
+  });
+
+  it('parses proactive + latencyMs + faithfulness from a live frame', async () => {
+    render(<Harness />);
+    await waitFor(() => expect(capturedOnData).toBeDefined());
+
+    const proactiveCite: Citation = {
+      ...LIVE_CITATION,
+      id: 'cite-live-proactive',
+      faithfulness: { supported: true, score: 0.97, method: 'nli' },
+    };
+
+    act(() => {
+      capturedOnData?.(
+        encodeFrame({
+          citation: proactiveCite,
+          proactive: true,
+          latencyMs: 11,
+          caption: 'Flagging this unprompted.',
+        }),
+      );
+    });
+
+    // Ambient flag flows through to state + UI.
+    await waitFor(() => expect(screen.getByTestId('proactive').textContent).toBe('true'));
+    expect(screen.getByTestId('ambient-tag')).toBeInTheDocument();
+    expect(screen.getByTestId('bbox-ambient-tag')).toBeInTheDocument();
+
+    // Persistent latency badge shows the frame's latencyMs.
+    expect(screen.getByTestId('live-latency-value').textContent).toBe('11ms');
+
+    // Grounded-confidence indicator renders the faithfulness score.
+    expect(screen.getByTestId('grounded-indicator').textContent).toContain('grounded 0.97');
+  });
+
+  it('renders the honest not-found empty state on a not_found_in_document frame', async () => {
+    render(<Harness />);
+    await waitFor(() => expect(capturedOnData).toBeDefined());
+
+    // First land a normal citation so we can prove the box gets CLEARED.
+    act(() => {
+      capturedOnData?.(encodeFrame({ citation: LIVE_CITATION, latencyMs: 7 }));
+    });
+    await screen.findByTestId('bbox-highlight');
+
+    // Now a null citation with the silence reason.
+    act(() => {
+      capturedOnData?.(encodeFrame({ citation: null, reason: 'not_found_in_document', latencyMs: 5 }));
+    });
+
+    await waitFor(() =>
+      expect(screen.getByTestId('silence').textContent).toBe('not_found_in_document'),
+    );
+    // Box cleared, honest empty state shown, latency persisted.
+    expect(screen.queryByTestId('bbox-highlight')).toBeNull();
+    expect(screen.getByTestId('not-found-state')).toBeInTheDocument();
+    expect(screen.getByTestId('live-latency-value').textContent).toBe('5ms');
+  });
+
+  it('clears a prior silence state when a new citation snaps in', async () => {
+    render(<Harness />);
+    await waitFor(() => expect(capturedOnData).toBeDefined());
+
+    act(() => {
+      capturedOnData?.(encodeFrame({ citation: null, reason: 'not_found_in_document' }));
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId('silence').textContent).toBe('not_found_in_document'),
+    );
+
+    act(() => {
+      capturedOnData?.(encodeFrame({ citation: LIVE_CITATION }));
+    });
+    await waitFor(() => expect(screen.getByTestId('silence').textContent).toBe('none'));
+    expect(screen.queryByTestId('not-found-state')).toBeNull();
+    expect(screen.getByTestId('bbox-highlight')).toBeInTheDocument();
   });
 
   it('ignores malformed frames without throwing or drawing a box', async () => {

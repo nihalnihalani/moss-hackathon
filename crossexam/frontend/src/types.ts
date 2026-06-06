@@ -36,6 +36,24 @@ export interface BBox {
   page_height?: number;
 }
 
+/**
+ * Faithfulness / grounded-confidence signal attached to a citation: did the
+ * agent's claim stay faithful to the cited source text, and how strongly?
+ *
+ * `supported` is the binary trust gate (drives the amber-vs-muted indicator);
+ * `score` is the grounded-confidence in [0,1] (rendered as "grounded 0.99");
+ * `method` names the check that produced it (e.g. "nli", "embedding"), surfaced
+ * as a tooltip for provenance.
+ */
+export interface Faithfulness {
+  /** Whether the claim is judged supported by the cited text. */
+  supported: boolean;
+  /** Grounded-confidence in [0,1]. */
+  score: number;
+  /** The verifier that produced the judgement (e.g. "nli"). */
+  method: string;
+}
+
 /** A retrieval result: the line the agent is citing, with its box and provenance. */
 export interface Citation {
   /** Stable id for keying/animation. */
@@ -50,6 +68,41 @@ export interface Citation {
   latencyMs: number;
   /** Total corpus size searched (drives "found in 912 pages"). */
   pagesSearched: number;
+  /**
+   * Optional grounded-confidence check. Present when the backend ran a
+   * faithfulness verifier over the answer + cited text. Drives the small
+   * "grounded 0.99" indicator on the citation card.
+   */
+  faithfulness?: Faithfulness;
+}
+
+/** Reason the agent declined to surface a box. The honest-silence signal. */
+export type SilenceReason = 'not_found_in_document';
+
+/**
+ * The wire frame published on the LiveKit data channel. Backend matches this
+ * EXACTLY; the live handler in useCrossExam parses it field-by-field.
+ *
+ *   { citation, proactive?, latencyMs?, reason?, agentState?, caption? }
+ *
+ * - `citation: null` + `reason: "not_found_in_document"` => honest silence: the
+ *   agent found no grounded source and stayed quiet rather than show a wrong box.
+ * - `proactive: true` => the agent surfaced this WITHOUT being asked (ambient).
+ * - `latencyMs` => retrieval latency for the persistent live latency badge.
+ */
+export interface LiveFrame {
+  /** The retrieval result, or null when nothing grounded was found. */
+  citation: Citation | null;
+  /** The agent surfaced this unprompted (ambient co-pilot behavior). */
+  proactive?: boolean;
+  /** Retrieval latency in milliseconds for this frame. */
+  latencyMs?: number;
+  /** Why no citation was surfaced (honest-silence states). */
+  reason?: SilenceReason;
+  /** Agent lifecycle state for the orb/pill. */
+  agentState?: AgentState;
+  /** Spoken caption text. */
+  caption?: string;
 }
 
 /** A rectangle in canvas/CSS pixel space, ready to position an overlay div. */

@@ -24,33 +24,63 @@ import logging
 from typing import Any, Protocol, runtime_checkable
 
 from crossexam_backend.models import Citation, RetrievalResult
+from crossexam_backend.proactive import (
+    ClaimDetector,
+    SurfaceThresholds,
+    should_surface,
+)
 from crossexam_backend.retrieval.base import RetrievalIndex
+from crossexam_backend.speculative import SpeculativeRetriever
+from crossexam_backend.tracing import NoOpTracer, OTelTracer
+from crossexam_backend.verify import verify_faithfulness
 
 logger = logging.getLogger(__name__)
+
+# Reason code published (with ``citation: null``) when the cited chunk does not
+# support the agent's answer — the faithfulness gate refuses to highlight.
+REASON_NOT_FOUND = "not_found_in_document"
 
 
 # --------------------------------------------------------------------------- #
 # Frontend bridge: structured citation payload                                #
 # --------------------------------------------------------------------------- #
-def build_citation_payload(result: RetrievalResult) -> dict[str, Any] | None:
-    """Build the JSON-serializable citation frame the frontend consumes.
+def build_citation_payload(
+    result: RetrievalResult,
+    answer_text: str | None = None,
+    *,
+    proactive: bool = False,
+    faithfulness_threshold: float = 0.5,
+) -> dict[str, Any] | None:
+    """Build the JSON citation frame the frontend consumes, with a faithful gate.
 
     The returned dict matches the EXACT shape ``frontend/src/hooks/useCrossExam.ts``
     (``isCitation``) parses off the LiveKit data channel: a top-level ``citation``
-    object whose ``bbox`` carries ``page, x0, y0, x1, y1`` plus the optional
+    object whose ``bbox`` carries ``page, x0, y0, x1, y1`` plus
     ``page_width``/``page_height`` (snake_case, matching ``BBox`` in
     ``frontend/src/types.ts``), and whose top level carries ``id``, ``text``,
-    ``confidence`` and ``score``.
+    ``confidence`` and ``score`` — now plus a ``faithfulness`` object
+    ``{supported, score, method}``.
+
+    The FAITHFULNESS GATE: before highlighting, the answer (``answer_text`` or,
+    as a fallback, the top chunk's own text) is verified against the cited chunk
+    via :func:`verify_faithfulness`. If the chunk does NOT support the answer the
+    function returns ``{"citation": null, "reason": "not_found_in_document"}``
+    instead of pointing the user at a wrong box. The top-level ``latencyMs`` is
+    always carried (from the retrieval result).
 
     This is a pure function (no LiveKit dependency) so it can be unit-tested
     without ``livekit-agents`` installed.
 
     Args:
         result: The retrieval result for the just-completed user turn.
+        answer_text: The agent's drafted answer to verify against the chunk; when
+            ``None`` the top chunk's own text is used (vacuously supported).
+        proactive: When ``True`` mark the frame as an unprompted surfacing.
+        faithfulness_threshold: Support threshold for the gate.
 
     Returns:
-        A dict ``{"citation": {...}}`` ready to ``json.dumps`` and publish, or
-        ``None`` when the result has no citations (nothing to highlight).
+        A wire-frame dict ready to ``json.dumps`` and publish, or ``None`` when
+        the result has no citations at all (nothing to consider).
     """
     if not result.citations:
         return None
@@ -58,7 +88,22 @@ def build_citation_payload(result: RetrievalResult) -> dict[str, Any] | None:
     top = result.citations[0]
     chunk = top.chunk
     bbox = chunk.bbox
-    return {
+
+    verdict = verify_faithfulness(
+        answer_text if answer_text is not None else chunk.text,
+        chunk.text,
+        threshold=faithfulness_threshold,
+    )
+
+    if not verdict.supported:
+        # Refuse to highlight a box that does not back up what was said.
+        return {
+            "citation": None,
+            "reason": REASON_NOT_FOUND,
+            "latencyMs": result.latency_ms,
+        }
+
+    frame: dict[str, Any] = {
         "citation": {
             "id": chunk.id,
             "text": chunk.text,
@@ -73,8 +118,17 @@ def build_citation_payload(result: RetrievalResult) -> dict[str, Any] | None:
             },
             "confidence": chunk.confidence,
             "score": top.score,
-        }
+            "faithfulness": {
+                "supported": verdict.supported,
+                "score": verdict.score,
+                "method": verdict.method,
+            },
+        },
+        "latencyMs": result.latency_ms,
     }
+    if proactive:
+        frame["proactive"] = True
+    return frame
 
 
 # --------------------------------------------------------------------------- #
@@ -152,6 +206,11 @@ class CrossExamAgent(_agent_base()):  # type: ignore[misc]
         top_k: int = 5,
         alpha: float = 0.8,
         instructions: str = _DEFAULT_INSTRUCTIONS,
+        speculative_enabled: bool = True,
+        proactive_enabled: bool = True,
+        faithfulness_threshold: float = 0.5,
+        surface_thresholds: SurfaceThresholds | None = None,
+        tracer: NoOpTracer | OTelTracer | None = None,
         # ANN401: forwarded verbatim to LiveKit's Agent.__init__, whose kwargs
         # are untyped here without the optional ``livekit-agents`` dep.
         **agent_kwargs: Any,  # noqa: ANN401
@@ -163,6 +222,12 @@ class CrossExamAgent(_agent_base()):  # type: ignore[misc]
             top_k: Number of citations to retrieve per turn.
             alpha: Hybrid-search weight passed through to the index.
             instructions: System prompt / persona for the LLM.
+            speculative_enabled: Enable prefetch-on-ASR-partials caching.
+            proactive_enabled: Enable unprompted citation surfacing on claims.
+            faithfulness_threshold: Support threshold for the highlight gate.
+            surface_thresholds: Confidence gates for proactive surfacing.
+            tracer: Optional observability tracer; defaults to a no-op tracer
+                so retrieve/publish spans cost nothing unless obs is configured.
             **agent_kwargs: Forwarded to LiveKit's ``Agent.__init__`` when
                 LiveKit is installed (ignored by the shim base).
         """
@@ -175,11 +240,28 @@ class CrossExamAgent(_agent_base()):  # type: ignore[misc]
         self._index = index
         self._top_k = top_k
         self._alpha = alpha
+        self._tracer: NoOpTracer | OTelTracer = tracer or NoOpTracer()
+        self._faithfulness_threshold = faithfulness_threshold
+        self._proactive_enabled = proactive_enabled
         self._latest_result: RetrievalResult | None = None
         # Optional LiveKit room handle, set by the session entrypoint, used to
         # publish structured citations to the frontend over the data channel.
         # Typed ``Any`` so this module imports without ``livekit`` installed.
         self._room: Any | None = None
+
+        # Speculative retrieval: prefetch on interim transcripts so the citation
+        # is ready before the turn ends. The query closure threads top_k/alpha.
+        self._claim_detector = ClaimDetector()
+        self._surface_thresholds = surface_thresholds or SurfaceThresholds()
+        self._speculative: SpeculativeRetriever | None = (
+            SpeculativeRetriever(self._speculative_query)
+            if speculative_enabled
+            else None
+        )
+
+    async def _speculative_query(self, text: str) -> RetrievalResult:
+        """Query closure used by the speculative retriever (threads top_k/alpha)."""
+        return await self._index.query(text, top_k=self._top_k, alpha=self._alpha)
 
     # -- LiveKit room wiring (set by the session entrypoint) ----------------
     # ANN401 on the room handle below is intrinsic to the optional-import shim:
@@ -207,9 +289,27 @@ class CrossExamAgent(_agent_base()):  # type: ignore[misc]
             return []
         return self._latest_result.citations
 
+    # -- speculative retrieval on ASR partials ------------------------------
+    async def prefetch_partial(self, partial_text: str) -> None:
+        """Speculatively retrieve for an interim (partial) ASR transcript.
+
+        Wired to LiveKit's interim-transcript stream so that, by the time the
+        user's turn ends, the citation for the final transcript is frequently
+        already cached. A guarded no-op when speculative retrieval is disabled.
+        """
+        if self._speculative is None:
+            return
+        await self._speculative.prefetch(partial_text)
+
     # -- core retrieval logic (pure, unit-testable) -------------------------
     async def retrieve(self, text: str) -> RetrievalResult:
-        """Query the index for ``text`` and cache the result.
+        """Return citations for ``text``, using the speculative cache if warm.
+
+        If an interim partial already prefetched this turn (a cached prefix
+        confirmed by the final ``text``), the cached result is returned with no
+        new query — the citation is ready before the turn ends. Otherwise the
+        index is queried normally. Either way the result is cached as
+        :attr:`latest_result`.
 
         Args:
             text: The user-turn text.
@@ -217,13 +317,27 @@ class CrossExamAgent(_agent_base()):  # type: ignore[misc]
         Returns:
             The retrieval result (also stored as :attr:`latest_result`).
         """
-        result = await self._index.query(text, top_k=self._top_k, alpha=self._alpha)
+        with self._tracer.span(
+            "retrieve", query=text, top_k=self._top_k
+        ) as span:
+            result: RetrievalResult | None = None
+            speculative_hit = False
+            if self._speculative is not None:
+                result = self._speculative.take(text)
+                speculative_hit = result is not None
+            if result is None:
+                result = await self._index.query(
+                    text, top_k=self._top_k, alpha=self._alpha
+                )
+            span.set_attribute("latency_ms", result.latency_ms)
+            span.set_attribute("speculative_hit", speculative_hit)
         self._latest_result = result
         logger.info(
-            "agent.retrieve query=%r citations=%d latency_ms=%.3f",
+            "agent.retrieve query=%r citations=%d latency_ms=%.3f speculative=%s",
             text,
             len(result.citations),
             result.latency_ms,
+            speculative_hit,
         )
         return result
 
@@ -232,18 +346,26 @@ class CrossExamAgent(_agent_base()):  # type: ignore[misc]
         self,
         result: RetrievalResult,
         room: Any | None = None,  # noqa: ANN401 - LiveKit Room type is optional
+        *,
+        answer_text: str | None = None,
+        proactive: bool = False,
     ) -> bool:
-        """Publish the top citation from ``result`` to the LiveKit data channel.
+        """Publish the (faithfulness-gated) top citation to the data channel.
 
-        Builds the JSON frame via :func:`build_citation_payload` and writes it to
-        the room's local-participant data channel as a UTF-8 JSON frame, exactly
-        the shape ``useCrossExam.ts`` parses. All LiveKit usage is guarded so the
-        method is a safe no-op (returning ``False``) when no room is wired or
-        LiveKit is unavailable.
+        Builds the JSON frame via :func:`build_citation_payload` — which runs the
+        faithfulness gate against ``answer_text`` (or the chunk's own text) — and
+        writes it to the room's local-participant data channel as a UTF-8 JSON
+        frame, exactly the shape ``useCrossExam.ts`` parses. When the cited chunk
+        does not support the answer, the published frame is
+        ``{citation:null, reason:"not_found_in_document"}`` rather than a wrong
+        box. All LiveKit usage is guarded so the method is a safe no-op
+        (returning ``False``) when no room is wired or LiveKit is unavailable.
 
         Args:
             result: The retrieval result whose top citation to publish.
             room: Optional explicit room handle; falls back to ``self.room``.
+            answer_text: The agent's drafted answer to faithfulness-check.
+            proactive: Mark the frame as unprompted (ambient) surfacing.
 
         Returns:
             ``True`` if a frame was published, ``False`` otherwise.
@@ -253,21 +375,35 @@ class CrossExamAgent(_agent_base()):  # type: ignore[misc]
             logger.debug("agent.publish_citation no room wired; skipping")
             return False
 
-        payload = build_citation_payload(result)
-        if payload is None:
-            logger.debug("agent.publish_citation no citations; skipping")
-            return False
+        with self._tracer.span("publish", proactive=proactive) as span:
+            payload = build_citation_payload(
+                result,
+                answer_text,
+                proactive=proactive,
+                faithfulness_threshold=self._faithfulness_threshold,
+            )
+            if payload is None:
+                logger.debug("agent.publish_citation no citations; skipping")
+                return False
 
-        data = json.dumps(payload).encode("utf-8")
-        try:
-            await target_room.local_participant.publish_data(data)
-        except Exception:  # noqa: BLE001 - never break the turn on publish failure
-            logger.exception("agent.publish_citation failed; turn continues")
-            return False
+            cit = payload.get("citation")
+            if isinstance(cit, dict):
+                fth = cit.get("faithfulness")
+                if isinstance(fth, dict):
+                    span.set_attribute("faithfulness.score", fth.get("score"))
+            span.set_attribute("latency_ms", payload.get("latencyMs"))
+
+            data = json.dumps(payload).encode("utf-8")
+            try:
+                await target_room.local_participant.publish_data(data)
+            except Exception:  # noqa: BLE001 - never break the turn on publish failure
+                logger.exception("agent.publish_citation failed; turn continues")
+                return False
 
         logger.debug(
-            "agent.publish_citation published citation id=%s bytes=%d",
-            payload["citation"]["id"],
+            "agent.publish_citation published citation=%s reason=%s bytes=%d",
+            payload.get("citation") is not None,
+            payload.get("reason"),
             len(data),
         )
         return True
@@ -330,6 +466,37 @@ class CrossExamAgent(_agent_base()):  # type: ignore[misc]
             len(system_content),
         )
 
-        # Publish the top citation to the frontend over the data channel so the
-        # LIVE-mode citation box can render. No-op when no room is wired.
+        # PROACTIVE / AMBIENT SURFACING: when the just-completed turn is a spoken
+        # CLAIM (a declarative assertion, not a question) and the document
+        # confidently supports it, publish the citation UNPROMPTED with
+        # ``proactive: true`` — the user need not ask. Confidence-gated by
+        # retrieval score AND faithfulness so we never push a weak highlight.
+        if self._proactive_enabled and self._is_proactive_claim(query_text, result):
+            await self.publish_citation(
+                result, answer_text=query_text, proactive=True
+            )
+            return
+
+        # Otherwise publish the top citation (faithfulness-gated) for the answer.
+        # No-op when no room is wired. ``answer_text`` defaults to the chunk in
+        # publish path until the LLM's drafted answer is available.
         await self.publish_citation(result)
+
+    def _is_proactive_claim(self, text: str, result: RetrievalResult) -> bool:
+        """Whether ``text`` is a claim the document confidently supports.
+
+        Combines the :class:`~crossexam_backend.proactive.ClaimDetector` (is this
+        an assertion, not a question?) with the confidence gate
+        :func:`~crossexam_backend.proactive.should_surface` (do retrieval and
+        faithfulness both clear their thresholds?).
+        """
+        if not self._claim_detector.is_claim(text):
+            return False
+        if not result.citations:
+            return False
+        verdict = verify_faithfulness(
+            text,
+            result.top_text,
+            threshold=self._faithfulness_threshold,
+        )
+        return should_surface(result, verdict, self._surface_thresholds)

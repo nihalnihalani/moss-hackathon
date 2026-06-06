@@ -54,6 +54,27 @@ def test_moss_missing_when_creds_set_but_no_sdk() -> None:
     assert checks["Moss retrieval"].status is Status.MISSING
 
 
+def test_tracing_and_proactive_rows_present() -> None:
+    """The table reports tracing + proactive readiness rows."""
+    names = {c.name for c in run_checks(_no_keys_settings())}
+    assert "Tracing (Langfuse)" in names
+    assert "Proactive surfacing" in names
+
+
+def test_tracing_off_and_proactive_ready_by_default() -> None:
+    """No obs config -> tracing OFF; proactive defaults on -> READY."""
+    checks = {c.name: c for c in run_checks(_no_keys_settings())}
+    assert checks["Tracing (Langfuse)"].status is Status.OFF
+    assert checks["Proactive surfacing"].status is Status.READY
+
+
+def test_off_rows_do_not_fail_overall_mode() -> None:
+    """OFF rows are not MISSING; mock mode still resolves cleanly."""
+    checks = run_checks(_no_keys_settings())
+    assert overall_mode(checks) == "MOCK"
+    assert not any(c.status is Status.MISSING for c in checks)
+
+
 def test_format_table_is_text() -> None:
     """The rendered table is a non-empty multi-line string with a header."""
     table = doctor.format_table(run_checks(_no_keys_settings()))

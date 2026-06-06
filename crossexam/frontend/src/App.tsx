@@ -7,6 +7,7 @@ import { StatePill } from './components/StatePill';
 import { Captions } from './components/Captions';
 import { PdfCanvas } from './components/PdfCanvas';
 import { LatencyChip } from './components/LatencyChip';
+import { LiveLatencyBadge } from './components/LiveLatencyBadge';
 import { PageJump } from './components/PageJump';
 import { DocumentUpload } from './components/DocumentUpload';
 import { useToast } from './components/ToastContext';
@@ -109,9 +110,12 @@ export function App(): JSX.Element {
           <span className="cmdbar__case">CASE NO. 2026-CV-0914</span>
         </div>
 
-        <div className={`hud hud--${hudVariant}`} title={session.reason ?? undefined} data-testid="mode-badge">
-          <span className="hud__dot" aria-hidden="true" />
-          {modeLabel}
+        <div className="cmdbar__center">
+          <div className={`hud hud--${hudVariant}`} title={session.reason ?? undefined} data-testid="mode-badge">
+            <span className="hud__dot" aria-hidden="true" />
+            {modeLabel}
+          </div>
+          <LiveLatencyBadge latencyMs={cx.lastLatencyMs} />
         </div>
 
         <div className="cmdbar__controls">
@@ -137,12 +141,14 @@ export function App(): JSX.Element {
       <main className="stage">
         <section className="rail" aria-label="Voice interface">
           <VoiceOrb state={cx.agentState} />
-          <StatePill state={cx.agentState} />
+          <StatePill state={cx.agentState} proactive={cx.proactive} />
           <Captions
             text={cx.caption}
             question={cx.question}
             citation={cx.activeCitation}
             onJump={onJump}
+            proactive={cx.proactive}
+            silenceReason={cx.silenceReason}
           />
         </section>
 
@@ -161,6 +167,7 @@ export function App(): JSX.Element {
             pdfUrl={pdfUrl}
             onClearCitation={onClearCitation}
             refocusSignal={refocus}
+            proactive={cx.proactive}
           />
         </section>
       </main>

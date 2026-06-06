@@ -126,6 +126,17 @@ class RetrievalResult(BaseModel):
     citations: list[Citation] = Field(default_factory=list)
     latency_ms: float = Field(default=0.0, ge=0.0)
 
+    @property
+    def top_text(self) -> str:
+        """Text of the best (first) citation's chunk, or ``""`` when empty.
+
+        A convenience for the faithfulness gate, which verifies the agent's
+        answer against the chunk it is about to highlight (the top citation).
+        """
+        if not self.citations:
+            return ""
+        return self.citations[0].chunk.text
+
     def to_system_prompt(self) -> str:
         """Render the citations as a ``role="system"`` grounding message.
 

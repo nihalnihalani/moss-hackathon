@@ -72,6 +72,26 @@ class Settings(BaseSettings):
     top_k: int = Field(default=5, ge=1, le=50)
     alpha: float = Field(default=0.8, ge=0.0, le=1.0)
 
+    # --- Technical-depth features (speculative / faithfulness / proactive) --
+    # Speculative retrieval on ASR partials: prefetch the query on interim
+    # transcripts so the citation is ready before the turn ends. On by default.
+    speculative_enabled: bool = Field(default=True)
+    # Faithfulness gate: minimum support score for the agent to highlight a
+    # citation. Below this the agent publishes {citation:null,
+    # reason:"not_found_in_document"} instead of a wrong box.
+    faithfulness_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
+    # Proactive / ambient surfacing: publish a citation unprompted when a spoken
+    # CLAIM (not a question) is confidently supported by the document.
+    proactive_enabled: bool = Field(default=True)
+
+    # --- Observability (OpenTelemetry -> Langfuse) --------------------------
+    # Tracing is OFF unless obs_enabled AND the [obs] extra is installed AND the
+    # Langfuse keys below are present. No secrets ship with these defaults.
+    obs_enabled: bool = Field(default=False)
+    langfuse_public_key: str | None = Field(default=None)
+    langfuse_secret_key: str | None = Field(default=None)
+    langfuse_host: str = Field(default="https://cloud.langfuse.com")
+
     # --- Mock / runtime -----------------------------------------------------
     use_mocks: bool | None = Field(default=None)
     mock_fixture_path: str = Field(default="fixtures/sample_chunks.json")
@@ -101,6 +121,11 @@ class Settings(BaseSettings):
     def has_moss_credentials(self) -> bool:
         """Return ``True`` when both Moss credentials are configured."""
         return bool(self.moss_project_id) and bool(self.moss_project_key)
+
+    @property
+    def has_langfuse_credentials(self) -> bool:
+        """Return ``True`` when both Langfuse keys are configured."""
+        return bool(self.langfuse_public_key) and bool(self.langfuse_secret_key)
 
     @property
     def has_livekit_credentials(self) -> bool:
