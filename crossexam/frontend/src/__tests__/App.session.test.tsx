@@ -10,6 +10,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import { App } from '../App';
 import { ApiError } from '../lib/api';
+import { ToastProvider } from '../components/ToastContext';
 
 vi.mock('../lib/api', async () => {
   const actual = await vi.importActual<typeof import('../lib/api')>('../lib/api');
@@ -53,7 +54,7 @@ describe('App startup session resolution', () => {
       room: 'room-1',
     });
 
-    render(<App />);
+    render(<ToastProvider><App /></ToastProvider>);
 
     await waitFor(() =>
       expect(screen.getByTestId('mode-badge').textContent).toMatch(/LIVE/),
@@ -65,7 +66,7 @@ describe('App startup session resolution', () => {
   it('falls back to MOCK when /config fails (backend unreachable)', async () => {
     fetchConfig.mockRejectedValue(new ApiError('unreachable'));
 
-    render(<App />);
+    render(<ToastProvider><App /></ToastProvider>);
 
     await waitFor(() =>
       expect(screen.getByTestId('mode-badge').textContent).toBe('MOCK / OFFLINE'),
@@ -76,7 +77,7 @@ describe('App startup session resolution', () => {
   it('falls back to MOCK when /config reports live:false', async () => {
     fetchConfig.mockResolvedValue({ livekitUrl: null, live: false });
 
-    render(<App />);
+    render(<ToastProvider><App /></ToastProvider>);
 
     await waitFor(() =>
       expect(screen.getByTestId('mode-badge').textContent).toBe('MOCK / OFFLINE'),

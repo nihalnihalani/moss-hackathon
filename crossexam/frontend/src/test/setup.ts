@@ -17,8 +17,15 @@ import '@testing-library/jest-dom/vitest';
       beginPath: noop,
       arc: noop,
       fill: noop,
+      createImageData: (w: number, h: number) => ({
+        data: new Uint8ClampedArray(w * h * 4),
+        width: w,
+        height: h,
+      }),
+      putImageData: noop,
       createRadialGradient: () => ({ addColorStop: noop }),
       createLinearGradient: () => ({ addColorStop: noop }),
+      createConicGradient: () => ({ addColorStop: noop }),
       set fillStyle(_v: unknown) {},
       get fillStyle() {
         return '#000';
@@ -33,6 +40,26 @@ import '@testing-library/jest-dom/vitest';
 
 if (!('devicePixelRatio' in window)) {
   Object.defineProperty(window, 'devicePixelRatio', { value: 1, configurable: true });
+}
+
+// jsdom doesn't implement scrollIntoView; the PdfCanvas re-centers the box with it.
+if (!Element.prototype.scrollIntoView) {
+  Element.prototype.scrollIntoView = (): void => undefined;
+}
+
+// matchMedia is consulted by motion-aware components (LatencyChip, Atmosphere).
+if (typeof window.matchMedia !== 'function') {
+  window.matchMedia = (query: string): MediaQueryList =>
+    ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addListener: () => undefined,
+      removeListener: () => undefined,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+      dispatchEvent: () => false,
+    }) as unknown as MediaQueryList;
 }
 
 if (!window.requestAnimationFrame) {

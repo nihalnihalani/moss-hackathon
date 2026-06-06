@@ -7,6 +7,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { DocumentUpload } from '../DocumentUpload';
 import { ApiError } from '../../lib/api';
+import { ToastProvider } from '../ToastContext';
 
 vi.mock('../../lib/api', async () => {
   const actual = await vi.importActual<typeof import('../../lib/api')>('../../lib/api');
@@ -35,27 +36,27 @@ describe('DocumentUpload', () => {
       mode: 'live',
     });
     const onUploaded = vi.fn();
-    render(<DocumentUpload onUploaded={onUploaded} />);
+    render(<ToastProvider><DocumentUpload onUploaded={onUploaded} /></ToastProvider>);
 
     selectFile(pdf);
 
     await waitFor(() => expect(onUploaded).toHaveBeenCalledTimes(1));
-    expect(screen.getByRole('status').textContent).toMatch(/42 pages/);
+    expect(screen.getByRole('alert').textContent).toMatch(/42 pages/);
   });
 
   it('shows an error message when the upload fails', async () => {
     uploadDocument.mockRejectedValue(new ApiError('boom', 500));
-    render(<DocumentUpload onUploaded={vi.fn()} />);
+    render(<ToastProvider><DocumentUpload onUploaded={vi.fn()} /></ToastProvider>);
 
     selectFile(pdf);
 
-    await waitFor(() => expect(screen.getByRole('status').textContent).toMatch(/Upload failed/));
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toMatch(/Upload failed/));
   });
 
   it('rejects a non-PDF file before calling the API', () => {
-    render(<DocumentUpload onUploaded={vi.fn()} />);
+    render(<ToastProvider><DocumentUpload onUploaded={vi.fn()} /></ToastProvider>);
     selectFile(new File(['x'], 'notes.txt', { type: 'text/plain' }));
     expect(uploadDocument).not.toHaveBeenCalled();
-    expect(screen.getByRole('status').textContent).toMatch(/choose a PDF/i);
+    expect(screen.getByRole('alert').textContent).toMatch(/choose a PDF/i);
   });
 });

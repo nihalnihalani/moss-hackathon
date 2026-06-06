@@ -1,6 +1,7 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useState, useEffect, useRef } from 'react';
 import { useCrossExam } from './hooks/useCrossExam';
 import { useBackendSession } from './hooks/useBackendSession';
+import { Atmosphere } from './components/Atmosphere';
 import { VoiceOrb } from './components/VoiceOrb';
 import { StatePill } from './components/StatePill';
 import { Captions } from './components/Captions';
@@ -8,7 +9,10 @@ import { PdfCanvas } from './components/PdfCanvas';
 import { LatencyChip } from './components/LatencyChip';
 import { PageJump } from './components/PageJump';
 import { DocumentUpload } from './components/DocumentUpload';
+import { useToast } from './components/ToastContext';
+import { Play, RotateCcw } from 'lucide-react';
 import type { UploadResponse } from './lib/api';
+import type { Citation } from './types';
 
 const ENV = import.meta.env as Record<string, string | undefined>;
 
@@ -23,9 +27,22 @@ const PDF_URL = ENV.VITE_PDF_URL ?? '/sample-deposition.pdf';
 export function App(): JSX.Element {
   const envForceMock = ENV.VITE_MOCK_MODE === 'true';
   const [forceMock, setForceMock] = useState<boolean>(envForceMock);
+  const toast = useToast();
+  const prevReason = useRef<string | undefined>(undefined);
 
   // Resolve live-vs-mock against the backend on startup (skipped if forceMock).
   const session = useBackendSession({ forceMock });
+
+  useEffect(() => {
+    if (session.reason && session.reason !== prevReason.current) {
+      if (session.reason.includes('Backend unreachable') || session.reason.includes('Backend live but no LiveKit URL')) {
+        toast.error(`Connection Error: ${session.reason}`, 7000);
+      } else if (session.reason !== 'Forced mock mode' && session.reason !== 'Backend reports live:false') {
+        toast.info(session.reason);
+      }
+      prevReason.current = session.reason;
+    }
+  }, [session.reason, toast]);
 
   // The hook only enters its LIVE branch when both URL + token are present.
   const cx = useCrossExam({
@@ -50,6 +67,16 @@ export function App(): JSX.Element {
 
   const corpusPages = docInfo?.pages ?? cx.totalPages;
 
+  // Re-fire the snap (re-center + focus the box) when a page-ref chip is clicked.
+  const [refocus, setRefocus] = useState(0);
+  const onJump = useCallback((_citation: Citation): void => {
+    setRefocus((n) => n + 1);
+  }, []);
+
+  const onClearCitation = useCallback((): void => {
+    cx.reset();
+  }, [cx]);
+
   const modeLabel = resolving
     ? 'CONNECTING…'
     : cx.isMock
@@ -58,49 +85,61 @@ export function App(): JSX.Element {
         ? 'LIVE · CONNECTED'
         : 'LIVE · CONNECTING…';
 
+  const hudVariant = resolving || (cx.isConnected === false && !cx.isMock)
+    ? 'resolving'
+    : cx.isMock
+      ? 'mock'
+      : 'live';
+
   return (
     <div className="app">
-      <header className="app__header">
-        <div className="app__brand">
-          <span className="app__logo" aria-hidden="true" />
-          <h1 className="app__title">CrossExam</h1>
-          <span className="app__tagline">Ask the document. It points to the proof.</span>
+      <Atmosphere />
+
+      <header className="cmdbar">
+        <div className="cmdbar__brand">
+          <h1 className="cmdbar__wordmark">CrossExam</h1>
+          <span className="cmdbar__case">CASE NO. 2026-CV-0914</span>
         </div>
-        <div className="app__controls">
-          <span
-            className={`app__mode ${cx.isMock ? 'app__mode--mock' : 'app__mode--live'}`}
-            title={session.reason ?? undefined}
-            data-testid="mode-badge"
-          >
-            {modeLabel}
-          </span>
+
+        <div className={`hud hud--${hudVariant}`} title={session.reason ?? undefined} data-testid="mode-badge">
+          <span className="hud__dot" aria-hidden="true" />
+          {modeLabel}
+        </div>
+
+        <div className="cmdbar__controls">
           <DocumentUpload onUploaded={onUploaded} disabled={resolving} />
-          <label className="app__toggle">
+          <label className="cmdbar__toggle">
             <input
               type="checkbox"
               checked={forceMock}
               onChange={(e) => setForceMock(e.target.checked)}
+              aria-label="Force mock mode"
             />
             Force mock
           </label>
-          <button className="app__btn" onClick={cx.runDemo} disabled={!cx.isMock}>
-            ▶ Run demo
+          <button className="btn btn--ghost" onClick={cx.reset} aria-label="Reset session">
+            <RotateCcw size={13} /> Reset
           </button>
-          <button className="app__btn app__btn--ghost" onClick={cx.reset}>
-            Reset
+          <button className="btn btn--primary" onClick={cx.runDemo} disabled={!cx.isMock} aria-label="Run demo">
+            <Play size={13} fill="currentColor" /> Run demo
           </button>
         </div>
       </header>
 
-      <main className="app__split">
-        <section className="app__pane app__pane--voice" aria-label="Voice interface">
-          <StatePill state={cx.agentState} />
+      <main className="stage">
+        <section className="rail" aria-label="Voice interface">
           <VoiceOrb state={cx.agentState} />
-          <Captions text={cx.caption} question={cx.question} />
+          <StatePill state={cx.agentState} />
+          <Captions
+            text={cx.caption}
+            question={cx.question}
+            citation={cx.activeCitation}
+            onJump={onJump}
+          />
         </section>
 
-        <section className="app__pane app__pane--doc" aria-label="Document">
-          <div className="doc__chrome">
+        <section className="docstage" aria-label="Document">
+          <div className="docstage__hud">
             <PageJump active={searching} targetPage={cx.targetPage} totalPages={corpusPages} />
             <LatencyChip
               pages={cx.activeCitation?.pagesSearched ?? corpusPages}
@@ -108,7 +147,13 @@ export function App(): JSX.Element {
               visible={hasResult}
             />
           </div>
-          <PdfCanvas page={cx.targetPage} citation={cx.activeCitation} pdfUrl={pdfUrl} />
+          <PdfCanvas
+            page={cx.targetPage}
+            citation={cx.activeCitation}
+            pdfUrl={pdfUrl}
+            onClearCitation={onClearCitation}
+            refocusSignal={refocus}
+          />
         </section>
       </main>
     </div>

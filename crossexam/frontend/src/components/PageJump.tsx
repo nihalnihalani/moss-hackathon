@@ -11,7 +11,7 @@ export interface PageJumpProps {
 
 /**
  * The "searching 912 pages" beat: while active, rapidly flips a page counter
- * toward the target, conveying that real work is happening across the corpus.
+ * toward the target with a thin sweeping scan-line, conveying real corpus work.
  */
 export function PageJump({ active, targetPage, totalPages }: PageJumpProps): JSX.Element | null {
   const [display, setDisplay] = useState(1);
@@ -27,7 +27,6 @@ export function PageJump({ active, targetPage, totalPages }: PageJumpProps): JSX
     let last = performance.now();
     const tick = (now: number): void => {
       if (now - last > 28) {
-        // Accelerate toward the target so it feels like a scan, then settle.
         const step = Math.max(1, Math.floor((targetPage - current) / 6));
         current = Math.min(targetPage, current + step);
         setDisplay(current);
@@ -41,7 +40,8 @@ export function PageJump({ active, targetPage, totalPages }: PageJumpProps): JSX
 
   if (!active) return null;
   return (
-    <div className="page-jump" role="status" aria-live="off" aria-label="Searching pages">
+    <div className="glass-pill page-jump" role="status" aria-live="off" aria-label="Searching pages">
+      <span className="page-jump__scan" aria-hidden="true" />
       <span className="page-jump__label">searching</span>
       <span className="page-jump__counter">
         p.{display.toLocaleString()} <span className="page-jump__total">/ {totalPages.toLocaleString()}</span>

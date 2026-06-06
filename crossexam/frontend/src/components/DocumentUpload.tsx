@@ -10,8 +10,10 @@
  * file input is labelled, and status changes are announced via aria-live.
  */
 
-import { useCallback, useId, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { ApiError, uploadDocument, type UploadResponse } from '../lib/api';
+import { useToast } from './ToastContext';
+import { Upload, Check } from 'lucide-react';
 
 export interface DocumentUploadProps {
   /** Called once the backend has ingested the PDF. */
@@ -20,47 +22,52 @@ export interface DocumentUploadProps {
   disabled?: boolean;
 }
 
-type Phase = 'idle' | 'uploading' | 'success' | 'error';
-
 export function DocumentUpload({ onUploaded, disabled }: DocumentUploadProps): JSX.Element {
   const inputId = useId();
   const inputRef = useRef<HTMLInputElement | null>(null);
-  const [phase, setPhase] = useState<Phase>('idle');
+  const [uploading, setUploading] = useState(false);
   const [progress, setProgress] = useState<number | undefined>(undefined);
-  const [message, setMessage] = useState<string>('');
   const [dragOver, setDragOver] = useState(false);
+  const [done, setDone] = useState(false);
+  const toast = useToast();
+
+  // Briefly show the "in evidence" success state, then return to the prompt.
+  useEffect(() => {
+    if (!done) return;
+    const t = setTimeout(() => setDone(false), 2600);
+    return () => clearTimeout(t);
+  }, [done]);
 
   const startUpload = useCallback(
     (file: File): void => {
       if (file.type && file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')) {
-        setPhase('error');
-        setMessage('Please choose a PDF file.');
+        toast.error('Please choose a PDF file.');
         return;
       }
-      setPhase('uploading');
+      setUploading(true);
       setProgress(0);
-      setMessage(`Uploading ${file.name}…`);
 
       void uploadDocument(file, (frac) => setProgress(frac))
         .then((result) => {
-          setPhase('success');
-          setProgress(1);
-          setMessage(
+          setUploading(false);
+          setProgress(undefined);
+          setDone(true);
+          toast.success(
             `Indexed ${file.name}: ${result.pages} pages, ${result.chunksIndexed} chunks (${result.mode}).`,
           );
           onUploaded(result, file);
         })
         .catch((err: unknown) => {
-          setPhase('error');
+          setUploading(false);
           setProgress(undefined);
-          setMessage(
+          toast.error(
             err instanceof ApiError
               ? `Upload failed: ${err.message}`
               : `Upload failed: ${err instanceof Error ? err.message : String(err)}`,
           );
         });
     },
-    [onUploaded],
+    [onUploaded, toast],
   );
 
   const onFileChange = useCallback(
@@ -88,7 +95,6 @@ export function DocumentUpload({ onUploaded, disabled }: DocumentUploadProps): J
     if (!disabled) inputRef.current?.click();
   }, [disabled]);
 
-  const uploading = phase === 'uploading';
   const pct = progress === undefined ? undefined : Math.round(progress * 100);
 
   return (
@@ -106,7 +112,7 @@ export function DocumentUpload({ onUploaded, disabled }: DocumentUploadProps): J
       />
       <button
         type="button"
-        className={`doc-upload__zone${dragOver ? ' doc-upload__zone--over' : ''}`}
+        className={`doc-upload__zone${dragOver ? ' doc-upload__zone--over' : ''}${done ? ' doc-upload__zone--done' : ''}`}
         onClick={openPicker}
         onDragOver={(e) => {
           e.preventDefault();
@@ -115,14 +121,24 @@ export function DocumentUpload({ onUploaded, disabled }: DocumentUploadProps): J
         onDragLeave={() => setDragOver(false)}
         onDrop={onDrop}
         disabled={disabled || uploading}
-        aria-label="Upload a PDF document. Click to browse or drop a file here."
+        aria-label="Submit a PDF document into evidence. Click to browse or drop a file here."
         aria-busy={uploading}
       >
-        {uploading
-          ? pct === undefined
-            ? 'Uploading…'
-            : `Uploading ${pct}%`
-          : '⬆ Upload PDF'}
+        {uploading ? (
+          pct === undefined ? (
+            'Submitting…'
+          ) : (
+            `Submitting ${pct}%`
+          )
+        ) : done ? (
+          <>
+            <Check size={14} /> In evidence
+          </>
+        ) : (
+          <>
+            <Upload size={14} /> Submit document into evidence
+          </>
+        )}
       </button>
 
       {uploading ? (
@@ -133,14 +149,6 @@ export function DocumentUpload({ onUploaded, disabled }: DocumentUploadProps): J
           aria-label="Upload progress"
         />
       ) : null}
-
-      <p
-        className={`doc-upload__status doc-upload__status--${phase}`}
-        role="status"
-        aria-live="polite"
-      >
-        {message}
-      </p>
     </div>
   );
 }
