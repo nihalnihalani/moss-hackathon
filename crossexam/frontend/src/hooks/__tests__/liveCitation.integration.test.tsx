@@ -25,7 +25,14 @@ import type { Citation } from '../../types';
 const RENDER_SCALE = 1.25;
 
 /** RoomEvent enum surface the hook touches. */
-const RoomEvent = { DataReceived: 'dataReceived' } as const;
+const RoomEvent = {
+  DataReceived: 'dataReceived',
+  TrackSubscribed: 'trackSubscribed',
+  TrackUnsubscribed: 'trackUnsubscribed',
+} as const;
+
+/** Track.Kind surface the hook reads when wiring the agent's audio to the orb. */
+const Track = { Kind: { Audio: 'audio', Video: 'video', Unknown: 'unknown' } } as const;
 
 /** Captures the data handler the hook registers so the test can emit frames. */
 let capturedOnData: ((payload: Uint8Array) => void) | undefined;
@@ -48,6 +55,7 @@ class FakeRoom {
 vi.mock('livekit-client', () => ({
   Room: FakeRoom,
   RoomEvent,
+  Track,
 }));
 
 /** Mirrors App.tsx's wiring of the hook into the canvas. */

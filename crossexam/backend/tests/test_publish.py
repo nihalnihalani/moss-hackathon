@@ -279,3 +279,39 @@ def test_contradiction_frame_carries_hops_and_flag() -> None:
     assert all(h["subQuery"] for h in frame["hops"])
     # hops carry the citation ids surfaced per sub-query.
     assert frame["hops"][0]["citationIds"] == ["depo-p12"]
+
+
+def test_contradiction_pair_survives_a_real_answer_text() -> None:
+    """A real answer_text must NOT drop the contradiction pair (feat 3 fix).
+
+    Contradiction citations are evidence of CONFLICT, not support for one
+    answer; the answer-faithfulness gate must not silently drop the side the
+    answer doesn't echo. An answer that agrees only with the alibi (page 12)
+    must still leave BOTH conflicting citations and the contradiction flag on
+    the frame.
+    """
+    result = _two_doc_contradiction_result()
+    # The drafted answer agrees with the page-12 alibi only (it says nothing
+    # about leaving before 8 p.m.); the page-41 side shares little content.
+    frame = build_frame(
+        result,
+        answer_text=(
+            "The witness testified he remained at the Harbor Street warehouse "
+            "past midnight."
+        ),
+    )
+    surfaced = {c["id"] for c in frame["citations"]}
+    assert "depo-p12" in surfaced
+    assert "depo-p41" in surfaced  # NOT dropped by the answer gate
+    assert frame["contradiction"] is True
+    assert frame["primaryId"] == "depo-p12"
+
+
+def test_cross_document_contradiction_marks_cross_document_flag() -> None:
+    """A cross-document contradiction frame exposes crossDocument:true."""
+    result = _two_doc_contradiction_result().model_copy(
+        update={"cross_document": True}
+    )
+    frame = build_frame(result, answer_text="warehouse past midnight")
+    assert frame["contradiction"] is True
+    assert frame["crossDocument"] is True

@@ -271,6 +271,9 @@ class MultiHopResult(BaseModel):
         hops: The decomposition trail — one :class:`HopTrace` per sub-query.
         contradiction: Whether two high-confidence citations assert mutually
             exclusive facts (cross-page / cross-doc).
+        cross_document: Whether the conflicting pair spans two different
+            ``documentId``s (an alibi vs. an independent exhibit) rather than an
+            in-document inconsistency. Only meaningful when ``contradiction``.
         primary_id: The citation id to page-jump to first (best hit), or ``None``
             when there are no citations.
         latency_ms: Wall-clock retrieval latency in milliseconds.
@@ -280,6 +283,7 @@ class MultiHopResult(BaseModel):
     citations: list[Citation] = Field(default_factory=list)
     hops: list[HopTrace] = Field(default_factory=list)
     contradiction: bool = False
+    cross_document: bool = False
     primary_id: str | None = None
     latency_ms: float = Field(default=0.0, ge=0.0)
 

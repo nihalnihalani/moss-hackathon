@@ -93,6 +93,13 @@ export interface CrossExamState {
    * "No grounded source — staying silent" empty state. Cleared on any new snap.
    */
   silenceReason: SilenceReason | null;
+  /**
+   * The agent's output (TTS) audio as a MediaStream, when a live room has
+   * subscribed to a remote audio track. Feeds the audio-reactive orb so it
+   * breathes to the agent's voice while `speaking`. Null in mock / before any
+   * remote audio arrives.
+   */
+  outputStream: MediaStream | null;
   /** Kick off the scripted demo (mock) or send a prompt (live, best-effort). */
   runDemo: () => void;
   /** Reset back to the idle/establishing-the-haystack state. */
@@ -291,6 +298,8 @@ export function useCrossExam(config: CrossExamConfig): CrossExamState {
 
   const [snap, setSnap] = useState<MutableSnapshot>(() => ({ ...IDLE_SNAPSHOT }));
   const [isConnected, setIsConnected] = useState(false);
+  // The agent's remote (TTS) audio track, surfaced as a MediaStream for the orb.
+  const [outputStream, setOutputStream] = useState<MediaStream | null>(null);
   const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
 
   const clearTimers = useCallback(() => {
@@ -327,6 +336,7 @@ export function useCrossExam(config: CrossExamConfig): CrossExamState {
   useEffect(() => {
     if (isMock) {
       setIsConnected(false);
+      setOutputStream(null);
       return;
     }
     let disposed = false;
@@ -334,7 +344,7 @@ export function useCrossExam(config: CrossExamConfig): CrossExamState {
 
     void (async () => {
       try {
-        const { Room, RoomEvent } = await import('livekit-client');
+        const { Room, RoomEvent, Track } = await import('livekit-client');
         const room = new Room();
         await room.connect(config.livekitUrl as string, config.livekitToken as string);
         if (disposed) {
@@ -353,13 +363,33 @@ export function useCrossExam(config: CrossExamConfig): CrossExamState {
         };
         room.on(RoomEvent.DataReceived, onData);
 
+        // Surface the agent's remote audio (TTS) track to the orb. A remote
+        // MICROPHONE/audio track maps to a one-track MediaStream for metering.
+        const onTrackSubscribed = (track: { kind: string; mediaStreamTrack?: MediaStreamTrack }): void => {
+          if (disposed) return;
+          if (track.kind === Track.Kind.Audio && track.mediaStreamTrack) {
+            setOutputStream(new MediaStream([track.mediaStreamTrack]));
+          }
+        };
+        const onTrackUnsubscribed = (track: { kind: string }): void => {
+          if (track.kind === Track.Kind.Audio) setOutputStream(null);
+        };
+        room.on(RoomEvent.TrackSubscribed, onTrackSubscribed);
+        room.on(RoomEvent.TrackUnsubscribed, onTrackUnsubscribed);
+
         cleanup = () => {
           room.off(RoomEvent.DataReceived, onData);
+          room.off(RoomEvent.TrackSubscribed, onTrackSubscribed);
+          room.off(RoomEvent.TrackUnsubscribed, onTrackUnsubscribed);
+          setOutputStream(null);
           void room.disconnect();
         };
       } catch {
         // Fall back gracefully: stay in a connected=false state, UI still renders.
-        if (!disposed) setIsConnected(false);
+        if (!disposed) {
+          setIsConnected(false);
+          setOutputStream(null);
+        }
       }
     })();
 
@@ -395,6 +425,7 @@ export function useCrossExam(config: CrossExamConfig): CrossExamState {
     proactive: snap.proactive,
     lastLatencyMs: snap.lastLatencyMs,
     silenceReason: snap.silenceReason,
+    outputStream,
     runDemo,
     reset,
   };

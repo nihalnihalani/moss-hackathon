@@ -8,6 +8,8 @@ recant (left before 8 p.m.); Doc B is an exhibit log corroborating the times.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from crossexam_backend.models import BBox, Chunk
@@ -15,8 +17,23 @@ from crossexam_backend.retrieval.mock_index import MockIndex
 from crossexam_backend.retrieval.multihop import (
     MultiHopRetriever,
     QueryDecomposer,
+    contradiction_pair,
     detect_contradiction,
 )
+
+FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "sample_chunks.json"
+
+# The canonical demo question: a witness whose deposition alibi (page 12, the
+# deposition document) collides with an independent exhibit (the downtown
+# visitor log, a DIFFERENT document) placing him two miles away at the same
+# time. Mentions the warehouse so retrieval pulls the deposition alibi and the
+# exhibit that references it.
+DEMO_CONTRADICTION_Q = (
+    "Did the witness contradict his testimony about being at the Harbor Street "
+    "warehouse on the night of the 14th?"
+)
+DEMO_PRIMARY_ID = "pdf-p12-l1"  # deposition alibi (claim under examination)
+DEMO_OTHER_ID = "exhibit-visitor-log-p2-l1"  # exhibit that contradicts it
 
 
 def _chunk(
@@ -99,7 +116,12 @@ def test_decomposer_splits_contradiction_question() -> None:
     assert len(subs) > 1
     joined = " ".join(subs).lower()
     assert "14th" in joined or "night" in joined
-    assert any("conflict" in s.lower() for s in subs)
+    # The principled pair seeks the core claim and the evidence that
+    # contradicts it (not a literal conjunction fragment). Updated from the old
+    # "conflicting statement about ..." wording.
+    assert any("contradict" in s.lower() for s in subs)
+    # No contradiction-framing word leaks into the located-claim sub-query.
+    assert "contradict" not in subs[0].lower()
 
 
 def test_decomposer_flags_multihop() -> None:
@@ -143,12 +165,14 @@ def test_detect_contradiction_on_opposing_pages() -> None:
     from crossexam_backend.retrieval.mock_index import _chunk_to_citation
 
     cits = [
-        _chunk_to_citation(chunks[0], 1.0),  # depo-p12: stayed/remained past midnight
-        _chunk_to_citation(chunks[1], 0.9),  # depo-p41: left/departed before 8
+        _chunk_to_citation(chunks[0], 1.0),  # depo-p12: at warehouse past midnight
+        _chunk_to_citation(chunks[1], 0.9),  # depo-p41: left warehouse, away/home
     ]
-    contradiction, primary = detect_contradiction(cits)
+    contradiction, primary, cross_document = detect_contradiction(cits)
     assert contradiction is True
     assert primary == "depo-p12"
+    # Both chunks are in the same deposition document -> not cross-document.
+    assert cross_document is False
 
 
 def test_no_contradiction_when_no_opposing_predicates() -> None:
@@ -160,9 +184,10 @@ def test_no_contradiction_when_no_opposing_predicates() -> None:
         _chunk_to_citation(chunks[2], 1.0),  # name
         _chunk_to_citation(chunks[4], 0.9),  # guard register
     ]
-    contradiction, primary = detect_contradiction(cits)
+    contradiction, primary, cross_document = detect_contradiction(cits)
     assert contradiction is False
     assert primary is None
+    assert cross_document is False
 
 
 # --------------------------------------------------------------------------- #
@@ -213,3 +238,117 @@ async def test_multihop_dedupes_citations(index: MockIndex) -> None:
     )
     ids = [c.chunk.id for c in result.citations]
     assert len(ids) == len(set(ids))
+
+
+# --------------------------------------------------------------------------- #
+# Structural detector / honesty on the REAL shipped fixture                    #
+# --------------------------------------------------------------------------- #
+@pytest.fixture()
+def real_index() -> MockIndex:
+    """A MockIndex over the real shipped fixture (deposition + exhibits)."""
+    return MockIndex.from_fixture(FIXTURE)
+
+
+def test_separation_cue_beats_class_difference_cross_doc() -> None:
+    """A separation-cue pair is preferred over a plain cross-doc class clash.
+
+    Both an exhibit that says the subject was 'downtown' (class difference) and
+    one that says he was 'two miles from the warehouse' (separation cue) clash
+    with the deposition alibi. The detector must select the SEPARATION-cue pair
+    and anchor on the presence-asserting deposition claim.
+    """
+    from crossexam_backend.retrieval.mock_index import _chunk_to_citation
+
+    alibi = _chunk(
+        "depo-p12",
+        "I was at the Harbor Street warehouse from 9 p.m. past midnight on the "
+        "night of the 14th.",
+        12,
+        "deposition",
+    )
+    downtown = _chunk(
+        "field-notes",
+        "On the night of the 14th: saw him downtown around 9:30 p.m.",
+        1,
+        "exhibit-notes",
+    )
+    separated = _chunk(
+        "visitor-log",
+        "He signed the downtown visitor log at 9:40 p.m. on the 14th -- two "
+        "miles from the Harbor Street warehouse.",
+        2,
+        "exhibit-log",
+    )
+    cits = [
+        _chunk_to_citation(alibi, 1.0),
+        _chunk_to_citation(downtown, 0.98),  # higher score, but class-only clash
+        _chunk_to_citation(separated, 0.80),  # lower score, separation cue
+    ]
+    contradiction, primary, cross = detect_contradiction(cits)
+    assert contradiction is True
+    assert cross is True
+    assert primary == "depo-p12"  # presence-asserting claim is the anchor
+    pair = contradiction_pair(cits)
+    assert pair is not None
+    assert pair[0] == "depo-p12"
+    assert pair[1] == "visitor-log"  # separation-cue evidence wins the slot
+
+
+async def test_demo_selects_cross_doc_pair_on_real_fixture(
+    real_index: MockIndex,
+) -> None:
+    """The demo question resolves to the CROSS-DOC pair on the real fixture.
+
+    Must select (pdf-p12-l1 [deposition], exhibit-visitor-log-p2-l1 [exhibit])
+    — different documentIds — NOT the same-doc page-12/page-41 deposition pair.
+    """
+    retriever = MultiHopRetriever(real_index)
+    result = await retriever.retrieve(DEMO_CONTRADICTION_Q, top_k=5, per_hop_k=5)
+
+    assert result.contradiction is True
+    assert result.cross_document is True
+    assert result.primary_id == DEMO_PRIMARY_ID
+    ids = {c.chunk.id for c in result.citations}
+    # BOTH members of the cross-doc pair survive into the published citations.
+    assert DEMO_PRIMARY_ID in ids
+    assert DEMO_OTHER_ID in ids
+    # The two sides live in DIFFERENT documents (cross-document conflict).
+    by_id = {c.chunk.id: c for c in result.citations}
+    assert by_id[DEMO_PRIMARY_ID].documentId != by_id[DEMO_OTHER_ID].documentId
+    assert by_id[DEMO_PRIMARY_ID].documentId == "deposition-holloway"
+    assert by_id[DEMO_OTHER_ID].documentId == "exhibit-visitor-log"
+
+
+async def test_published_hops_equal_decompose_output(
+    real_index: MockIndex,
+) -> None:
+    """The hops the retriever publishes ARE what decompose() returned.
+
+    Guards against hand-written hop fiction: the sub-query strings on the hop
+    trail must equal the decomposer's actual output for the question.
+    """
+    decomposer = QueryDecomposer()
+    expected = decomposer.decompose(DEMO_CONTRADICTION_Q)
+    retriever = MultiHopRetriever(real_index, decomposer)
+    result = await retriever.retrieve(DEMO_CONTRADICTION_Q, top_k=5, per_hop_k=5)
+    assert [h.subQuery for h in result.hops] == expected
+
+
+def test_decompose_emits_sensible_subqueries_not_conjunction_fragments() -> None:
+    """decompose() yields real sub-queries, never a bare conjunction fragment."""
+    dec = QueryDecomposer()
+    # A conjunction question must NOT split into "did the supplier" + "the buyer".
+    subs = dec.decompose(
+        "Did the supplier and the buyer agree on the delivery terms?"
+    )
+    assert all(len(s.split()) >= 2 for s in subs)
+    assert not any(s.strip().lower() == "did the supplier" for s in subs)
+    # The contradiction question yields the principled (claim, contradicting)
+    # pair derived from subject+predicate, not a literal "and" split.
+    subs = dec.decompose(DEMO_CONTRADICTION_Q)
+    assert len(subs) == 2
+    assert "warehouse" in subs[0].lower()
+    assert "14th" in subs[0].lower()
+    assert subs[1].lower().startswith("evidence that contradicts")
+    # No contradiction-framing word leaks into the located-claim sub-query.
+    assert "contradict" not in subs[0].lower()

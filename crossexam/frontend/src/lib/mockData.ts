@@ -1,21 +1,27 @@
 /**
  * mockData.ts — the scripted depth-v2 demo, runnable with zero backend.
  *
+ * The mock citations MIRROR the real backend fixture
+ * (crossexam/backend/fixtures/sample_chunks.json) EXACTLY — same ids, text,
+ * page, bbox and quads — so unchecking "Force mock" and switching to the live
+ * backend snaps the same boxes onto the same glyphs. The source of truth is the
+ * fixture; this file must not drift from it.
+ *
  * Showcases all five features without a backend:
- *   1. Multi-doc + multi-hop CONTRADICTION: a box in the deposition, then a
- *      conflicting box in the exhibit-visitor-log doc, with a hops trail.
+ *   1. Multi-doc + multi-hop CONTRADICTION: a box in the deposition (p12), then a
+ *      conflicting box in the exhibit-visitor-log doc (p2), with a hops trail.
  *   2. Quad highlights: citations carry per-line `quads[]` so the amber
  *      highlight hugs real text across wraps (union `bbox` drives jump + label).
- *   3. Scanned source: the exhibit is OCR'd -> `scanned: true` badge.
+ *   3. Scanned source: the handwritten field-notes exhibit is OCR'd -> the
+ *      `scanned: true` badge. The visitor log is born-digital (NOT scanned).
  *   4. Meeting mode: a proactive citation tagged with its `speaker`.
  *   5. Memory: a recall chip ("as we saw on page 12") instead of a re-snap.
  *
- * IMPORTANT — page numbers + point bboxes MUST match the actual layout of the
- * real PDFs served at /public/sample-deposition.pdf and
- * /public/exhibit-visitor-log.pdf, since `bbox.page` is both the page the canvas
- * navigates to and the page the box is drawn on. bbox.ts reads the TRUE page
- * dimensions from the rendered viewport, so only the per-line x/y need to track
- * the text; the US-Letter constants below are the placeholder fallback size.
+ * IMPORTANT — page numbers + point bboxes match the real PDFs served at
+ * /public/sample-deposition.pdf and /public/exhibit-visitor-log.pdf (and the
+ * fixture chunks), since `bbox.page` is both the page the canvas navigates to and
+ * the page the box is drawn on. bbox.ts reads the TRUE page dimensions from the
+ * rendered viewport; the US-Letter constants below are the placeholder fallback.
  *
  * Coordinates are top-left origin, y downward, PDF points (see types.ts BBox).
  */
@@ -32,37 +38,54 @@ export const DEMO_TOTAL_PAGES = 912;
 /** Document ids -> PDF urls. The doc switcher uses this mapping (feat 1). */
 export const DOC_DEPOSITION = 'deposition-holloway';
 export const DOC_EXHIBIT = 'exhibit-visitor-log';
+export const DOC_FIELD_NOTES = 'exhibit-field-notes';
 
+/** Titles mirror the fixture's `documentTitle` for each chunk's documentId. */
 export const DOC_TITLES: Readonly<Record<string, string>> = {
-  [DOC_DEPOSITION]: 'Holloway Deposition',
-  [DOC_EXHIBIT]: 'Exhibit C — Visitor Log',
+  [DOC_DEPOSITION]: 'Deposition of Raymond T. Holloway',
+  [DOC_EXHIBIT]: 'Exhibit 14: Security Desk Visitor Log',
+  [DOC_FIELD_NOTES]: 'Exhibit 22: Handwritten Field Notes (scanned)',
 };
 
-/** documentId -> public PDF url. Selecting a tab jumps the canvas to this doc. */
+/**
+ * documentId -> public PDF url. Selecting a tab jumps the canvas to this doc.
+ * The deposition + visitor-log PDFs ship in /public; the scanned field-notes
+ * exhibit has no rendered PDF, so PdfCanvas draws its placeholder page (the
+ * scanned badge + box still read correctly for the OCR beat).
+ */
 export const DOC_URLS: Readonly<Record<string, string>> = {
   [DOC_DEPOSITION]: '/sample-deposition.pdf',
   [DOC_EXHIBIT]: '/exhibit-visitor-log.pdf',
 };
 
 /**
- * The warehouse-admission line (deposition). Two wrapped lines, so it carries
- * two quads that hug the real text; `bbox` is their union.
+ * The warehouse-admission line (deposition, page 12). Mirrors fixture chunk
+ * `pdf-p12-l1` exactly: three wrapped lines -> three quads; `bbox` is their union.
  */
 const warehouseQuads: BBox[] = [
   {
     page: 12,
     x0: 72.0,
     y0: 123.94,
-    x1: 522.0,
-    y1: 141.94,
+    x1: 510.0,
+    y1: 133.94,
     page_width: DEMO_PAGE_WIDTH_PT,
     page_height: DEMO_PAGE_HEIGHT_PT,
   },
   {
     page: 12,
     x0: 72.0,
-    y0: 143.94,
-    x1: 408.0,
+    y0: 136.94,
+    x1: 522.0,
+    y1: 146.94,
+    page_width: DEMO_PAGE_WIDTH_PT,
+    page_height: DEMO_PAGE_HEIGHT_PT,
+  },
+  {
+    page: 12,
+    x0: 72.0,
+    y0: 149.94,
+    x1: 282.0,
     y1: 159.94,
     page_width: DEMO_PAGE_WIDTH_PT,
     page_height: DEMO_PAGE_HEIGHT_PT,
@@ -80,47 +103,99 @@ const warehouseBBox: BBox = {
 };
 
 /**
- * The contradicting visitor-log entry — in the SEPARATE exhibit document. Scanned
- * (OCR) source. Two quads hugging the wrapped entry.
+ * The contradicting visitor-log entry — in the SEPARATE exhibit document, on
+ * PAGE 2. Mirrors fixture chunk `exhibit-visitor-log-p2-l1` exactly: born-digital
+ * (NOT scanned), four wrapped lines -> four quads; `bbox` is their union.
  */
 const visitorLogQuads: BBox[] = [
   {
-    page: 1,
-    x0: 64.0,
-    y0: 188.0,
-    x1: 520.0,
-    y1: 206.0,
+    page: 2,
+    x0: 72.0,
+    y0: 123.94,
+    x1: 528.0,
+    y1: 133.94,
     page_width: DEMO_PAGE_WIDTH_PT,
     page_height: DEMO_PAGE_HEIGHT_PT,
   },
   {
-    page: 1,
-    x0: 64.0,
-    y0: 208.0,
-    x1: 360.0,
-    y1: 226.0,
+    page: 2,
+    x0: 72.0,
+    y0: 136.94,
+    x1: 534.0,
+    y1: 146.94,
+    page_width: DEMO_PAGE_WIDTH_PT,
+    page_height: DEMO_PAGE_HEIGHT_PT,
+  },
+  {
+    page: 2,
+    x0: 72.0,
+    y0: 149.94,
+    x1: 534.0,
+    y1: 159.94,
+    page_width: DEMO_PAGE_WIDTH_PT,
+    page_height: DEMO_PAGE_HEIGHT_PT,
+  },
+  {
+    page: 2,
+    x0: 72.0,
+    y0: 162.94,
+    x1: 144.0,
+    y1: 172.94,
     page_width: DEMO_PAGE_WIDTH_PT,
     page_height: DEMO_PAGE_HEIGHT_PT,
   },
 ];
 
 const visitorLogBBox: BBox = {
-  page: 1,
-  x0: 64.0,
-  y0: 188.0,
-  x1: 520.0,
-  y1: 226.0,
+  page: 2,
+  x0: 72.0,
+  y0: 123.94,
+  x1: 534.0,
+  y1: 172.94,
   page_width: DEMO_PAGE_WIDTH_PT,
   page_height: DEMO_PAGE_HEIGHT_PT,
 };
 
-/** The primary answer the agent speaks first (deposition, page 12). */
+/**
+ * The scanned, handwritten field-notes exhibit. Mirrors fixture chunk
+ * `exhibit-field-notes-p1-l0` exactly: a single OCR'd quad, `scanned: true`.
+ * Used for the meeting-mode proactive beat so the scanned badge has a REAL source.
+ */
+const fieldNotesQuads: BBox[] = [
+  {
+    page: 1,
+    x0: 72.0,
+    y0: 120.0,
+    x1: 540.0,
+    y1: 148.0,
+    page_width: DEMO_PAGE_WIDTH_PT,
+    page_height: DEMO_PAGE_HEIGHT_PT,
+  },
+];
+
+const fieldNotesBBox: BBox = {
+  page: 1,
+  x0: 72.0,
+  y0: 120.0,
+  x1: 540.0,
+  y1: 148.0,
+  page_width: DEMO_PAGE_WIDTH_PT,
+  page_height: DEMO_PAGE_HEIGHT_PT,
+};
+
+/**
+ * The primary answer the agent speaks first (deposition, page 12).
+ * Mirrors fixture chunk `pdf-p12-l1` (id/text/page/bbox/quads).
+ */
 export const ANSWER_CITATION: Citation = {
   id: 'pdf-p12-l1',
-  text: 'Q. Where were you on the night of the 14th? A. I was at the Harbor Street warehouse from approximately 9:00 p.m. until nearly midnight.',
+  text:
+    'Q. Where were you on the night of the 14th? A. I was at the Harbor Street ' +
+    'warehouse from approximately 9:00 p.m. until well past midnight, conducting ' +
+    'the inventory count with Mr. Reyes.',
   bbox: warehouseBBox,
   quads: warehouseQuads,
-  confidence: 0.94,
+  confidence: 0.9445,
   score: 0.91,
   latencyMs: 7,
   pagesSearched: DEMO_TOTAL_PAGES,
@@ -131,40 +206,46 @@ export const ANSWER_CITATION: Citation = {
 
 /**
  * The follow-up contradiction — surfaced from the EXHIBIT (a different document),
- * a scanned visitor log. This is the cross-doc conflict.
+ * the downtown visitor log, PAGE 2. This is the cross-doc conflict. Mirrors
+ * fixture chunk `exhibit-visitor-log-p2-l1` (id/text/page/bbox/quads). The log is
+ * born-digital, so it is NOT scanned.
  */
 export const CONTRADICTION_CITATION: Citation = {
-  id: 'exh-p1-l3',
-  text: 'Visitor log, downtown office: H. Holloway — signature recorded at 9:40 p.m. on the 14th, two miles from the Harbor Street warehouse.',
+  id: 'exhibit-visitor-log-p2-l1',
+  text:
+    'Visitor log entry: R. Holloway signed the downtown security desk visitor log ' +
+    'at 9:40 p.m. on the 14th — two miles from the Harbor Street warehouse — and ' +
+    'signed out at 11:20 p.m., having attended the quarterly budget meeting on the ' +
+    'ninth floor.',
   bbox: visitorLogBBox,
   quads: visitorLogQuads,
-  confidence: 0.89,
+  confidence: 0.943,
   score: 0.88,
   latencyMs: 6,
   pagesSearched: DEMO_TOTAL_PAGES,
   faithfulness: { supported: true, score: 0.96, method: 'nli' },
   documentId: DOC_EXHIBIT,
   documentTitle: DOC_TITLES[DOC_EXHIBIT],
-  scanned: true,
 };
 
 /**
  * The PROACTIVE / MEETING-mode beat. A speaker utters a CLAIM aloud and the
- * co-pilot snaps the contradicting scanned exhibit UNPROMPTED — tagged with the
- * speaker who triggered it.
+ * co-pilot snaps the SCANNED handwritten field-notes exhibit UNPROMPTED — tagged
+ * with the speaker who triggered it. Mirrors fixture chunk
+ * `exhibit-field-notes-p1-l0` (the scanned/OCR source for the `scanned: true` badge).
  */
 export const PROACTIVE_CITATION: Citation = {
-  id: 'exh-p1-l3-proactive',
-  text: 'Visitor log, downtown office: signature recorded at 9:40 p.m. on the 14th — two miles from the Harbor Street warehouse.',
-  bbox: { ...visitorLogBBox },
-  quads: visitorLogQuads.map((q) => ({ ...q })),
-  confidence: 0.92,
-  score: 0.9,
+  id: 'exhibit-field-notes-p1-l0',
+  text: 'FIELD NOTES (scanned, handwritten)',
+  bbox: fieldNotesBBox,
+  quads: fieldNotesQuads,
+  confidence: 0.6544,
+  score: 0.66,
   latencyMs: 9,
   pagesSearched: DEMO_TOTAL_PAGES,
-  faithfulness: { supported: true, score: 0.98, method: 'nli' },
-  documentId: DOC_EXHIBIT,
-  documentTitle: DOC_TITLES[DOC_EXHIBIT],
+  faithfulness: { supported: true, score: 0.82, method: 'nli' },
+  documentId: DOC_FIELD_NOTES,
+  documentTitle: DOC_TITLES[DOC_FIELD_NOTES],
   scanned: true,
 };
 
@@ -173,16 +254,18 @@ export const SPEAKER_COUNSEL: Speaker = { id: 'spk_1', label: 'Counsel' };
 export const SPEAKER_WITNESS: Speaker = { id: 'spk_2', label: 'Witness' };
 
 /**
- * The hops trail (feat 1): how the agent decomposed the question to find the
- * cross-document contradiction. Surfaced under the contradiction banner.
+ * The hops trail (feat 1): the principled decomposition the backend emits for a
+ * contradiction check — the core claim, then "evidence that contradicts it".
+ * Kept to the two real sub-questions whose citationIds resolve to real chunks; we
+ * do not hand-write fictional sub-questions.
  */
 export const CONTRADICTION_HOPS: HopTrace[] = [
   {
-    subQuery: 'Where does the witness say he was on the night of the 14th?',
+    subQuery: 'Core claim: where does the witness place himself on the night of the 14th?',
     citationIds: [ANSWER_CITATION.id],
   },
   {
-    subQuery: 'Is there any record placing the witness elsewhere that night?',
+    subQuery: 'Evidence that contradicts it: any record placing him elsewhere that night?',
     citationIds: [CONTRADICTION_CITATION.id],
   },
 ];
@@ -202,7 +285,7 @@ export const MEMORY_RECALL: MemoryRef = {
 /** The streamed answer caption that plays alongside the first snap. */
 export const ANSWER_TRANSCRIPT =
   `Yes — on page ${warehouseBBox.page} the witness admits being at the warehouse on the night of ` +
-  'the 14th, staying until nearly midnight.';
+  'the 14th, staying until well past midnight.';
 
 /** The user question that kicks off the demo sequence. */
 export const DEMO_QUESTION =
@@ -227,8 +310,8 @@ export const PROACTIVE_CLAIM =
 
 /** The caption the co-pilot speaks when it surfaces the proactive citation. */
 export const PROACTIVE_TRANSCRIPT =
-  'Flagging this unprompted: the scanned visitor-log exhibit has the witness signing ' +
-  'the downtown log at 9:40 p.m. — which contradicts the claim just made.';
+  'Flagging this unprompted: a scanned, handwritten field-notes exhibit also bears on ' +
+  'that night — surfacing it so the record is complete.';
 
 /**
  * A query that has NO grounded source in the corpus. The co-pilot stays silent

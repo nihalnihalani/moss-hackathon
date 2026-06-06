@@ -234,7 +234,11 @@ export function App(): JSX.Element {
 
       <main className="stage">
         <section className="rail" aria-label="Voice interface">
-          <VoiceOrb state={cx.agentState} audioReactive={!cx.isMock} />
+          <VoiceOrb
+            state={cx.agentState}
+            audioReactive
+            outputStream={cx.outputStream}
+          />
           <StatePill state={cx.agentState} proactive={cx.proactive} />
           <Captions
             text={cx.caption}

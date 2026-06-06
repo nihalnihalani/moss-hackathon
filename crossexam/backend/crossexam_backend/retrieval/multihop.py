@@ -13,11 +13,15 @@ path that
 
 Everything here is pure, deterministic and dependency-free on the default path.
 The decomposer exposes a guarded LLM hook (``llm_fn``) that is only used when a
-caller injects one; with no hook it falls back to a heuristic splitter. The
-contradiction detector reuses the *content-token* idea from
-:mod:`crossexam_backend.verify`: it compares the substantive tokens of two
-candidate citations and looks for opposing predicates over a shared subject
-(opposing location / time / polarity), i.e. an "both cannot be true" check.
+caller injects one; with no hook it falls back to a principled topic-extraction
+splitter. The contradiction detector is a STRUCTURAL "both cannot be true"
+check: two high-confidence citations contradict when they (a) share a temporal
+anchor (the same date/time reference, e.g. "the 14th" / "night of the 14th")
+and (b) assert INCOMPATIBLE locations for the subject at that time (e.g.
+"Harbor Street warehouse" vs. "downtown ... two miles from the warehouse").
+Cross-document conflicting pairs are preferred over same-document ones, so a
+deposition alibi colliding with an independent exhibit is surfaced ahead of an
+in-document inconsistency.
 """
 
 from __future__ import annotations
@@ -82,25 +86,9 @@ _STOPWORDS = frozenset(
     }
 )
 
-# Antonym / opposing-predicate pairs used by the contradiction detector. Each
-# frozenset is a class of mutually-exclusive predicates: if one citation matches
-# a term from the left bucket and the other matches the right bucket (over a
-# shared subject), the two cannot both be true. These cover the common
-# deposition contradictions — presence vs. absence, staying vs. leaving, and
-# opposing time-of-day anchors.
-_OPPOSING_PREDICATES: tuple[tuple[frozenset[str], frozenset[str]], ...] = (
-    # stayed / remained  vs  left / departed
-    (
-        frozenset({"stayed", "remained", "present", "there", "midnight", "past"}),
-        frozenset({"left", "departed", "leaving", "home", "away", "absent"}),
-    ),
-    # affirmation  vs  negation of an action
-    (
-        frozenset({"confirmed", "affirmed", "admitted", "agreed"}),
-        frozenset({"denied", "refused", "rejected", "disputed"}),
-    ),
-)
-
+# --------------------------------------------------------------------------- #
+# Structural contradiction extraction: temporal anchors + location classes.    #
+# --------------------------------------------------------------------------- #
 # A citation must clear this score to be eligible as one side of a contradiction.
 # Mirrors the spirit of the faithfulness threshold: only *confident* hits.
 _CONTRADICTION_MIN_SCORE = 0.4
@@ -109,10 +97,140 @@ _CONTRADICTION_MIN_SCORE = 0.4
 # considered "about the same thing", a precondition for a real contradiction.
 _MIN_SUBJECT_OVERLAP = 2
 
+# How many candidates to fetch per hop for CONTRADICTION DETECTION (independent
+# of how many are published). Wide enough that an independent corroborating /
+# contradicting exhibit that ranks below the published top_k is still in the
+# pool the structural detector reasons over.
+_CONTRADICTION_POOL_K = 12
+
+# Spelled-out / numeric day words we normalise so "the 14th", "the fourteenth"
+# and "night of the 14th" collapse to the same temporal anchor.
+_ORDINAL_WORDS: dict[str, str] = {
+    "first": "1",
+    "second": "2",
+    "third": "3",
+    "fourth": "4",
+    "fifth": "5",
+    "sixth": "6",
+    "seventh": "7",
+    "eighth": "8",
+    "ninth": "9",
+    "tenth": "10",
+    "eleventh": "11",
+    "twelfth": "12",
+    "thirteenth": "13",
+    "fourteenth": "14",
+    "fifteenth": "15",
+    "sixteenth": "16",
+    "seventeenth": "17",
+    "eighteenth": "18",
+    "nineteenth": "19",
+    "twentieth": "20",
+}
+
+# A day-of-month reference: "14th", "14", "fourteenth" (handled separately) and
+# month-name dates. Matches the bare number too so "on the 14th" anchors.
+_DAY_RE = re.compile(r"\b(\d{1,2})(?:st|nd|rd|th)?\b")
+
+# Location *classes*: mutually-exclusive places a subject can be. A subject who
+# is at a member of one class at a given time cannot simultaneously be at a
+# member of a different class. Kept general (warehouse/site vs. downtown/office
+# vs. home/away) so the detector is not pinned to a single fixture.
+_LOCATION_CLASSES: dict[str, frozenset[str]] = {
+    "warehouse": frozenset(
+        {"warehouse", "harbor", "dock", "loading", "facility", "site"}
+    ),
+    "downtown": frozenset(
+        {"downtown", "office", "desk", "ninth", "floor", "building", "tower"}
+    ),
+    "home": frozenset({"home", "house", "residence", "apartment"}),
+}
+
+# Cues that one citation explicitly places the subject *apart from* a location
+# the other citation places them *at* — a direct geometric contradiction even
+# before location-class reasoning ("two miles from", "away from", "elsewhere").
+_SEPARATION_CUES: tuple[str, ...] = (
+    "miles from",
+    "mile from",
+    "away from",
+    "elsewhere",
+    "nowhere near",
+    "blocks from",
+)
+
 
 def _content_tokens(text: str) -> list[str]:
     """Lowercase, tokenise and drop stopwords, keeping content terms in order."""
     return [t for t in _TOKEN_RE.findall(text.lower()) if t not in _STOPWORDS]
+
+
+def _temporal_anchors(text: str) -> frozenset[str]:
+    """Extract normalised date/day anchors from ``text``.
+
+    Collapses ``"the 14th"``, ``"the fourteenth"`` and ``"night of the 14th"``
+    to the same anchor token (``"d14"``) so two citations that talk about the
+    same calendar day share a temporal anchor regardless of spelling. Returns a
+    set of anchors (a citation may reference more than one day).
+    """
+    lowered = text.lower()
+    anchors: set[str] = set()
+    for word, num in _ORDINAL_WORDS.items():
+        if re.search(rf"\b{word}\b", lowered):
+            anchors.add(f"d{num}")
+    for match in _DAY_RE.finditer(lowered):
+        day = int(match.group(1))
+        if 1 <= day <= 31:
+            anchors.add(f"d{day}")
+    return frozenset(anchors)
+
+
+def _location_classes(text: str) -> frozenset[str]:
+    """Extract the set of location *classes* asserted in ``text``.
+
+    Maps each location keyword present in the text to its class
+    (warehouse / downtown / home / …). A citation that names "the Harbor Street
+    warehouse" yields ``{"warehouse"}``; one that names "downtown ... ninth
+    floor" yields ``{"downtown"}``; one that mentions both yields both.
+    """
+    lowered = text.lower()
+    tokens = set(_TOKEN_RE.findall(lowered))
+    classes: set[str] = set()
+    for klass, members in _LOCATION_CLASSES.items():
+        if tokens & members:
+            classes.add(klass)
+    return frozenset(classes)
+
+
+def _has_separation_cue(text: str) -> bool:
+    """Whether ``text`` explicitly places the subject apart from a location."""
+    lowered = text.lower()
+    return any(cue in lowered for cue in _SEPARATION_CUES)
+
+
+def _locations_incompatible(left_text: str, right_text: str) -> bool:
+    """Whether two citations assert INCOMPATIBLE locations for the subject.
+
+    Incompatible when either citation explicitly separates the subject from a
+    place (``"two miles from the warehouse"``) while the other places them
+    there, or when the two place the subject in DIFFERENT location classes for
+    the same time (their class sets differ — one names a place the other does
+    not). Two citations naming exactly the *same* class(es) are compatible
+    (corroboration, not conflict).
+    """
+    left_classes = _location_classes(left_text)
+    right_classes = _location_classes(right_text)
+    if not left_classes or not right_classes:
+        return False
+    # An explicit separation cue on one side, against a shared place on the
+    # other, is a direct geometric contradiction ("two miles from the warehouse"
+    # vs. "at the warehouse").
+    if (_has_separation_cue(left_text) or _has_separation_cue(right_text)) and (
+        left_classes & right_classes
+    ):
+        return True
+    # Otherwise: the two place the subject in different sets of location classes
+    # for the same time — mutually exclusive presence (e.g. warehouse vs. home).
+    return left_classes != right_classes
 
 
 # A decomposition hook: takes the question, returns a list of sub-queries (or
@@ -124,10 +242,12 @@ DecomposeFn = Callable[[str], Sequence[str]]
 class QueryDecomposer:
     """Split a complex / contradiction question into focused sub-queries.
 
-    The default, always-available path is a deterministic heuristic: it strips
-    the contradiction framing ("did the witness contradict himself about ...")
-    down to the underlying *topic*, then emits one sub-query that seeks the
-    original assertion and a second that seeks the conflicting one. A guarded
+    The default, always-available path is a deterministic, principled splitter.
+    For a contradiction / multi-hop question it strips the contradiction framing
+    ("did the witness contradict himself about ...") down to the underlying
+    subject+predicate *topic*, then emits two sub-queries: one that seeks the
+    core claim/assertion to locate, and a second that seeks evidence
+    contradicting that claim — NOT a literal conjunction fragment. A guarded
     ``llm_fn`` hook can replace the heuristic when a caller wires one in; if the
     hook raises or returns nothing usable, the heuristic result is used instead,
     so decomposition never fails the turn.
@@ -178,25 +298,26 @@ class QueryDecomposer:
         return self._heuristic(question)
 
     def _heuristic(self, question: str) -> list[str]:
-        """Deterministic decomposition: topic + (original, conflicting) hops.
+        """Deterministic decomposition into genuinely useful sub-queries.
 
-        Extracts the question's content topic (dropping contradiction-framing and
-        discourse words), then forms two sub-queries: one seeking the witness's
-        original statement on the topic, and one seeking a conflicting statement
-        on the same topic. A non-contradiction question with two clauses is split
-        on its conjunction instead.
+        For a contradiction / multi-hop question it extracts the question's
+        subject+predicate *topic* (dropping contradiction framing and discourse
+        words) and emits a principled pair:
+
+        * ``"<core claim>"`` — the assertion to locate in the documents, and
+        * ``"evidence that contradicts <core claim>"`` — the conflicting
+          statement to find elsewhere.
+
+        These are real retrieval queries derived from the question's content,
+        NOT a literal split on the word "and" (which produced fragments like
+        "Did the supplier"). A plain, non-contradiction question degrades to a
+        single cleaned sub-query.
         """
         topic = self._topic(question)
-        if self.is_multihop(question) and self._is_contradiction(question):
-            base = topic or question.strip()
-            return [
-                f"where {base}",
-                f"conflicting statement about {base}",
-            ]
-        # Conjunction split for plain multi-hop questions ("X and Y").
-        parts = self._split_conjunction(question)
-        if len(parts) > 1:
-            return parts
+        if not topic:
+            return [question.strip()]
+        if self.is_multihop(question):
+            return [topic, f"evidence that contradicts {topic}"]
         return [question.strip()]
 
     @staticmethod
@@ -206,52 +327,112 @@ class QueryDecomposer:
 
     @staticmethod
     def _topic(question: str) -> str:
-        """Strip contradiction framing / discourse words down to the topic.
+        """Strip framing / discourse words down to the question's core claim.
 
-        E.g. "did the witness contradict himself about the night of the 14th?"
-        -> "night 14th". Keeps content tokens that are neither stopwords nor
-        contradiction cues nor the discourse word "witness".
+        Keeps the substantive subject+predicate content tokens in their original
+        order while dropping stopwords, contradiction cues ("contradict",
+        "conflict", …), the bare conjunction "and"/"both", and the deposition
+        discourse words ("witness", "testimony", "statement", "story"). E.g.
+        "did the witness contradict himself about the night of the 14th?"
+        -> "night 14th"; "Did the supplier and the buyer agree on the delivery
+        terms?" -> "supplier buyer agree delivery terms".
         """
-        drop = _CONTRADICTION_CUES | {"witness", "witnesses", "himself", "herself"}
+        drop = _CONTRADICTION_CUES | _MULTIHOP_CUES | {
+            "witness",
+            "witnesses",
+            "himself",
+            "herself",
+            "testimony",
+            "statement",
+            "story",
+            "account",
+            "earlier",
+            "version",
+        }
         toks = [t for t in _content_tokens(question) if t not in drop]
         return " ".join(toks)
 
-    @staticmethod
-    def _split_conjunction(question: str) -> list[str]:
-        """Split a question on a top-level ``and`` into two sub-queries."""
-        # Split on the standalone word "and" (with surrounding spaces).
-        parts = re.split(r"\band\b", question, flags=re.IGNORECASE)
-        cleaned = [p.strip(" ?.,") for p in parts if p.strip(" ?.,")]
-        # Only treat as multi-hop when each side has real content.
-        if len(cleaned) >= 2 and all(len(_content_tokens(p)) >= 1 for p in cleaned):
-            return cleaned
-        return [question.strip()]
 
-
-def detect_contradiction(citations: Sequence[Citation]) -> tuple[bool, str | None]:
+def detect_contradiction(
+    citations: Sequence[Citation],
+) -> tuple[bool, str | None, bool]:
     """Detect a cross-page / cross-document contradiction among ``citations``.
 
-    Principled heuristic (an "both cannot be true" check): scan high-confidence
-    citation pairs that are *about the same subject* (sufficient content-token
-    overlap) yet live on different pages or in different documents, and flag a
-    contradiction when one asserts a predicate from one side of an opposing pair
-    while the other asserts the opposing side (e.g. "remained past midnight" vs.
-    "left before 8 p.m."). This reuses :mod:`verify`'s content-token notion to
-    avoid firing on incidental word overlap.
+    STRUCTURAL "both cannot be true" check. Two high-confidence citations
+    contradict when they
+
+    1. are *about the same subject* (sufficient content-token overlap, so the
+       detector never fires on incidental word overlap),
+    2. **share a temporal anchor** — the same calendar day reference, e.g.
+       "the 14th" / "the fourteenth" / "night of the 14th"
+       (:func:`_temporal_anchors`), and
+    3. assert **incompatible locations** for that subject at that time — one
+       places them at a location the other separates them from
+       ("two miles from the warehouse") or in a different location class
+       (warehouse vs. downtown), per :func:`_locations_incompatible`.
+
+    SELECTION among all eligible conflicting pairs is a strict, principled
+    priority:
+
+    1. pairs with an explicit **separation cue** (one side places the subject a
+       measured distance from a place the other puts them at — the strongest,
+       least-ambiguous "both cannot be true") rank above plain class-difference
+       pairs;
+    2. **cross-document** pairs (an alibi colliding with an independent exhibit)
+       rank above same-document inconsistencies;
+    3. then the highest combined citation score; ties break on chunk id.
+
+    The PRIMARY is the *presence-asserting* side — the citation that places the
+    subject AT a location (no separation cue) — so the page-jump lands on the
+    claim under examination, with the separating evidence as the other side.
 
     Args:
         citations: Candidate citations (already fused / ranked).
 
     Returns:
-        ``(contradiction, primary_id)`` where ``primary_id`` is the id of the
-        first (higher-ranked) citation of the conflicting pair, or ``None`` when
-        no contradiction is found.
+        ``(contradiction, primary_id, cross_document)`` where ``primary_id`` is
+        the id of the presence-asserting citation of the selected conflicting
+        pair (or ``None`` when none is found) and ``cross_document`` is ``True``
+        when the two citations come from different documents.
+    """
+    pair = contradiction_pair(citations)
+    if pair is None:
+        return False, None, False
+    primary_id, other_id, cross_doc = pair
+    logger.debug(
+        "contradiction.detected primary=%s vs=%s cross_document=%s",
+        primary_id,
+        other_id,
+        cross_doc,
+    )
+    return True, primary_id, cross_doc
+
+
+def contradiction_pair(
+    citations: Sequence[Citation],
+) -> tuple[str, str, bool] | None:
+    """Return the selected conflicting pair ``(primary_id, other_id, cross)``.
+
+    Collects all eligible conflicting pairs (shared subject + shared temporal
+    anchor + incompatible locations), then applies the strict selection
+    priority described on :func:`detect_contradiction`:
+
+    1. separation-cue pairs (strongest "both cannot be true") first,
+    2. then cross-document pairs,
+    3. then highest combined score, ties on chunk id.
+
+    ``primary_id`` is the presence-asserting (non-separating) side — the claim
+    being challenged — and ``other_id`` is the contradicting evidence, so a
+    caller can keep BOTH in a truncated result. Returns ``None`` when no
+    contradiction is found.
     """
     eligible = [c for c in citations if c.score >= _CONTRADICTION_MIN_SCORE]
+    # (separation, cross_document, combined_score, primary_id, other_id).
+    candidates: list[tuple[bool, bool, float, str, str]] = []
     for i, left in enumerate(eligible):
         left_tokens = set(_content_tokens(left.chunk.text))
+        left_times = _temporal_anchors(left.chunk.text)
         for right in eligible[i + 1 :]:
-            # Must be cross-page or cross-document to be a "contradiction".
             same_place = (
                 left.documentId == right.documentId
                 and left.chunk.page == right.chunk.page
@@ -259,32 +440,44 @@ def detect_contradiction(citations: Sequence[Citation]) -> tuple[bool, str | Non
             if same_place:
                 continue
             right_tokens = set(_content_tokens(right.chunk.text))
-            shared = left_tokens & right_tokens
-            if len(shared) < _MIN_SUBJECT_OVERLAP:
+            if len(left_tokens & right_tokens) < _MIN_SUBJECT_OVERLAP:
                 continue
-            if _predicates_oppose(left_tokens, right_tokens):
-                logger.debug(
-                    "contradiction.detected primary=%s vs=%s shared=%d",
-                    left.chunk.id,
-                    right.chunk.id,
-                    len(shared),
+            # (b) shared temporal anchor — same day under discussion.
+            if not (left_times & _temporal_anchors(right.chunk.text)):
+                continue
+            # (c) incompatible locations for the subject at that time.
+            if not _locations_incompatible(left.chunk.text, right.chunk.text):
+                continue
+            left_sep = _has_separation_cue(left.chunk.text)
+            right_sep = _has_separation_cue(right.chunk.text)
+            # Primary = the presence-asserting side (the one WITHOUT a
+            # separation cue), so the jump lands on the claim being challenged.
+            if right_sep and not left_sep:
+                primary, other = left, right
+            elif left_sep and not right_sep:
+                primary, other = right, left
+            else:
+                # No (or symmetric) separation cue: anchor on the higher-scored.
+                primary, other = (
+                    (left, right) if left.score >= right.score else (right, left)
                 )
-                return True, left.chunk.id
-    return False, None
-
-
-def _predicates_oppose(left: set[str], right: set[str]) -> bool:
-    """Whether ``left`` and ``right`` assert opposing predicates.
-
-    True when, for some opposing-predicate class, one side matches the class's
-    left bucket and the other matches its right bucket (in either order).
-    """
-    for bucket_a, bucket_b in _OPPOSING_PREDICATES:
-        a_left, b_left = left & bucket_a, left & bucket_b
-        a_right, b_right = right & bucket_a, right & bucket_b
-        if (a_left and b_right) or (b_left and a_right):
-            return True
-    return False
+            candidates.append(
+                (
+                    left_sep or right_sep,
+                    left.documentId != right.documentId,
+                    left.score + right.score,
+                    primary.chunk.id,
+                    other.chunk.id,
+                )
+            )
+    if not candidates:
+        return None
+    # ``True`` sorts first via the 0/1 key in each tier.
+    best = min(
+        candidates,
+        key=lambda c: (0 if c[0] else 1, 0 if c[1] else 1, -c[2], c[3], c[4]),
+    )
+    return best[3], best[4], best[1]
 
 
 class MultiHopRetriever:
@@ -336,6 +529,12 @@ class MultiHopRetriever:
         start = time.perf_counter()
         sub_queries = self._decomposer.decompose(question)
 
+        # Fetch a wider candidate pool per hop than we ultimately publish so the
+        # contradiction detector sees evidence (e.g. an independent exhibit) that
+        # would otherwise be truncated. The published citations are still capped
+        # at ``top_k`` below; only the conflict-detection pool is widened.
+        fetch_k = max(per_hop_k, _CONTRADICTION_POOL_K)
+
         hops: list[HopTrace] = []
         # rankings: one best-first list of citation-ids per hop, for RRF.
         rankings: list[list[str]] = []
@@ -344,7 +543,7 @@ class MultiHopRetriever:
 
         for sub in sub_queries:
             result = await self._index.query_multi(
-                sub, top_k=per_hop_k, alpha=alpha, doc_ids=doc_ids
+                sub, top_k=fetch_k, alpha=alpha, doc_ids=doc_ids
             )
             ranking: list[str] = []
             for cit in result.citations:
@@ -354,27 +553,41 @@ class MultiHopRetriever:
                 if prev is None or cit.score > prev.score:
                     by_id[cid] = cit
             rankings.append(ranking)
-            hops.append(HopTrace(subQuery=sub, citationIds=ranking))
+            # Record the hop trail at the published depth so the frontend trail
+            # matches the surfaced candidates, not the wider detection pool.
+            hops.append(HopTrace(subQuery=sub, citationIds=ranking[:per_hop_k]))
 
+        # Detect the contradiction over the FULL fused pool (not just the
+        # top_k slice) so a conflicting pair whose weaker side would be
+        # truncated is still found, then PROMOTE both pair members into the
+        # returned citations so the published frame always carries the conflict.
+        full = self._fuse(rankings, by_id, len(by_id))
+        pair = contradiction_pair(full)
+        contradiction = pair is not None
+        primary_from_pair = pair[0] if pair else None
+        cross_document = pair[2] if pair else False
         citations = self._fuse(rankings, by_id, top_k)
-        contradiction, primary_from_pair = detect_contradiction(citations)
+        if pair is not None:
+            citations = self._promote_pair(full, citations, pair[0], pair[1], top_k)
         primary_id = primary_from_pair or (
             citations[0].chunk.id if citations else None
         )
 
         latency_ms = (time.perf_counter() - start) * 1000.0
         logger.debug(
-            "multihop.retrieve q=%r hops=%d citations=%d contradiction=%s",
+            "multihop.retrieve q=%r hops=%d citations=%d contradiction=%s cross=%s",
             question,
             len(hops),
             len(citations),
             contradiction,
+            cross_document,
         )
         return MultiHopResult(
             query=question,
             citations=citations,
             hops=hops,
             contradiction=contradiction,
+            cross_document=cross_document,
             primary_id=primary_id,
             latency_ms=latency_ms,
         )
@@ -406,3 +619,31 @@ class MultiHopRetriever:
 
         ordered = sorted(ids, key=sort_key)
         return [by_id[cid] for cid in ordered[:top_k]]
+
+    @staticmethod
+    def _promote_pair(
+        full: list[Citation],
+        citations: list[Citation],
+        primary_id: str,
+        other_id: str,
+        top_k: int,
+    ) -> list[Citation]:
+        """Ensure both contradiction-pair members appear in ``citations``.
+
+        The conflicting pair is detected over the full fused pool; a weaker side
+        (e.g. a low-ranked corroborating exhibit) could fall outside the top_k
+        slice. This guarantees both the primary (claim) and the other
+        (contradicting evidence) are present — prepending any missing member and
+        re-truncating to ``top_k`` — so the published frame always carries the
+        full conflict rather than dropping its evidence.
+        """
+        present = {c.chunk.id for c in citations}
+        by_id = {c.chunk.id: c for c in full}
+        missing = [
+            by_id[cid]
+            for cid in (primary_id, other_id)
+            if cid not in present and cid in by_id
+        ]
+        if not missing:
+            return citations
+        return (missing + citations)[:top_k]

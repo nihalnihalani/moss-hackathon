@@ -139,8 +139,20 @@ def build_frame(
     FAITHFULNESS GATE drops any citation the answer is not supported by; if none
     survive the gate the frame is the honest-silence
     ``{citations: [], reason: "not_found_in_document", latencyMs}`` rather than a
-    wrong box. Surviving citations carry ``quads``/``documentId``/``scanned`` and
-    an attached ``faithfulness`` verdict (feats 1-3). ``primaryId`` is the id to
+    wrong box.
+
+    CONTRADICTION SEMANTICS: when the result is a :class:`MultiHopResult` with
+    ``contradiction=True``, the citations are EVIDENCE OF CONFLICT, not support
+    for a single answer. The answer-faithfulness gate would wrongly drop the
+    side of the contradiction the agent's drafted answer does not echo (an
+    answer can only agree with one of two opposing statements). So contradiction
+    citations are exempted from the answer gate: each is checked against its own
+    chunk text (the verdict is still attached for telemetry) and BOTH survive,
+    keeping the ``contradiction`` flag and the conflicting pair on the frame even
+    when a real ``answer_text`` is supplied.
+
+    Surviving citations carry ``quads``/``documentId``/``scanned`` and an
+    attached ``faithfulness`` verdict (feats 1-3). ``primaryId`` is the id to
     page-jump to first; for a :class:`MultiHopResult` it comes from the
     contradiction pair (when flagged) and the ``hops``/``contradiction`` trail is
     carried through (feat 1). ``memory_refs`` are emitted as ``memory[]`` recalls
@@ -165,12 +177,26 @@ def build_frame(
     candidates: list[Citation] = list(result.citations)
     latency_ms = result.latency_ms
 
+    # Contradiction citations are evidence of CONFLICT, not support for one
+    # answer; the answer-faithfulness gate must not drop them (an answer can
+    # only echo one side of two opposing statements). When the multi-hop result
+    # is flagged as a contradiction, every citation is checked against its own
+    # chunk text (vacuously supported) so BOTH sides survive.
+    is_contradiction = (
+        isinstance(result, MultiHopResult) and result.contradiction
+    )
+
     kept: list[dict[str, Any]] = []
     kept_ids: list[str] = []
     for citation in candidates:
         chunk_text = citation.chunk.text
+        gate_answer = (
+            chunk_text
+            if (is_contradiction or answer_text is None)
+            else answer_text
+        )
         verdict = verify_faithfulness(
-            answer_text if answer_text is not None else chunk_text,
+            gate_answer,
             chunk_text,
             threshold=faithfulness_threshold,
         )
@@ -193,6 +219,9 @@ def build_frame(
             multihop_primary = result.primary_id
         if result.contradiction and len(kept) > 1:
             frame["contradiction"] = True
+            # Expose whether the conflict spans two documents (alibi vs.
+            # independent exhibit) rather than an in-document inconsistency.
+            frame["crossDocument"] = result.cross_document
         if result.hops:
             frame["hops"] = [_hop_dict(h) for h in result.hops]
 
@@ -497,8 +526,22 @@ class CrossExamAgent(_agent_base()):  # type: ignore[misc]
         recorded as surfaced. Returns a copy of ``result`` carrying only the fresh
         citations (preserving hops/contradiction/primary on a multi-hop result)
         plus the recalls to emit as ``memory[]``.
+
+        CONTRADICTION ANCHOR EXEMPTION: when ``result`` is a contradiction
+        multi-hop result, its PRIMARY citation is exempted from dedupe so a
+        re-asked contradiction never loses its anchor box to a recall — the
+        highlight that pins the conflict is always drawn.
         """
-        fresh, recalls = self._memory.dedupe(list(result.citations))
+        exempt_ids: frozenset[str] = frozenset()
+        if (
+            isinstance(result, MultiHopResult)
+            and result.contradiction
+            and result.primary_id is not None
+        ):
+            exempt_ids = frozenset({result.primary_id})
+        fresh, recalls = self._memory.dedupe(
+            list(result.citations), exempt_ids=exempt_ids
+        )
         scoped: RetrievalResult | MultiHopResult
         if isinstance(result, MultiHopResult):
             fresh_ids = {c.chunk.id for c in fresh}

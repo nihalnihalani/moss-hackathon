@@ -81,3 +81,29 @@ def test_note_surfaced_is_idempotent() -> None:
     first = mem.note_surfaced(cit)
     second = mem.note_surfaced(cit)
     assert first.page == second.page == 12
+
+
+def test_exempt_id_always_surfaced_fresh_never_recalled() -> None:
+    """An exempt id is always fresh (contradiction anchor never lost to dedupe)."""
+    mem = ConversationMemory(session_id="s1")
+    anchor = _citation("depo-p12", page=12)
+    other = _citation("exhibit-p1", page=1, doc="exhibit")
+    mem.note_surfaced(anchor)  # already seen this session
+    mem.note_surfaced(other)  # already seen too
+
+    fresh, recalls = mem.dedupe(
+        [anchor, other], exempt_ids=frozenset({"depo-p12"})
+    )
+    # The exempt anchor stays fresh; the non-exempt repeat becomes a recall.
+    assert [c.chunk.id for c in fresh] == ["depo-p12"]
+    assert [r.citationId for r in recalls] == ["exhibit-p1"]
+
+
+def test_dedupe_without_exempt_recalls_all_repeats() -> None:
+    """Without exemption a repeated anchor is recalled (baseline behaviour)."""
+    mem = ConversationMemory(session_id="s1")
+    anchor = _citation("depo-p12", page=12)
+    mem.note_surfaced(anchor)
+    fresh, recalls = mem.dedupe([anchor])
+    assert fresh == []
+    assert [r.citationId for r in recalls] == ["depo-p12"]

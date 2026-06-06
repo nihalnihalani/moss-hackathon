@@ -225,6 +225,31 @@ async def test_repeat_citation_recalled_as_memory_not_resnapped() -> None:
     assert first_id in recalled_ids
 
 
+async def test_reasked_contradiction_keeps_primary_anchor_box() -> None:
+    """A re-asked contradiction never loses its PRIMARY anchor box to dedupe."""
+    agent = CrossExamAgent(_two_doc_index(), top_k=6, proactive_enabled=False)
+    room = _RecordingRoom()
+    agent.room = room
+    q = (
+        "did the witness contradict himself about the warehouse on the night of "
+        "the 14th?"
+    )
+
+    await agent.on_user_turn_completed(ShimChatContext(), q)
+    first = room.frames[-1]
+    assert first.get("contradiction") is True
+    primary = first["primaryId"]
+
+    # Re-ask: the primary contradiction anchor must STILL be a fresh box (not
+    # collapsed into a memory[] recall), so the conflict keeps its highlight.
+    await agent.on_user_turn_completed(ShimChatContext(), q)
+    second = room.frames[-1]
+    surfaced_ids = {c["id"] for c in second["citations"]}
+    assert primary in surfaced_ids
+    recalled_ids = {r["citationId"] for r in second.get("memory", [])}
+    assert primary not in recalled_ids
+
+
 async def test_speaker_passes_through_on_turn() -> None:
     """A speaker passed to the hook is threaded onto the published frame."""
     agent = CrossExamAgent(_two_doc_index(), top_k=3, proactive_enabled=False)

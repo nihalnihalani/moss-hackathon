@@ -18,10 +18,22 @@ def index() -> MockIndex:
 
 
 async def test_warehouse_query_returns_relevant_chunk(index: MockIndex) -> None:
-    """The warehouse-on-the-14th query surfaces the alibi testimony first."""
-    result = await index.query("where were you the night of the 14th warehouse", top_k=5)
+    """The warehouse-on-the-14th query surfaces the alibi testimony.
+
+    The multi-document fixture now also contains short EXHIBIT chunks that match
+    "night of the 14th" tightly; the alibi is the top DEPOSITION hit. The
+    invariant is that the alibi testimony (warehouse + the 14th) is surfaced as
+    the leading deposition citation.
+    """
+    result = await index.query(
+        "where were you the night of the 14th warehouse", top_k=10
+    )
     assert result.citations, "expected at least one citation"
-    top_text = result.citations[0].chunk.text.lower()
+    deposition_hits = [
+        c for c in result.citations if c.documentId == "deposition-holloway"
+    ]
+    assert deposition_hits, "expected a deposition citation"
+    top_text = deposition_hits[0].chunk.text.lower()
     assert "warehouse" in top_text
     assert "14th" in top_text or "fourteenth" in top_text
 
@@ -152,9 +164,14 @@ async def test_document_ids_property() -> None:
 
 
 async def test_citation_carries_document_id_from_chunk(index: MockIndex) -> None:
-    """Citations from the shipped fixture carry the default documentId."""
-    from crossexam_backend.models import DEFAULT_DOCUMENT_ID
+    """Each citation carries its source chunk's own documentId.
 
+    The shipped fixture is now multi-document (deposition + exhibits), so the
+    top hit is no longer guaranteed to be the default deposition id. The
+    invariant is that the citation propagates the chunk's documentId verbatim.
+    """
     result = await index.query("warehouse night of the 14th", top_k=2)
     assert result.citations
-    assert result.citations[0].documentId == DEFAULT_DOCUMENT_ID
+    for cit in result.citations:
+        assert cit.documentId == cit.chunk.documentId
+        assert cit.documentId

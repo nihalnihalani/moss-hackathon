@@ -6,6 +6,14 @@ which citations it has surfaced and, on a repeat, emits a
 :class:`~crossexam_backend.models.MemoryRef` recall ("as we saw on page 12") so
 the agent can *reference* the earlier highlight rather than draw it again.
 
+SESSION SCOPE: memory is scoped to a single conversation, keyed by
+``session_id``. Two :class:`ConversationMemory` instances with different ids do
+not see each other's surfacings even when they share a store. Cross-session
+persistence (remembering a citation across separate conversations, e.g. via
+Redis) is an explicit PLUGGABLE HOOK — the :class:`MemoryStore` protocol — and
+is NOT implemented here; the shipped :class:`InMemoryStore` is process-local and
+forgets everything when the process exits.
+
 This module is pure and fully testable: the default store is an in-memory dict
 keyed by session id, and no external calls happen on any path. A pluggable
 :class:`MemoryStore` protocol lets a caller swap in cross-session persistence
@@ -144,7 +152,10 @@ class ConversationMemory:
         return ref
 
     def dedupe(
-        self, citations: list[Citation]
+        self,
+        citations: list[Citation],
+        *,
+        exempt_ids: frozenset[str] | set[str] | None = None,
     ) -> tuple[list[Citation], list[MemoryRef]]:
         """Split ``citations`` into fresh ones and recalls of prior surfacings.
 
@@ -153,18 +164,33 @@ class ConversationMemory:
         otherwise it is fresh — it passes through and is recorded as surfaced so
         a later turn recalls it instead of re-snapping.
 
+        ``exempt_ids`` citations are NEVER recalled: they always pass through as
+        fresh (the box is always drawn) regardless of prior surfacing. The agent
+        uses this to keep a re-asked contradiction's PRIMARY anchor box on screen
+        so the conflict never loses its highlight to dedupe.
+
         Args:
             citations: The citations the agent is about to surface this turn.
+            exempt_ids: Citation ids that must always be surfaced fresh (e.g. the
+                contradiction primary anchor), never collapsed into a recall.
 
         Returns:
             ``(fresh, recalls)`` — the citations to draw as new boxes, and the
             recalls to reference instead. Order within each list follows input
             order. Duplicate ids within the same call collapse: the first is
-            fresh, later repeats become recalls.
+            fresh, later repeats become recalls (unless exempt).
         """
+        exempt = exempt_ids or frozenset()
         fresh: list[Citation] = []
         recalls: list[MemoryRef] = []
         for citation in citations:
+            if citation.chunk.id in exempt:
+                # Always-fresh anchor (e.g. the contradiction primary): draw the
+                # box every time, but still record it so non-exempt repeats of
+                # *other* citations behave normally.
+                fresh.append(citation)
+                self.note_surfaced(citation)
+                continue
             existing = self.recall(citation)
             if existing is not None:
                 recalls.append(existing)
