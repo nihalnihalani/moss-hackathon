@@ -48,6 +48,9 @@ import {
   matchMockCitation,
 } from '../lib/mockData';
 
+/** Local microphone publish status in live mode. */
+export type MicStatus = 'off' | 'on' | 'denied';
+
 export interface CrossExamConfig {
   /** LiveKit ws URL; absent => mock mode. */
   livekitUrl?: string | undefined;
@@ -62,6 +65,12 @@ export interface CrossExamState {
   isMock: boolean;
   /** True once a live LiveKit room is connected. */
   isConnected: boolean;
+  /**
+   * Local microphone status in live mode. 'off' before connect / in mock,
+   * 'on' once the mic track is published, 'denied' if the browser/user refused
+   * permission (the session stays connected; the agent just can't hear input).
+   */
+  micStatus: MicStatus;
   agentState: AgentState;
   /** Streaming caption text currently being "spoken". */
   caption: string;
@@ -75,6 +84,12 @@ export interface CrossExamState {
   primaryId: string | null;
   /** The surfaced citations conflict (cross-page/cross-doc). */
   contradiction: boolean;
+  /**
+   * The conflict spans two documents (cross-document breach). Comes from the
+   * live frame's `crossDocument` when present; otherwise re-derived from the
+   * citations' documentIds. Drives the cross-doc banner/auto-flip behavior.
+   */
+  crossDocument: boolean;
   /**
    * The shared ANCHOR the conflicting citations hang off (e.g. "§4.2
    * Subcontracting"), or null. Drives the "CONFLICT — Anchor: …" banner.
@@ -145,6 +160,8 @@ interface MutableSnapshot {
   citations: Citation[];
   primaryId: string | null;
   contradiction: boolean;
+  /** The conflict spans two documents (from the frame or re-derived). */
+  crossDocument: boolean;
   /** Shared anchor for the conflict, or null. */
   anchor: string | null;
   hops: HopTrace[];
@@ -170,6 +187,7 @@ const MOCK_SCRIPT: ScriptStep[] = [
       s.proactive = false;
       s.silenceReason = null;
       s.contradiction = false;
+      s.crossDocument = false;
       s.anchor = null;
       s.hops = [];
       s.memory = [];
@@ -223,6 +241,7 @@ const MOCK_SCRIPT: ScriptStep[] = [
       s.primaryId = ANSWER_CITATION.id;
       s.caption = CONTRADICTION_TRANSCRIPT;
       s.contradiction = true;
+      s.crossDocument = true; // deposition vs. visitor-log: spans two docs
       s.hops = CONTRADICTION_HOPS;
       s.targetPage = ANSWER_CITATION.bbox.page;
       s.proactive = false;
@@ -321,6 +340,7 @@ const MOCK_SCRIPT: ScriptStep[] = [
       s.citations = [];
       s.primaryId = null;
       s.contradiction = false;
+      s.crossDocument = false;
       s.anchor = null;
       s.hops = [];
       s.memory = [];
@@ -348,6 +368,7 @@ const MOCK_SCRIPT: ScriptStep[] = [
       s.primaryId = CONTRACT_CLAUSE_CITATION.id;
       s.caption = CONTRACT_EMAIL_TRANSCRIPT;
       s.contradiction = true;
+      s.crossDocument = true; // contract clause vs. email admission: cross-doc breach
       s.anchor = CONTRACT_EMAIL_ANCHOR;
       s.hops = CONTRACT_EMAIL_HOPS;
       s.targetPage = CONTRACT_CLAUSE_CITATION.bbox.page;
@@ -371,6 +392,7 @@ const IDLE_SNAPSHOT: MutableSnapshot = {
   citations: [],
   primaryId: null,
   contradiction: false,
+  crossDocument: false,
   anchor: null,
   hops: [],
   memory: [],
@@ -389,6 +411,7 @@ export function useCrossExam(config: CrossExamConfig): CrossExamState {
 
   const [snap, setSnap] = useState<MutableSnapshot>(() => ({ ...IDLE_SNAPSHOT }));
   const [isConnected, setIsConnected] = useState(false);
+  const [micStatus, setMicStatus] = useState<MicStatus>('off');
   // The agent's remote (TTS) audio track, surfaced as a MediaStream for the orb.
   const [outputStream, setOutputStream] = useState<MediaStream | null>(null);
   const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
@@ -430,6 +453,7 @@ export function useCrossExam(config: CrossExamConfig): CrossExamState {
   useEffect(() => {
     if (isMock) {
       setIsConnected(false);
+      setMicStatus('off');
       setOutputStream(null);
       publishRef.current = null;
       return;
@@ -447,6 +471,18 @@ export function useCrossExam(config: CrossExamConfig): CrossExamState {
           return;
         }
         setIsConnected(true);
+
+        // PUBLISH THE MIC: enable the local microphone so a spoken turn actually
+        // reaches the agent in live mode. Guarded — a permission denial (or any
+        // device error) must NOT crash the session: we stay connected and flag
+        // micStatus='denied' so the UI can prompt the user. On success the agent
+        // can hear input. (Mock mode never reaches here.)
+        try {
+          await room.localParticipant.setMicrophoneEnabled(true);
+          if (!disposed) setMicStatus('on');
+        } catch {
+          if (!disposed) setMicStatus('denied');
+        }
 
         // Expose a best-effort publisher so the UI can forward typed questions
         // and push-to-talk signals to the agent over the data channel.
@@ -492,12 +528,14 @@ export function useCrossExam(config: CrossExamConfig): CrossExamState {
           room.off(RoomEvent.TrackUnsubscribed, onTrackUnsubscribed);
           publishRef.current = null;
           setOutputStream(null);
+          setMicStatus('off');
           void room.disconnect();
         };
       } catch {
         // Fall back gracefully: stay in a connected=false state, UI still renders.
         if (!disposed) {
           setIsConnected(false);
+          setMicStatus('off');
           setOutputStream(null);
         }
       }
@@ -568,6 +606,7 @@ export function useCrossExam(config: CrossExamConfig): CrossExamState {
             primaryId: citation.id,
             targetPage: citation.bbox.page,
             contradiction: false,
+            crossDocument: false,
             anchor: null,
             hops: [],
             memory: [],
@@ -587,6 +626,7 @@ export function useCrossExam(config: CrossExamConfig): CrossExamState {
             citations: [],
             primaryId: null,
             contradiction: false,
+            crossDocument: false,
             anchor: null,
             hops: [],
             memory: [],
@@ -606,6 +646,7 @@ export function useCrossExam(config: CrossExamConfig): CrossExamState {
   return {
     isMock,
     isConnected,
+    micStatus,
     agentState: snap.agentState,
     caption: snap.caption,
     question: snap.question,
@@ -613,6 +654,7 @@ export function useCrossExam(config: CrossExamConfig): CrossExamState {
     citations: snap.citations,
     primaryId: snap.primaryId,
     contradiction: snap.contradiction,
+    crossDocument: snap.crossDocument,
     anchor: snap.anchor,
     hops: snap.hops,
     memory: snap.memory,
@@ -657,6 +699,9 @@ function handleLivePayload(
   const latencyMs = typeof msg.latencyMs === 'number' ? msg.latencyMs : undefined;
   const proactive = msg.proactive === true;
   const contradiction = msg.contradiction === true;
+  // The backend emits `crossDocument` per the contract. Honor it directly; the
+  // local derivation (counter doc != primary doc) is only the fallback below.
+  const crossDocumentFromFrame = msg.crossDocument === true;
   const anchor = typeof msg.anchor === 'string' ? msg.anchor : null;
   const speaker = isSpeaker(msg.speaker) ? msg.speaker : null;
   const hops = parseHops(msg.hops);
@@ -688,6 +733,13 @@ function handleLivePayload(
     const primary = citations.find((c) => c.id === primaryIdRaw) ?? citations[0];
     if (!primary) return;
 
+    // Prefer the frame's crossDocument flag; fall back to deriving it from the
+    // citations' documentIds (a counter citation in a different doc).
+    const crossDocument =
+      contradiction &&
+      (crossDocumentFromFrame ||
+        citations.some((c) => c.id !== primary.id && c.documentId !== primary.documentId));
+
     setSnap((prev) => {
       // Merge this turn's citations into the running session list (de-duped by id).
       const merged = [...prev.citations];
@@ -703,6 +755,7 @@ function handleLivePayload(
         targetPage: primary.bbox.page,
         primaryId: primary.id,
         contradiction,
+        crossDocument,
         anchor: contradiction ? anchor : null,
         hops: hops ?? prev.hops,
         memory: memory ?? [],
@@ -738,6 +791,7 @@ function handleLivePayload(
       activeCitation: null,
       primaryId: null,
       contradiction: false,
+      crossDocument: false,
       anchor: null,
       hops: [],
       memory: [],

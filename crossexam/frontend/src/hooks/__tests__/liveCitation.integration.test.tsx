@@ -37,8 +37,15 @@ const Track = { Kind: { Audio: 'audio', Video: 'video', Unknown: 'unknown' } } a
 /** Captures the data handler the hook registers so the test can emit frames. */
 let capturedOnData: ((payload: Uint8Array) => void) | undefined;
 
+/** Captures the most recent setMicrophoneEnabled call so the test can assert it. */
+const setMicrophoneEnabled = vi.fn(async (_enabled: boolean): Promise<void> => undefined);
+
 class FakeRoom {
   private handlers = new Map<string, (payload: Uint8Array) => void>();
+  localParticipant = {
+    setMicrophoneEnabled,
+    publishData: vi.fn(async (): Promise<void> => undefined),
+  };
   connect = vi.fn(async (): Promise<void> => undefined);
   disconnect = vi.fn(async (): Promise<void> => undefined);
   on(event: string, cb: (payload: Uint8Array) => void): this {
@@ -68,6 +75,8 @@ function Harness(): JSX.Element {
     <div>
       <span data-testid="mode">{cx.isMock ? 'mock' : 'live'}</span>
       <span data-testid="connected">{String(cx.isConnected)}</span>
+      <span data-testid="mic-status">{cx.micStatus}</span>
+      <span data-testid="cross-document">{String(cx.crossDocument)}</span>
       <span data-testid="agent-state">{cx.agentState}</span>
       <span data-testid="proactive">{String(cx.proactive)}</span>
       <span data-testid="silence">{cx.silenceReason ?? 'none'}</span>
@@ -116,12 +125,52 @@ function encodeFrame(obj: unknown): Uint8Array {
 describe('live citation path (LiveKit DataReceived -> PdfCanvas)', () => {
   beforeEach(() => {
     capturedOnData = undefined;
+    setMicrophoneEnabled.mockClear();
   });
 
   it('runs in live mode (not mock) when URL + token are present', async () => {
     render(<Harness />);
     expect(screen.getByTestId('mode').textContent).toBe('live');
     await waitFor(() => expect(screen.getByTestId('connected').textContent).toBe('true'));
+  });
+
+  it('publishes the local microphone on a successful live connect', async () => {
+    render(<Harness />);
+    await waitFor(() => expect(screen.getByTestId('connected').textContent).toBe('true'));
+    await waitFor(() => expect(setMicrophoneEnabled).toHaveBeenCalledWith(true));
+    expect(screen.getByTestId('mic-status').textContent).toBe('on');
+  });
+
+  it('flags mic denial gracefully without dropping the session', async () => {
+    setMicrophoneEnabled.mockRejectedValueOnce(new Error('NotAllowedError'));
+    render(<Harness />);
+    await waitFor(() => expect(screen.getByTestId('connected').textContent).toBe('true'));
+    await waitFor(() => expect(screen.getByTestId('mic-status').textContent).toBe('denied'));
+    // Still connected — a denied mic must not crash or disconnect the room.
+    expect(screen.getByTestId('connected').textContent).toBe('true');
+  });
+
+  it('sets crossDocument from a live frame', async () => {
+    render(<Harness />);
+    await waitFor(() => expect(capturedOnData).toBeDefined());
+
+    const counter: Citation = {
+      ...LIVE_CITATION,
+      id: 'cite-live-counter',
+      documentId: 'exhibit-visitor-log',
+    };
+    act(() => {
+      capturedOnData?.(
+        encodeFrame({
+          citations: [LIVE_CITATION, counter],
+          primaryId: LIVE_CITATION.id,
+          contradiction: true,
+          crossDocument: true,
+        }),
+      );
+    });
+
+    await waitFor(() => expect(screen.getByTestId('cross-document').textContent).toBe('true'));
   });
 
   it('draws the box where lib/bbox.ts computes when a live citation frame arrives', async () => {

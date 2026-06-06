@@ -314,3 +314,71 @@ async def test_keyword_arg_fallback_when_no_query_options() -> None:
         "alpha": 0.5,
     }
     assert len(result.citations) == 2
+
+
+# --------------------------------------------------------------------------- #
+# document_ids + query_multi doc filter (anchor-expansion round-trip)         #
+# --------------------------------------------------------------------------- #
+def _multi_doc_result() -> FakeResult:
+    """A two-document response with distinct documentIds in metadata."""
+    return FakeResult(
+        docs=[
+            FakeDoc(
+                id="a-1",
+                text="Clause 4.2 forbids subcontracting.",
+                score=0.9,
+                metadata={"page": 1, "documentId": "contract-acme"},
+            ),
+            FakeDoc(
+                id="b-1",
+                text="We subcontracted the work in March.",
+                score=0.8,
+                metadata={"page": 1, "documentId": "email-thread"},
+            ),
+        ],
+        time_taken_ms=5.0,
+    )
+
+
+async def test_document_ids_grows_as_query_results_stream() -> None:
+    """MossIndex.document_ids reflects the docs observed across queries."""
+    client = FakeMossClient(_multi_doc_result())
+    idx = MossIndex(_settings(), client=client)
+    idx._module = type("M", (), {"QueryOptions": FakeQueryOptions})()  # noqa: SLF001
+    assert idx.document_ids == []  # nothing observed yet
+    await idx.query("subcontract", top_k=5)
+    assert idx.document_ids == ["contract-acme", "email-thread"]
+
+
+async def test_query_multi_post_filters_when_no_server_filter() -> None:
+    """Without a filter-capable QueryOptions, query_multi post-filters by doc."""
+    client = FakeMossClient(_multi_doc_result())
+    idx = MossIndex(_settings(), client=client)
+    idx._module = type("M", (), {"QueryOptions": FakeQueryOptions})()  # noqa: SLF001
+    result = await idx.query_multi("subcontract", top_k=5, doc_ids=["email-thread"])
+    assert [c.documentId for c in result.citations] == ["email-thread"]
+
+
+async def test_query_multi_uses_server_filter_when_supported() -> None:
+    """A filter-capable QueryOptions makes query_multi push the filter server-side."""
+
+    class FilterQueryOptions:
+        """QueryOptions stub that accepts a server-side ``filter`` kwarg."""
+
+        def __init__(
+            self, top_k: int = 5, alpha: float = 0.8, filter: object = None  # noqa: A002
+        ) -> None:
+            self.top_k = top_k
+            self.alpha = alpha
+            self.filter = filter
+
+    client = FakeMossClient(_multi_doc_result())
+    idx = MossIndex(_settings(), client=client)
+    idx._module = type("M", (), {"QueryOptions": FilterQueryOptions})()  # noqa: SLF001
+    assert idx._supports_server_filter() is True  # noqa: SLF001
+    result = await idx.query_multi("subcontract", top_k=5, doc_ids=["contract-acme"])
+    # The filter is forwarded into QueryOptions on the call to the client.
+    _index, _text, options = client.calls[-1]
+    assert options.filter == {"documentId": {"$in": ["contract-acme"]}}
+    # Post-filter still applies defensively, yielding only the allowed doc.
+    assert [c.documentId for c in result.citations] == ["contract-acme"]

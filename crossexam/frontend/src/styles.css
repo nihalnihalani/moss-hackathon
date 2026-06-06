@@ -1583,6 +1583,19 @@ body {
     box-shadow var(--dur-fast) var(--ease-emph);
 }
 .mic-control:hover { color: var(--text); border-color: var(--text-mute); }
+.mic-denied {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.03em;
+  line-height: 1.4;
+  color: var(--rose);
+  background: var(--rose-soft);
+  border: 1px solid var(--rose-glow);
+  border-radius: var(--r-md, 8px);
+  padding: 6px 10px;
+  max-width: 220px;
+  text-align: center;
+}
 .mic-control--active {
   color: var(--state-listen);
   border-color: var(--state-listen);

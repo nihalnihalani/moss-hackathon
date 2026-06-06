@@ -78,12 +78,20 @@ class TokenRequest(BaseModel):
 
 
 class TokenResponse(BaseModel):
-    """Minted LiveKit access token (``POST /token``)."""
+    """Minted LiveKit access token (``POST /token``).
+
+    ``url`` is the field the frontend reads to connect (LiveKit JS expects
+    ``url``); ``livekit_url`` is kept as an alias for back-compat. Both carry the
+    same value. Without ``url`` the frontend never engages live mode.
+    """
 
     token: str
     room: str
     identity: str
-    livekit_url: str | None = Field(description="Where to connect with this token.")
+    url: str | None = Field(description="LiveKit ws URL the frontend connects to.")
+    livekit_url: str | None = Field(
+        description="Alias of ``url`` kept for back-compat."
+    )
 
 
 class DocumentResponse(BaseModel):
@@ -165,15 +173,24 @@ def _index_to_mock_fixture(
     return len(records), new_index
 
 
-def _index_to_moss(settings: Settings, records: list[dict[str, Any]]) -> int:
+def _index_to_moss(
+    settings: Settings, records: list[dict[str, Any]]
+) -> tuple[int, str]:
     """Upsert ``records`` into Moss via the pipeline's real ``build_index``.
 
     Imported lazily and guarded: if the pipeline package is not installed we
     raise a clear error rather than silently falling back, because the caller has
     already decided (real Moss creds present) that this is the live path.
 
+    ``build_index`` itself may fall back to writing the on-disk fixture when its
+    own credential check fails (e.g. a partially-filled env). We therefore read
+    the summary's ``mode`` and surface it honestly to the caller instead of
+    always reporting ``"moss"`` — a disk fallback must NOT be reported as
+    "indexed to Moss".
+
     Returns:
-        The number of documents upserted.
+        ``(chunks_indexed, mode)`` where ``mode`` is ``"moss"`` only when the
+        pipeline actually upserted to Moss; ``"mock"`` when it wrote the fixture.
     """
     try:
         from crossexam_pipeline.build_index import build_index
@@ -189,7 +206,11 @@ def _index_to_moss(settings: Settings, records: list[dict[str, Any]]) -> int:
         ) from exc
     chunks = [ParsedChunk.model_validate(r) for r in records]
     summary = build_index(chunks, index_name=settings.moss_index_name)
-    return int(summary.get("chunk_count", len(records)))
+    count = int(summary.get("chunk_count", len(records)))
+    # build_index reports mode in {"moss", "disk", "dry-run"}; only "moss" is a
+    # real upsert. Anything else means it wrote the disk fixture as a fallback.
+    mode = "moss" if summary.get("mode") == "moss" else "mock"
+    return count, mode
 
 
 # --------------------------------------------------------------------------- #
@@ -286,7 +307,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             ) from exc
         logger.info("token.minted room=%s identity=%s", room, identity)
         return TokenResponse(
-            token=jwt, room=room, identity=identity, livekit_url=settings.livekit_url
+            token=jwt,
+            room=room,
+            identity=identity,
+            url=settings.livekit_url,
+            livekit_url=settings.livekit_url,
         )
 
     @app.post("/documents", response_model=DocumentResponse)
@@ -329,10 +354,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         pages = ingest.page_count(records)
         if _moss_configured(settings):
-            chunks_indexed = _index_to_moss(settings, records)
-            mode = "moss"
-            # Refresh the live index so the worker queries the new docs.
-            app.state.index = get_index(settings)
+            chunks_indexed, mode = _index_to_moss(settings, records)
+            if mode == "moss":
+                # Refresh the live index so the worker queries the new docs.
+                app.state.index = get_index(settings)
+            else:
+                # build_index fell back to the disk fixture (it did NOT upsert to
+                # Moss). Reload the mock index from that fixture so queries see
+                # the new docs, and report the honest "mock" mode.
+                app.state.index = _initial_index(settings)
         else:
             chunks_indexed, new_index = _index_to_mock_fixture(settings, records)
             app.state.index = new_index

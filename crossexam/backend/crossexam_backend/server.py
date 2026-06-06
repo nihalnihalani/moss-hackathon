@@ -165,6 +165,32 @@ def _build_tts(settings: Settings) -> object:
     )
 
 
+def _build_vad() -> object | None:
+    """Load Silero VAD for end-of-turn detection + interruptions, or ``None``.
+
+    AgentSession needs a VAD to detect speech boundaries (when the user starts /
+    stops talking). Without it, end-of-turn detection and barge-in never fire.
+    ``livekit-plugins-silero`` ships ``VAD.load()`` which loads the Silero model
+    weights once; we call it here (the worker calls this in prewarm so the model
+    is warm before the first job). Imported lazily and guarded: when the plugin
+    is not installed (mock/test env) this returns ``None`` and the caller starts
+    the session without a VAD rather than crashing at import time.
+
+    Verified surface (livekit-plugins-silero 1.x): ``silero.VAD.load()``.
+    """
+    try:  # pragma: no cover - needs the silero plugin installed
+        from livekit.plugins import silero
+
+        vad: object = silero.VAD.load()
+        return vad
+    except ImportError:  # pragma: no cover - plugin not in mock/test env
+        logger.info(
+            "silero VAD plugin not installed; session starts without a VAD "
+            "(end-of-turn detection + interruptions disabled)."
+        )
+        return None
+
+
 def _build_turn_detection() -> object | None:
     """Construct LiveKit's model-based turn detector, or ``None`` if absent.
 
@@ -237,6 +263,15 @@ def _run_livekit_worker(settings: Settings, index: RetrievalIndex) -> int:
             # Barge-in: allow the user to interrupt the agent mid-utterance.
             "allow_interruptions": True,
         }
+        # VAD: required for end-of-turn detection + interruptions. Prefer a VAD
+        # warmed in prewarm (stashed on proc.userdata); fall back to loading it
+        # here if prewarm did not run (e.g. a fresh dispatch). Attached only when
+        # the silero plugin is present.
+        vad = getattr(getattr(ctx, "proc", None), "userdata", {}).get("vad")
+        if vad is None:
+            vad = _build_vad()
+        if vad is not None:
+            session_kwargs["vad"] = vad
         turn_detection = _build_turn_detection()
         if turn_detection is not None:
             session_kwargs["turn_detection"] = turn_detection
@@ -244,9 +279,20 @@ def _run_livekit_worker(settings: Settings, index: RetrievalIndex) -> int:
         session = AgentSession(**session_kwargs)
         await session.start(agent=agent, room=ctx.room)
 
-    async def prewarm(_proc: object) -> None:
-        """Worker prewarm: eagerly load the index before serving jobs."""
+    async def prewarm(proc: object) -> None:
+        """Worker prewarm: eagerly load the index + Silero VAD before serving jobs.
+
+        Loading the Silero VAD weights here (once per process) keeps the first
+        job's first turn fast. The loaded VAD is stashed on ``proc.userdata`` so
+        the entrypoint reuses it instead of reloading. Guarded — a missing silero
+        plugin simply leaves no VAD stashed and the entrypoint starts without one.
+        """
         await index.prewarm()
+        vad = _build_vad()
+        if vad is not None:
+            userdata = getattr(proc, "userdata", None)
+            if isinstance(userdata, dict):
+                userdata["vad"] = vad
 
     cli.run_app(
         WorkerOptions(

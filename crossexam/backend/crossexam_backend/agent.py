@@ -102,6 +102,28 @@ def _citation_dict(citation: Citation, verdict: FaithfulnessVerdict) -> dict[str
     return payload
 
 
+def _frame_caption(
+    kept: list[dict[str, Any]], *, is_contradiction: bool, found: bool
+) -> str:
+    """Build a short one-line caption mirroring the mock's status text.
+
+    Examples: ``"Found in Deposition of Holloway p.4"``, ``"Conflict found
+    across 2 sources"``, or ``"Not found in the document"`` when nothing
+    survived the faithfulness gate. Kept intentionally terse so the frontend can
+    show it under the orb without truncation.
+    """
+    if not found or not kept:
+        return "Not found in the document"
+    if is_contradiction:
+        return f"Conflict found across {len(kept)} sources"
+    top = kept[0]
+    page = top.get("bbox", {}).get("page")
+    doc = top.get("documentTitle") or top.get("documentId") or "the document"
+    if page is not None:
+        return f"Found in {doc} p.{page}"
+    return f"Found in {doc}"
+
+
 def _memory_dict(ref: MemoryRef) -> dict[str, Any]:
     """Serialise a :class:`MemoryRef` recall to the wire shape (feat 5)."""
     return {
@@ -280,6 +302,17 @@ def build_frame(
         frame["speaker"] = _speaker_dict(speaker)
     if proactive:
         frame["proactive"] = True
+
+    # caption + agentState let the LIVE path animate the orb / status line like
+    # the mock. agentState is 'speaking' when we're publishing a real citation
+    # (the agent has something to say), and 'idle' on honest silence. These are
+    # optional, additive hints — the frontend ignores them if it doesn't use
+    # them, and they never gate the citations themselves.
+    found = bool(kept)
+    frame["caption"] = _frame_caption(
+        kept, is_contradiction=is_contradiction, found=found
+    )
+    frame["agentState"] = "speaking" if found else "idle"
     return frame
 
 

@@ -3,7 +3,7 @@
  *
  * The backend exposes:
  *   GET  {VITE_API_URL}/config    -> { livekit_url: string|null, live: boolean }
- *   POST {VITE_API_URL}/token     -> { token, url, room }
+ *   POST {VITE_API_URL}/token     -> { token, room, url | livekit_url }
  *   POST {VITE_API_URL}/documents -> { document_id, pages, chunks_indexed, mode }
  *   GET  {VITE_API_URL}/healthz   -> 200 when up
  *
@@ -131,15 +131,27 @@ export async function requestToken(
   if (!res.ok) throw new ApiError(`POST /token failed (${res.status})`, res.status);
 
   const data = await parseJson(res);
+  // The backend is migrating from `livekit_url` to `url`; accept EITHER so live
+  // mode engages regardless of which shape the deployed backend sends. Prefer
+  // `url`, fall back to `livekit_url`.
+  const wsUrl =
+    isRecord(data) && typeof data.url === 'string'
+      ? data.url
+      : isRecord(data) && typeof data.livekit_url === 'string'
+        ? data.livekit_url
+        : undefined;
   if (
     !isRecord(data) ||
     typeof data.token !== 'string' ||
-    typeof data.url !== 'string' ||
+    wsUrl === undefined ||
     typeof data.room !== 'string'
   ) {
-    throw new ApiError('Malformed /token payload: expected { token, url, room }', res.status);
+    throw new ApiError(
+      'Malformed /token payload: expected { token, room, url|livekit_url }',
+      res.status,
+    );
   }
-  return { token: data.token, url: data.url, room: data.room };
+  return { token: data.token, url: wsUrl, room: data.room };
 }
 
 /**

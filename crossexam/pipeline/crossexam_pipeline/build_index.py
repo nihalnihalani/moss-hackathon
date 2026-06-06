@@ -115,39 +115,69 @@ def _index_payload(chunks: list[ParsedChunk], index_name: str) -> dict[str, Any]
     """
     documents = []
     for c in _sorted_chunks(chunks):
+        metadata: dict[str, Any] = {
+            # Depth-v2 round-trip: the backend's moss_client._to_citation reads
+            # documentId/documentTitle/scanned/quads back out of metadata, and
+            # the frontend's isCitation REQUIRES documentId to be a string. If we
+            # don't persist them here, every live citation would carry a null
+            # documentId and the frontend would reject it. documentId/scanned are
+            # always written; documentTitle/quads only when present.
+            "documentId": c.document_id,
+            "scanned": c.scanned,
+            "page": c.page,
+            "bbox": {
+                "page": c.bbox.page,
+                "x0": c.bbox.x0,
+                "y0": c.bbox.y0,
+                "x1": c.bbox.x1,
+                "y1": c.bbox.y1,
+                "page_width": c.bbox.page_width,
+                "page_height": c.bbox.page_height,
+            },
+            "confidence": c.confidence,
+            "words": [
+                {
+                    "text": w.text,
+                    "bbox": {
+                        "page": w.bbox.page,
+                        "x0": w.bbox.x0,
+                        "y0": w.bbox.y0,
+                        "x1": w.bbox.x1,
+                        "y1": w.bbox.y1,
+                        "page_width": w.bbox.page_width,
+                        "page_height": w.bbox.page_height,
+                    },
+                    "confidence": w.confidence,
+                }
+                for w in c.words
+            ],
+        }
+        # documentTitle/quads are optional (single-doc back-compat); persist only
+        # when present so the round-trip matches to_index_record's projection.
+        if c.document_title is not None:
+            metadata["documentTitle"] = c.document_title
+        if c.quads:
+            metadata["quads"] = [
+                {
+                    "page": q.page,
+                    "x0": q.x0,
+                    "y0": q.y0,
+                    "x1": q.x1,
+                    "y1": q.y1,
+                    "page_width": q.page_width,
+                    "page_height": q.page_height,
+                }
+                for q in c.quads
+            ]
         documents.append(
             {
                 "id": c.id,
                 "text": c.text,
-                "metadata": {
-                    "page": c.page,
-                    "bbox": {
-                        "page": c.bbox.page,
-                        "x0": c.bbox.x0,
-                        "y0": c.bbox.y0,
-                        "x1": c.bbox.x1,
-                        "y1": c.bbox.y1,
-                        "page_width": c.bbox.page_width,
-                        "page_height": c.bbox.page_height,
-                    },
-                    "confidence": c.confidence,
-                    "words": [
-                        {
-                            "text": w.text,
-                            "bbox": {
-                                "page": w.bbox.page,
-                                "x0": w.bbox.x0,
-                                "y0": w.bbox.y0,
-                                "x1": w.bbox.x1,
-                                "y1": w.bbox.y1,
-                                "page_width": w.bbox.page_width,
-                                "page_height": w.bbox.page_height,
-                            },
-                            "confidence": w.confidence,
-                        }
-                        for w in c.words
-                    ],
-                },
+                # documentId is also surfaced top-level: moss_client._to_citation
+                # reads it from either location, and a top-level id eases any
+                # server-side documentId candidate filter.
+                "documentId": c.document_id,
+                "metadata": metadata,
             }
         )
     return {"index": index_name, "documents": documents}

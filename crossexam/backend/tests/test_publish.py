@@ -166,6 +166,24 @@ def test_frame_empty_when_no_citations() -> None:
     assert "primaryId" not in frame
 
 
+def test_supported_frame_emits_caption_and_speaking_state() -> None:
+    """A supported frame carries a one-line caption + agentState='speaking'."""
+    frame = build_frame(_supported_result())
+    assert frame["agentState"] == "speaking"
+    # Caption mentions the source doc and page of the top citation.
+    assert frame["caption"] == "Found in deposition-holloway p.12"
+    # caption/agentState are JSON-safe wire hints.
+    json.loads(json.dumps(frame))
+
+
+def test_empty_frame_caption_and_idle_state() -> None:
+    """Honest silence emits a 'not found' caption + agentState='idle'."""
+    result = RetrievalResult(query="q", citations=[], latency_ms=1.0)
+    frame = build_frame(result)
+    assert frame["agentState"] == "idle"
+    assert frame["caption"] == "Not found in the document"
+
+
 def test_supported_answer_attaches_faithfulness() -> None:
     """A supported answer yields a citation carrying a supported faithfulness."""
     frame = build_frame(
@@ -279,6 +297,13 @@ def test_contradiction_frame_carries_hops_and_flag() -> None:
     assert all(h["subQuery"] for h in frame["hops"])
     # hops carry the citation ids surfaced per sub-query.
     assert frame["hops"][0]["citationIds"] == ["depo-p12"]
+
+
+def test_contradiction_frame_caption_mentions_conflict() -> None:
+    """A contradiction frame's caption summarizes the cross-source conflict."""
+    frame = build_frame(_two_doc_contradiction_result())
+    assert frame["agentState"] == "speaking"
+    assert "Conflict found across" in frame["caption"]
 
 
 def test_contradiction_pair_survives_a_real_answer_text() -> None:

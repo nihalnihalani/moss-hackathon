@@ -147,6 +147,14 @@ class MossIndex(RetrievalIndex):
         # operator wired up Moss, a broken query should be loud, not silent.
         self._strict = settings.has_moss_credentials if strict is None else strict
         self._module: ModuleType | None = None
+        # Distinct documentIds observed so far. The Moss SDK does not document a
+        # "list all documents in an index" call, so we MAINTAIN this set: it is
+        # seeded from the loaded index when the SDK exposes a doc listing (see
+        # :meth:`prewarm`) and otherwise grows as query results stream in. This
+        # backs the :attr:`document_ids` property that multi-hop anchor-expansion
+        # reads (multihop.py) — without it, cross-document expansion silently
+        # finds no other docs to reach into.
+        self._seen_document_ids: set[str] = set()
 
         if client is not None:
             self._client = client
@@ -163,6 +171,27 @@ class MossIndex(RetrievalIndex):
         logger.info(
             "moss_index.init index=%s strict=%s", self._index_name, self._strict
         )
+
+    @property
+    def document_ids(self) -> list[str]:
+        """Distinct document ids known to this index, in sorted order.
+
+        Multi-hop anchor-expansion (``retrieval/multihop.py``) reads this via
+        ``getattr(index, "document_ids", [])`` to reach across OTHER documents
+        for a cross-document counter. The Moss SDK does not document an
+        enumerate-all-documents call, so this returns the ids OBSERVED so far
+        (seeded from the loaded index in :meth:`prewarm` when possible, plus any
+        seen as query results stream). It is therefore best-effort: it will be
+        complete once the relevant docs have been touched, which is sufficient
+        for the expansion heuristic. See the module docstring (COULD-NOT-VERIFY).
+        """
+        return sorted(self._seen_document_ids)
+
+    def _record_document_ids(self, citations: Sequence[Citation]) -> None:
+        """Add each citation's documentId to the observed-id set (best-effort)."""
+        for c in citations:
+            if c.documentId:
+                self._seen_document_ids.add(c.documentId)
 
     # -- real-SDK touch points (the ONLY places that know the SDK shape) -----
     @staticmethod
@@ -181,23 +210,66 @@ class MossIndex(RetrievalIndex):
             )
         return client_cls(settings.moss_project_id, settings.moss_project_key)
 
-    def _make_query_options(self, top_k: int, alpha: float) -> Any | None:  # noqa: ANN401
+    def _make_query_options(
+        self, top_k: int, alpha: float, *, doc_ids: list[str] | None = None
+    ) -> Any | None:  # noqa: ANN401
         """Build a ``QueryOptions(top_k=, alpha=)`` if the SDK exposes it.
 
         Verified surface: ``QueryOptions(top_k=3, alpha=0.6)``. Returns ``None``
         when no module is loaded (DI/test path) so the caller can fall back to
         keyword args on ``query``. Typed ``Any`` because the SDK class is not
         importable at type-check time (optional dependency).
+
+        DOC FILTER (ASSUMED, not verified upstream): when ``doc_ids`` is given we
+        attempt to add a server-side candidate filter so Moss only ranks the
+        allowed documents (a real filter, not over-fetch). The exact kwarg name
+        is undocumented, so we try ``filter`` then ``where`` and DROP the filter
+        if neither is accepted by ``QueryOptions`` — the caller then falls back
+        to over-fetch + post-filter. The filter shape assumes a documentId-in
+        predicate; adjust here once the SDK's filter surface is confirmed.
         """
         if self._module is None:
             return None
         options_cls = getattr(self._module, "QueryOptions", None)
         if options_cls is None:
             return None
+        if not doc_ids:
+            return options_cls(top_k=top_k, alpha=alpha)
+        # Best-effort server-side filter. Try documented-ish kwarg names; on a
+        # TypeError (unknown kwarg) fall back to an unfiltered options object so
+        # query_multi can over-fetch + post-filter instead.
+        predicate = {"documentId": {"$in": list(doc_ids)}}
+        for kw in ("filter", "where", "metadata_filter"):
+            try:
+                return options_cls(top_k=top_k, alpha=alpha, **{kw: predicate})
+            except TypeError:
+                continue
         return options_cls(top_k=top_k, alpha=alpha)
 
+    def _supports_server_filter(self) -> bool:
+        """Whether ``QueryOptions`` accepts a doc filter kwarg (assumed surface).
+
+        Used by :meth:`query_multi` to decide between a real server-side filter
+        and the over-fetch + post-filter fallback. Returns ``False`` whenever no
+        module is loaded (DI/test path) or the SDK does not accept any of the
+        candidate filter kwargs, so behaviour is unchanged on the verified path.
+        """
+        if self._module is None:
+            return False
+        options_cls = getattr(self._module, "QueryOptions", None)
+        if options_cls is None:
+            return False
+        predicate = {"documentId": {"$in": ["__probe__"]}}
+        for kw in ("filter", "where", "metadata_filter"):
+            try:
+                options_cls(top_k=1, alpha=0.5, **{kw: predicate})
+                return True
+            except TypeError:
+                continue
+        return False
+
     async def _raw_query(
-        self, text: str, top_k: int, alpha: float
+        self, text: str, top_k: int, alpha: float, *, doc_ids: list[str] | None = None
     ) -> tuple[Sequence[object], float | None]:
         """Call the underlying Moss client; return ``(docs, server_latency_ms)``.
 
@@ -206,7 +278,9 @@ class MossIndex(RetrievalIndex):
             then iterate ``results.docs`` and read ``results.time_taken_ms``.
 
         Isolated so the SDK-specific call lives in exactly one place. Tolerates
-        a sync return, a ``.docs``/``.matches`` wrapper, or a bare list.
+        a sync return, a ``.docs``/``.matches`` wrapper, or a bare list. When
+        ``doc_ids`` is given AND the SDK accepts a filter kwarg, the candidate
+        filter is pushed into ``QueryOptions`` (see :meth:`_make_query_options`).
         """
         query_fn = getattr(self._client, "query", None) or getattr(
             self._client, "search", None
@@ -216,7 +290,7 @@ class MossIndex(RetrievalIndex):
                 "Moss client exposes neither query() nor search()"
             )
 
-        options = self._make_query_options(top_k, alpha)
+        options = self._make_query_options(top_k, alpha, doc_ids=doc_ids)
         if options is not None:
             result = query_fn(self._index_name, text, options)
         else:
@@ -335,9 +409,39 @@ class MossIndex(RetrievalIndex):
             try:
                 result = warm(self._index_name)
                 if hasattr(result, "__await__"):
-                    await result
+                    result = await result
             except Exception:  # noqa: BLE001 - prewarm must never crash worker
                 logger.exception("moss_index.prewarm failed; continuing")
+            else:
+                # Best-effort: seed document_ids from the loaded index when the
+                # SDK exposes a doc list on the load result (ASSUMED — the SDK
+                # does not document an enumerate-all call; see the property
+                # docstring). Any shape mismatch is ignored; ids still accrue
+                # from query results.
+                self._seed_document_ids(result)
+
+    def _seed_document_ids(self, loaded: object) -> None:
+        """Seed observed-doc ids from a loaded-index handle, if it lists docs.
+
+        Looks for a ``documents``/``docs`` collection on the load result and
+        records each entry's documentId (top-level or in ``metadata``). Purely
+        best-effort and exception-safe: this is an ASSUMED SDK surface.
+        """
+        if loaded is None:
+            return
+        try:
+            docs = self._get(loaded, "documents", None)
+            if docs is None:
+                docs = self._get(loaded, "docs", None)
+            if not docs:
+                return
+            for d in docs:
+                meta = self._get(d, "metadata", {}) or {}
+                doc_id = self._get(d, "documentId", self._get(meta, "documentId", None))
+                if doc_id:
+                    self._seen_document_ids.add(str(doc_id))
+        except Exception:  # noqa: BLE001 - seeding is best-effort only
+            logger.debug("moss_index.seed_document_ids skipped (unrecognized shape)")
 
     async def query(
         self,
@@ -370,6 +474,9 @@ class MossIndex(RetrievalIndex):
             return RetrievalResult(query=text, citations=[], latency_ms=latency_ms)
 
         citations = [self._to_citation(m) for m in list(docs)[:top_k]]
+        # Grow the observed-doc set so document_ids (and thus cross-document
+        # anchor-expansion) reflects the docs Moss has actually returned.
+        self._record_document_ids(citations)
 
         # Prefer Moss's server-measured latency; fall back to wall-clock.
         wall_ms = (time.perf_counter() - start) * 1000.0
@@ -392,15 +499,52 @@ class MossIndex(RetrievalIndex):
     ) -> RetrievalResult:
         """Query Moss across one or more documents (see base class).
 
-        The upstream Moss filter surface for restricting to specific documents is
-        unverified, so this defensively over-fetches and filters the returned
-        citations by ``documentId`` client-side. With ``doc_ids=None`` it is
-        identical to :meth:`query`.
+        When the SDK's ``QueryOptions`` accepts a candidate-filter kwarg (ASSUMED
+        surface — see :meth:`_make_query_options`), the documentId allow-list is
+        pushed SERVER-SIDE so Moss only ranks the allowed docs (a real filter).
+        When it does not (the verified-only path, DI/test, or older SDK), we fall
+        back to over-fetching and filtering the returned citations by
+        ``documentId`` client-side. With ``doc_ids=None`` it is identical to
+        :meth:`query`.
         """
         if doc_ids is None:
             return await self.query(text, top_k=top_k, alpha=alpha)
         allow = set(doc_ids)
-        # Over-fetch so post-filtering still yields up to top_k from the allow-set.
+
+        if self._supports_server_filter():
+            # Real server-side candidate filter: ask Moss for exactly top_k from
+            # the allow-set. Still post-filter defensively in case the assumed
+            # filter shape is a no-op on some SDK version.
+            start = time.perf_counter()
+            try:
+                docs, server_latency = await self._raw_query(
+                    text, top_k=top_k, alpha=alpha, doc_ids=list(doc_ids)
+                )
+            except MossClientUnavailableError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - mode decides raise vs degrade
+                logger.exception(
+                    "moss_index.query_multi failed text=%r strict=%s",
+                    text,
+                    self._strict,
+                )
+                if self._strict:
+                    raise MossQueryError(
+                        f"Moss query failed for index {self._index_name!r}: {exc}"
+                    ) from exc
+                latency_ms = (time.perf_counter() - start) * 1000.0
+                return RetrievalResult(query=text, citations=[], latency_ms=latency_ms)
+            citations = [self._to_citation(m) for m in list(docs)]
+            self._record_document_ids(citations)
+            filtered = [c for c in citations if c.documentId in allow][:top_k]
+            wall_ms = (time.perf_counter() - start) * 1000.0
+            latency_ms = server_latency if server_latency is not None else wall_ms
+            return RetrievalResult(
+                query=text, citations=filtered, latency_ms=latency_ms
+            )
+
+        # Fallback (verified-only path): over-fetch so post-filtering still
+        # yields up to top_k from the allow-set.
         wide = await self.query(text, top_k=max(top_k * 4, top_k), alpha=alpha)
         filtered = [c for c in wide.citations if c.documentId in allow][:top_k]
         return RetrievalResult(

@@ -189,9 +189,64 @@ def test_token_200_with_fake_signer(
     assert body["token"] == "fake.jwt.for.alice"
     assert body["room"] == "room-1"
     assert body["identity"] == "alice"
+    # `url` is the field the frontend reads; `livekit_url` is the back-compat
+    # alias. Both must carry the LiveKit ws URL.
+    assert body["url"] == "wss://x"
     assert body["livekit_url"] == "wss://x"
     # The secret must not leak into the response.
     assert "secret" not in resp.text
+
+
+def test_token_response_includes_url_field(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """/token MUST include `url` (the field the frontend connects with).
+
+    A missing `url` is why live mode never engaged; this locks the contract.
+    """
+
+    class _FakeGrants:
+        def __init__(self, **kwargs: object) -> None:
+            self.kwargs = kwargs
+
+    class _FakeAccessToken:
+        def __init__(self, key: str, secret: str) -> None:
+            self.key = key
+            self.secret = secret
+
+        def with_identity(self, identity: str) -> _FakeAccessToken:
+            self.identity = identity
+            return self
+
+        def with_grants(self, grants: object) -> _FakeAccessToken:
+            self.grants = grants
+            return self
+
+        def to_jwt(self) -> str:
+            return "fake.jwt"
+
+    fake_livekit = types.ModuleType("livekit")
+    fake_api = types.ModuleType("livekit.api")
+    fake_api.AccessToken = _FakeAccessToken  # type: ignore[attr-defined]
+    fake_api.VideoGrants = _FakeGrants  # type: ignore[attr-defined]
+    fake_livekit.api = fake_api  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "livekit", fake_livekit)
+    monkeypatch.setitem(sys.modules, "livekit.api", fake_api)
+
+    settings = Settings(
+        livekit_url="wss://room.example",
+        livekit_api_key="key",
+        livekit_api_secret="secret",
+        mock_fixture_path=str(tmp_path / "chunks.json"),
+        _env_file=None,  # type: ignore[call-arg]
+    )
+    with TestClient(create_app(settings)) as client:
+        resp = client.post("/token", json={})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "url" in body
+    assert body["url"] == "wss://room.example"
+    assert body["livekit_url"] == body["url"]
 
 
 def test_token_defaults_room_and_identity(

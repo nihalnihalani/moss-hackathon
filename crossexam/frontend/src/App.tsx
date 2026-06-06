@@ -89,7 +89,13 @@ export function App(): JSX.Element {
 
   // After an upload, render the freshly-ingested PDF and update corpus info.
   const [docInfo, setDocInfo] = useState<UploadResponse | null>(null);
-  const [uploadedUrl, setUploadedUrl] = useState<string | null>(null);
+  // documentId -> object URL for every doc uploaded this session. Lets a live
+  // citation whose documentId is NOT one of the 4 bundled fixtures still resolve
+  // to the correct rendered PDF (so boxes never land on the wrong page image).
+  const [uploadedDocUrls, setUploadedDocUrls] = useState<Record<string, string>>({});
+  // The most recently uploaded doc's id — used to render it immediately, before
+  // any citation has been surfaced for it.
+  const [lastUploadedId, setLastUploadedId] = useState<string | null>(null);
   // Has the user loaded/surfaced ANY document yet? Drives the empty-state
   // dropzone vs. the rendered canvas (Quick Win #2). Flipped on first upload or
   // once a citation/doc is surfaced (e.g. the mock demo).
@@ -98,20 +104,32 @@ export function App(): JSX.Element {
   const onUploaded = useCallback((result: UploadResponse, file: File): void => {
     setDocInfo(result);
     // Render the uploaded file locally so the canvas reflects the new document.
-    // Revoke any prior object URL first so re-uploading never leaks (m3).
-    setUploadedUrl((prev) => {
-      if (prev) URL.revokeObjectURL(prev);
-      return URL.createObjectURL(file);
+    // Key it by the backend-assigned documentId so a live citation referencing
+    // that id resolves to THIS object URL (not a bundled fixture / the default).
+    const objectUrl = URL.createObjectURL(file);
+    setUploadedDocUrls((prev) => {
+      const next = { ...prev };
+      // Revoke any prior URL mapped to the same id so re-uploading never leaks (m3).
+      const prior = next[result.documentId];
+      if (prior) URL.revokeObjectURL(prior);
+      next[result.documentId] = objectUrl;
+      return next;
     });
+    setLastUploadedId(result.documentId);
     setDocLoaded(true);
   }, []);
 
-  // Revoke the live object URL on unmount so a closed tab/session never leaks it.
+  // Revoke ALL uploaded object URLs on unmount so a closed tab never leaks them.
+  // Captured in a ref so the cleanup sees the latest map without re-subscribing.
+  const uploadedDocUrlsRef = useRef(uploadedDocUrls);
+  uploadedDocUrlsRef.current = uploadedDocUrls;
   useEffect(() => {
     return () => {
-      if (uploadedUrl) URL.revokeObjectURL(uploadedUrl);
+      for (const url of Object.values(uploadedDocUrlsRef.current)) {
+        URL.revokeObjectURL(url);
+      }
     };
-  }, [uploadedUrl]);
+  }, []);
 
   // ---- FEATURE 1: multi-doc. Derive the set of documents from the citations.
   const docs: DocSwitcherDoc[] = useMemo(() => {
@@ -153,15 +171,35 @@ export function App(): JSX.Element {
     }
   }, [cx.primaryId]);
 
-  const activeDocId = manualDocId ?? primaryDocId ?? docs[0]?.id ?? null;
+  const activeDocId = manualDocId ?? primaryDocId ?? lastUploadedId ?? docs[0]?.id ?? null;
 
-  // Resolve the PDF url for the active doc: an uploaded file wins, else the
-  // contract mapping, else the default sample.
-  const pdfUrl = useMemo(() => {
-    if (uploadedUrl) return uploadedUrl;
-    if (activeDocId && DOC_URLS[activeDocId]) return DOC_URLS[activeDocId];
+  // Combined documentId -> url map: the bundled fixtures PLUS every doc uploaded
+  // this session (keyed by its backend documentId). This is what makes live
+  // multi-doc / uploaded-doc results land on the CORRECT PDF.
+  const docUrlMap = useMemo<Record<string, string>>(
+    () => ({ ...DOC_URLS, ...uploadedDocUrls }),
+    [uploadedDocUrls],
+  );
+
+  // Resolve the PDF url for the ACTIVE citation's document. We look the active
+  // documentId up in the combined map; only fall back to the default sample when
+  // there is no active doc at all (mock cold-start). A bundled doc with no URL
+  // (e.g. the scanned field-notes exhibit) resolves to undefined so PdfCanvas
+  // draws its placeholder page — this is intentional, not "unavailable".
+  const pdfUrl = useMemo<string | undefined>(() => {
+    if (activeDocId) return docUrlMap[activeDocId];
     return PDF_URL;
-  }, [uploadedUrl, activeDocId]);
+  }, [activeDocId, docUrlMap]);
+
+  // A doc is "known" when it's a bundled fixture (in DOC_TITLES, even if its only
+  // rendering is a placeholder) or it was uploaded this session. An UNKNOWN
+  // documentId (a live doc we have no PDF for) must NOT borrow another doc's page
+  // image — we show a clear "source PDF unavailable" state instead.
+  const sourceUnavailable = useMemo(() => {
+    if (!activeDocId) return false;
+    const known = activeDocId in DOC_TITLES || activeDocId in uploadedDocUrls;
+    return !known;
+  }, [activeDocId, uploadedDocUrls]);
 
   // Citations to render on the canvas: only those in the active document.
   const docCitations = useMemo(
@@ -269,14 +307,18 @@ export function App(): JSX.Element {
   const onReset = useCallback((): void => {
     cx.reset();
     setDocLoaded(false);
-    if (uploadedUrl) URL.revokeObjectURL(uploadedUrl);
-    setUploadedUrl(null);
+    // Revoke every uploaded object URL (fixes the m3 leak) and clear the map.
+    setUploadedDocUrls((prev) => {
+      for (const url of Object.values(prev)) URL.revokeObjectURL(url);
+      return {};
+    });
+    setLastUploadedId(null);
     setDocInfo(null);
     setManualDocId(null);
     lastPrimaryId.current = null;
     lastBreachKey.current = null;
     setRefocus(0);
-  }, [cx, uploadedUrl]);
+  }, [cx]);
 
   // ---- QUICK WIN #1: keyboard shortcuts ------------------------------------
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -429,6 +471,11 @@ export function App(): JSX.Element {
           <span className="visually-hidden" role="status" aria-live="polite" data-testid="mic-announce">
             {micActive ? 'Listening…' : 'Mic off'}
           </span>
+          {cx.micStatus === 'denied' && (
+            <span className="mic-denied" role="alert" data-testid="mic-denied">
+              Microphone blocked — enable mic access so the co-pilot can hear you.
+            </span>
+          )}
 
           <Captions
             text={cx.caption}
@@ -472,16 +519,35 @@ export function App(): JSX.Element {
                 variant="compact"
               />
 
-              <PdfCanvas
-                page={targetPage}
-                citation={activeForDoc}
-                citations={docCitations}
-                pdfUrl={pdfUrl}
-                onClearCitation={onClearCitation}
-                refocusSignal={refocus}
-                proactive={cx.proactive && activeForDoc?.id === cx.activeCitation?.id}
-                counterId={conflictCounter?.id ?? null}
-              />
+              {sourceUnavailable ? (
+                <div
+                  className="not-found"
+                  role="status"
+                  aria-live="polite"
+                  data-testid="source-unavailable"
+                >
+                  <span className="not-found__mark" aria-hidden="true" />
+                  <div className="not-found__body">
+                    <p className="not-found__title">Source PDF unavailable</p>
+                    <p className="not-found__sub">
+                      The cited document ({titleFor(activeDocId ?? '', cx.citations)}) isn’t
+                      loaded here, so its highlights can’t be drawn. Upload it to view the
+                      grounded passage.
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                <PdfCanvas
+                  page={targetPage}
+                  citation={activeForDoc}
+                  citations={docCitations}
+                  pdfUrl={pdfUrl}
+                  onClearCitation={onClearCitation}
+                  refocusSignal={refocus}
+                  proactive={cx.proactive && activeForDoc?.id === cx.activeCitation?.id}
+                  counterId={conflictCounter?.id ?? null}
+                />
+              )}
             </>
           ) : (
             <EmptyDropzone onUploaded={onUploaded} disabled={resolving} />

@@ -114,13 +114,33 @@ describe('requestToken', () => {
     expect(JSON.parse(init?.body as string)).toEqual({ room: 'r1', identity: 'me' });
   });
 
+  it('accepts a livekit_url-only payload (legacy backend shape)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => jsonResponse({ token: 'tok', livekit_url: 'wss://legacy', room: 'r1' })),
+    );
+    const out = await requestToken();
+    expect(out).toEqual({ token: 'tok', url: 'wss://legacy', room: 'r1' });
+  });
+
+  it('prefers url over livekit_url when both are present', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        jsonResponse({ token: 'tok', url: 'wss://new', livekit_url: 'wss://legacy', room: 'r1' }),
+      ),
+    );
+    const out = await requestToken();
+    expect(out).toEqual({ token: 'tok', url: 'wss://new', room: 'r1' });
+  });
+
   it('throws ApiError on non-2xx', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({}, { status: 401 })));
     await expect(requestToken()).rejects.toBeInstanceOf(ApiError);
   });
 
-  it('throws ApiError on a malformed payload', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ token: 'tok' })));
+  it('throws ApiError on a malformed payload (no url or livekit_url)', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ token: 'tok', room: 'r1' })));
     await expect(requestToken()).rejects.toBeInstanceOf(ApiError);
   });
 });

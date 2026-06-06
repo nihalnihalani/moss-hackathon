@@ -171,6 +171,12 @@ export interface Frame {
   /** The citations conflict (cross-page/cross-doc). */
   contradiction?: boolean;
   /**
+   * The conflict spans TWO documents (cross-document breach), as opposed to a
+   * same-document contradiction. Emitted by the backend; when absent the UI
+   * re-derives it from the citations' documentIds.
+   */
+  crossDocument?: boolean;
+  /**
    * NEW (killer feature B): the shared ANCHOR the conflicting citations hang off
    * — a clause number, term, or subject (e.g. "§4.2 Subcontracting"). Drives the
    * "CONFLICT — Anchor: …" banner. Optional; absent for a plain contradiction.

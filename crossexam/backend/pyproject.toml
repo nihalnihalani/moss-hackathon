@@ -10,7 +10,10 @@ readme = "README.md"
 requires-python = ">=3.10"
 authors = [{ name = "CrossExam" }]
 dependencies = [
-    "livekit-agents>=0.12.0,<1.0.0",
+    # 1.x is the current stable line (verified 2026-06: PyPI livekit-agents 1.5.x).
+    # The code uses the 1.x API: AgentSession, Agent, on_user_turn_completed, and
+    # livekit.plugins.turn_detector.multilingual.MultilingualModel.
+    "livekit-agents>=1.0,<2.0",
     "pydantic>=2.6,<3.0",
     "pydantic-settings>=2.2,<3.0",
     "python-dotenv>=1.0,<2.0",
@@ -27,11 +30,16 @@ dev = [
 # Real-time voice pipeline plugins (STT / LLM / TTS + VAD). Optional so the
 # mock/test path installs and runs without them; required only for a live
 # voice session. Install with: pip install 'crossexam-backend[voice]'.
+# All plugins track the livekit-agents 1.x line (verified 2026-06 on PyPI:
+# deepgram 1.5.x, openai 1.5.x, cartesia 1.4.x, silero 1.5.x). The
+# turn-detector model (livekit.plugins.turn_detector.multilingual) ships in the
+# livekit-plugins-turn-detector package (1.5.x) used by server.py.
 voice = [
-    "livekit-plugins-deepgram>=0.6,<1.0",
-    "livekit-plugins-openai>=0.10,<1.0",
-    "livekit-plugins-cartesia>=0.4,<1.0",
-    "livekit-plugins-silero>=0.7,<1.0",
+    "livekit-plugins-deepgram>=1.0,<2.0",
+    "livekit-plugins-openai>=1.0,<2.0",
+    "livekit-plugins-cartesia>=1.0,<2.0",
+    "livekit-plugins-silero>=1.0,<2.0",
+    "livekit-plugins-turn-detector>=1.0,<2.0",
 ]
 # HTTP API service (token minting + document upload). Optional so the worker /
 # test path installs without web deps; required to run `crossexam-api`. The
@@ -41,7 +49,9 @@ api = [
     "fastapi>=0.110,<1.0",
     "uvicorn>=0.27,<1.0",
     "python-multipart>=0.0.9,<1.0",
-    "livekit-api>=0.5,<2.0",
+    # livekit-api 1.x matches the livekit-agents 1.x line (verified 2026-06:
+    # PyPI livekit-api 1.1.x). Provides `from livekit import api` -> AccessToken.
+    "livekit-api>=1.0,<2.0",
     "pdfplumber>=0.10,<1.0",
 ]
 # Optional cross-encoder reranker. The default LexicalReranker is zero-dependency
