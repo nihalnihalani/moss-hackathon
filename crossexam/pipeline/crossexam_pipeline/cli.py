@@ -24,6 +24,7 @@ import typer
 from crossexam_pipeline.build_index import build_index as _build_index
 from crossexam_pipeline.fallback import DEFAULT_SAMPLE_PATH, DeterministicParser
 from crossexam_pipeline.models import ParsedChunk, chunks_to_index_records
+from crossexam_pipeline.pdf_parser import PdfTextParser
 from crossexam_pipeline.unsiloed import MissingCredentialsError, UnsiloedParser
 
 logger = logging.getLogger("crossexam_pipeline")
@@ -99,7 +100,14 @@ def parse(
     dry_run: bool = typer.Option(
         False,
         "--dry-run",
-        help="Use the deterministic, network-free fallback parser.",
+        help="Use the deterministic, network-free JSON fallback parser.",
+    ),
+    text_layer: bool = typer.Option(
+        False,
+        "--text-layer",
+        help="Parse a born-digital PDF's text layer locally (pdfplumber, no "
+        "network, no Unsiloed key). Reads real per-word coordinates from "
+        "--input and emits canonical top-left point boxes.",
     ),
     sample: Path = typer.Option(
         DEFAULT_SAMPLE_PATH,
@@ -110,14 +118,30 @@ def parse(
 ) -> None:
     """Parse a document into backend-compatible chunk JSON.
 
-    With ``--dry-run``, the bundled sample is parsed deterministically (no
-    network). Without it, Unsiloed is used and ``UNSILOED_API_KEY`` must be set.
+    Three parse paths:
+
+    * ``--dry-run``    -- deterministic JSON fallback (bundled sample, no I/O).
+    * ``--text-layer`` -- read a born-digital PDF's text layer locally
+      (``pdfplumber``); no network and no Unsiloed key required.
+    * default          -- Unsiloed Parse/Extract (requires ``UNSILOED_API_KEY``)
+      for real scans / image-only PDFs.
     """
     _configure_logging(verbose)
 
     if dry_run:
         logger.info("Parsing with deterministic fallback (sample=%s).", sample)
         chunks = DeterministicParser(sample_path=sample).parse()
+    elif text_layer:
+        if input is None:
+            typer.secho(
+                "--input is required with --text-layer (path to the PDF whose "
+                "text layer to parse).",
+                fg="red",
+                err=True,
+            )
+            raise typer.Exit(code=2)
+        logger.info("Parsing %s text layer locally (pdfplumber).", input)
+        chunks = PdfTextParser(input).parse()
     else:
         if input is None:
             typer.secho(

@@ -16,10 +16,21 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Local, network-free PDF tooling: generate the sample deposition PDF
+# (reportlab) and parse a born-digital PDF's text layer (pdfplumber bundles
+# pypdf/pdfminer). Kept optional so the core install stays lean.
+pdf = [
+    "reportlab>=4.0,<5.0",
+    "pypdf>=4.0,<6.0",
+    "pdfplumber>=0.11,<1.0",
+]
 dev = [
     "pytest>=8.0,<10.0",
     "ruff>=0.4,<1.0",
     "mypy>=1.9,<2.0",
+    "reportlab>=4.0,<5.0",
+    "pypdf>=4.0,<6.0",
+    "pdfplumber>=0.11,<1.0",
 ]
 
 [project.scripts]

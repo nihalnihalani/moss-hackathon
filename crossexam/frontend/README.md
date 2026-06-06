@@ -12,11 +12,19 @@ npm install
 npm run dev
 ```
 
-Open the printed URL. The app lands straight on the document (no sign-in). Click **▶ Run demo** to play the scripted sequence:
+Open the printed URL. The app lands straight on the document (no sign-in) rendering the **real sample deposition** from `public/sample-deposition.pdf`. Click **▶ Run demo** to play the scripted sequence:
 
-`LISTENING → THINKING (page-jump “searching 912 pages”) → SPEAKING + SNAP (bbox on p.687, chip “found in 912 pages · 7ms”) → contradiction snap on p.203.`
+`LISTENING → THINKING (page-jump “searching 912 pages”) → SPEAKING + SNAP (bbox on the warehouse-admission line, chip “found in 912 pages · 7ms”) → contradiction snap on the visitor-log line.`
 
-Mock mode is automatic whenever `VITE_LIVEKIT_URL` / `VITE_LIVEKIT_TOKEN` are unset, or when **Force mock** is toggled.
+Mock mode is automatic whenever `VITE_LIVEKIT_URL` / `VITE_LIVEKIT_TOKEN` are unset, or when **Force mock** is toggled. Even in mock mode the canvas renders the real PDF — only the agent state, captions, and citation timings are scripted.
+
+### The real PDF + bbox alignment
+
+`VITE_PDF_URL` controls which document the canvas renders; it **defaults to `/sample-deposition.pdf`** (served from `public/`), so the real scanned transcript shows out of the box with no backend. If the file is missing or pdf.js fails to load its worker, `PdfCanvas` silently falls back to drawing a placeholder page, so the demo never hard-fails.
+
+The canvas always shows the page a citation points to: `App` passes `page={targetPage}`, and both the mock script and the live data-channel handler set `targetPage = citation.bbox.page`. `PdfCanvas` navigates pdf.js to that page and only draws the overlay when `citation.bbox.page === page`, so the glowing box can never land on the wrong page.
+
+For the snap to land on real text, the mock citations’ `page` + point bbox in `src/lib/mockData.ts` **must match the actual layout of `sample-deposition.pdf`** (and, ultimately, the pipeline-generated citation fixture). The “searched 912 pages” story is carried by `pagesSearched` / `DEMO_TOTAL_PAGES` and is intentionally decoupled from the (small) rendered page count of the sample PDF.
 
 ## Run against a live backend
 
@@ -27,7 +35,7 @@ Copy `.env.example` to `.env` and fill in:
 | `VITE_LIVEKIT_URL` | LiveKit server WS URL, e.g. `wss://you.livekit.cloud` |
 | `VITE_LIVEKIT_TOKEN` | Short-lived room access token from your token endpoint |
 | `VITE_MOCK_MODE` | `true` to force mock regardless of the above |
-| `VITE_PDF_URL` | Optional URL of the real scanned PDF to render instead of the placeholder |
+| `VITE_PDF_URL` | URL of the PDF to render. **Defaults to `/sample-deposition.pdf`** (the real sample served from `public/`). Set this to point at a different document; on fetch/worker failure the canvas falls back to a placeholder page |
 
 In live mode the hook connects to the LiveKit room and listens on the data channel. The backend should publish JSON frames shaped like:
 
@@ -79,12 +87,18 @@ src/
   types.ts                 Citation, BBox, AgentState, PageRenderGeometry
   lib/bbox.ts              THE transform (pure, tested)
   lib/bbox.test.ts         scale / offset / dpr / clamp / projector fixture
-  lib/mockData.ts          scripted demo: p.687 answer + p.203 contradiction
+  lib/mockData.ts          scripted demo: warehouse answer + visitor-log contradiction
   hooks/useCrossExam.ts    LiveKit wiring + mock sequence driver
+  hooks/__tests__/
+    liveCitation.integration.test.tsx  live DataReceived → PdfCanvas snap
   components/
     VoiceOrb.tsx StatePill.tsx Captions.tsx
-    PdfCanvas.tsx           renders page + snaps the bbox overlay
+    PdfCanvas.tsx           renders page (real PDF or placeholder) + snaps the bbox overlay
     LatencyChip.tsx PageJump.tsx
     __tests__/PdfCanvas.test.tsx
   App.tsx main.tsx styles.css
+public/
+  sample-deposition.pdf    the real sample rendered by default (VITE_PDF_URL)
 ```
+
+The test suite covers both paths: `PdfCanvas.test.tsx` checks the mock-mode snap, and `liveCitation.integration.test.tsx` feeds a citation frame through the real LiveKit `DataReceived` handler in `useCrossExam` and asserts `PdfCanvas` draws the box at the exact rect `lib/bbox.ts` computes.

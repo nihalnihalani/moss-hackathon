@@ -1,63 +1,111 @@
 # crossexam-pipeline
 
 Offline document pipeline for **CrossExam**. It turns a source document (a PDF,
-e.g. a 912-page deposition) into Moss-indexable **chunks** that carry:
+e.g. a long deposition) into Moss-indexable **chunks** that carry:
 
 - the **page number** each chunk lives on,
-- a normalized **bounding box** so retrieval hits can be drawn on the page,
+- a **bounding box in PDF points** (top-left origin) so retrieval hits can be
+  drawn on the page,
 - **word-level citations** (each word has its own box), and
 - a **confidence** score.
 
 It then builds a Moss index from those chunks so the voice agent's retrieval
 results can be highlighted on the document during cross-examination.
 
-The pipeline runs **pre-demo / offline**: Unsiloed parsing is asynchronous and
-cannot complete during the live demo, so a deterministic, network-free
-**fallback** produces the same artifact for the demo and the test-suite.
+The pipeline runs **pre-demo / offline**. There are three parse paths:
+
+1. **`--text-layer`** — parse a born-digital PDF's text layer locally with
+   `pdfplumber` (no network, no Unsiloed key). This is what backs the demo:
+   `make-sample-pdf` generates a real PDF whose key lines sit at known
+   coordinates, and the text-layer parser reads them back into chunks whose
+   boxes line up with the rendered glyphs.
+2. **Unsiloed** (default, no flag) — async Parse/Extract for real **scans** /
+   image-only PDFs. Requires `UNSILOED_API_KEY`.
+3. **`--dry-run`** — a deterministic JSON fallback over the bundled synthetic
+   `fixtures/sample_deposition.json` (legacy, fully reproducible, no I/O).
 
 ## Output format
 
-Both the fallback and the real Unsiloed path produce the **same** on-disk shape
-that the CrossExam backend mock index consumes — a JSON list of:
+All three parse paths produce the **same** on-disk shape that the CrossExam
+backend mock index consumes — a JSON list of:
 
 ```json
 {
-  "id": "…",
-  "text": "I was at the warehouse on the night of the 14th, working the late shift.",
-  "page": 147,
-  "bbox": { "page": 147, "x0": 0.08, "y0": 0.1, "x1": 0.6, "y1": 0.145 },
-  "confidence": 0.93
+  "id": "pdf-p12-l1",
+  "text": "Q. Where were you on the night of the 14th? A. I was at the Harbor Street warehouse from approximately 9:00 p.m. until well past midnight, conducting the inventory count with Mr. Reyes.",
+  "page": 12,
+  "bbox": { "page": 12, "x0": 72.0, "y0": 123.94, "x1": 522.0, "y1": 159.94, "page_width": 612.0, "page_height": 792.0 },
+  "confidence": 0.9445
 }
 ```
 
-`bbox` coordinates are **normalized to `[0, 1]`** (top-left origin) so the
-frontend can draw the box at any render resolution. The pipeline's default
-`build-index` output path is the backend's
-`crossexam/backend/fixtures/sample_chunks.json`, so this pipeline can regenerate
-that fixture directly.
+`bbox` coordinates are in **PDF points with a top-left origin**, and every box
+carries `page_width`/`page_height` (US Letter `612 x 792`) so the frontend can
+map points to its render scale. This matches the canonical backend
+`crossexam_backend.models.BBox` exactly. The pipeline's default `build-index`
+output path is the backend's `crossexam/backend/fixtures/sample_chunks.json`, so
+this pipeline regenerates that fixture directly — and it is now **PDF-backed**:
+the fixture cites the same document the frontend renders.
+
+### Coordinate conversion (bottom-left → top-left)
+
+ReportLab (and PDF natively) draw with a **bottom-left** origin; the canonical
+CrossExam bbox uses a **top-left** origin. The single conversion is
+`y_top = page_height - y_bottom` (`crossexam_pipeline.pdf_parser.flip_y`,
+unit-tested). pdfplumber already reports word `top`/`bottom` from the page top,
+so the text parser uses those directly and the result coincides with the drawn
+glyphs.
 
 ## Install
 
 ```bash
 cd crossexam/pipeline
-pip install -e ".[dev]"
+pip install -e ".[dev]"        # includes the PDF tooling used by the demo
+# or, just the PDF tooling on top of the core deps:
+pip install -e ".[pdf]"        # reportlab + pypdf + pdfplumber
 ```
 
-Runtime deps: `pydantic`, `typer`, `httpx`. Dev: `pytest`, `ruff`, `mypy`.
-The tests run on **stdlib + pydantic** alone (the `httpx`/Moss paths are imported
-lazily and are not exercised offline).
+Runtime deps: `pydantic`, `typer`, `httpx`. The optional **`pdf`** extra adds
+`reportlab` (generate the sample PDF) and `pdfplumber`/`pypdf` (read a PDF text
+layer). Dev: `pytest`, `ruff`, `mypy` plus the `pdf` extra. The core tests run on
+**stdlib + pydantic** alone; the PDF tests skip cleanly when `reportlab`/
+`pdfplumber` are absent.
 
 ## Usage
 
-### 1. Parse a PDF into chunk JSON
+### 0. Generate the demo PDF (`make-sample-pdf`)
 
-Real Unsiloed parse (requires `UNSILOED_API_KEY`):
+Generate the real, multi-page mock deposition PDF whose key lines sit at known
+coordinates (requires the `pdf` extra):
 
 ```bash
-crossexam-pipeline parse --input deposition.pdf --out chunks.json
+python -m crossexam_pipeline.make_sample_pdf
+# writes ../assets/sample-deposition.pdf and copies it to
+# ../frontend/public/sample-deposition.pdf (served at VITE_PDF_URL).
 ```
 
-Offline deterministic fallback (no network, no keys) — use this for the demo:
+The PDF is deterministic: page 12 carries the "warehouse on the night of the
+14th" admission, page 41 carries the contradiction (the witness recants and
+says he "left … before 8:00 p.m.").
+
+### 1. Parse a PDF into chunk JSON
+
+**Real PDF text layer — the demo path** (no network, no Unsiloed key):
+
+```bash
+crossexam-pipeline parse --input ../assets/sample-deposition.pdf --text-layer --out chunks.json
+```
+
+This reads each line's real per-word coordinates with `pdfplumber`, flips them
+to top-left points, and emits chunks whose boxes line up with the rendered text.
+
+Real Unsiloed parse for **scans / image-only PDFs** (requires `UNSILOED_API_KEY`):
+
+```bash
+crossexam-pipeline parse --input scan.pdf --out chunks.json
+```
+
+Legacy deterministic JSON fallback (no network, no keys, no PDF):
 
 ```bash
 crossexam-pipeline parse --input deposition.pdf --out chunks.json --dry-run
@@ -67,8 +115,8 @@ crossexam-pipeline parse --input deposition.pdf --out chunks.json --dry-run
 > `fixtures/sample_deposition.json` is parsed instead. Override it with
 > `--sample path/to/sample.json`.
 
-If you run without `--dry-run` and no `UNSILOED_API_KEY` is set, the CLI exits
-with a clear message telling you to re-run with `--dry-run`.
+If you run without `--text-layer`/`--dry-run` and no `UNSILOED_API_KEY` is set,
+the CLI exits with a clear message.
 
 ### 2. Build the index
 
@@ -88,22 +136,33 @@ crossexam-pipeline build-index --input chunks.json --index-name crossexam-demo -
 When Moss credentials are incomplete, `build-index` automatically falls back to
 the disk path and logs that Moss was skipped.
 
-### End-to-end (offline demo prep)
+### End-to-end (offline, PDF-backed demo prep)
 
 ```bash
-crossexam-pipeline parse --input deposition.pdf --out chunks.json --dry-run
+# 1. Generate the real demo PDF (assets/ + frontend/public/).
+python -m crossexam_pipeline.make_sample_pdf
+# 2. Parse its text layer into chunks (no network, no keys).
+crossexam-pipeline parse --input ../assets/sample-deposition.pdf --text-layer --out chunks.json
+# 3. Regenerate the backend mock fixture from those chunks.
 crossexam-pipeline build-index --input chunks.json --index-name crossexam-demo --dry-run
 ```
 
-## How the fallback works
+The result: the backend mock index answers the demo questions against the SAME
+document the frontend renders, with citation boxes that land on the rendered
+glyphs.
 
-`DeterministicParser` reads `fixtures/sample_deposition.json` (the relevant
-pages of a synthetic 912-page deposition, including the "warehouse on the night
-of the 14th" admission on page 147 and its contradiction on page 488). Each
-non-empty line becomes one chunk laid out on a synthetic page grid with
-plausible normalized boxes, per-word citation boxes, and a hash-derived
-confidence. It is **pure**: identical input always yields byte-identical output,
-keeping the generated fixture idempotent and the tests reproducible.
+## How the parsers work
+
+`PdfTextParser` (the demo path) opens a born-digital PDF with `pdfplumber`,
+clusters words into physical lines, merges wrapped lines back into paragraphs
+(so each demo sentence stays one chunk), and emits chunks with top-left point
+boxes + per-word citations. It is **pure**: re-parsing the same PDF yields
+byte-identical output.
+
+`DeterministicParser` (legacy `--dry-run`) reads `fixtures/sample_deposition.json`
+(synthetic deposition pages, warehouse admission on page 147 and its
+contradiction on page 488) and lays each line out on a synthetic point grid.
+Also pure and idempotent.
 
 ## Environment variables
 

@@ -9,6 +9,14 @@ import { PageJump } from './components/PageJump';
 
 const ENV = import.meta.env as Record<string, string | undefined>;
 
+/**
+ * The PDF the canvas renders. Defaults to the real sample deposition served from
+ * /public so the bbox snap lands on actual text out of the box in dev/mock mode.
+ * If the fetch fails (file missing, bad worker), PdfCanvas falls back to drawing
+ * the placeholder page, so the demo never hard-fails.
+ */
+const PDF_URL = ENV.VITE_PDF_URL ?? '/sample-deposition.pdf';
+
 export function App(): JSX.Element {
   const envForceMock = ENV.VITE_MOCK_MODE === 'true';
   const [forceMock, setForceMock] = useState<boolean>(envForceMock);
@@ -70,7 +78,7 @@ export function App(): JSX.Element {
           <PdfCanvas
             page={cx.targetPage}
             citation={cx.activeCitation}
-            pdfUrl={ENV.VITE_PDF_URL}
+            pdfUrl={PDF_URL}
           />
         </section>
       </main>

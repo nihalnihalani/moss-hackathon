@@ -26,6 +26,7 @@ class FakeChatMessage:
     """Minimal stand-in for a LiveKit ChatMessage exposing ``text_content``."""
 
     def __init__(self, text: str) -> None:
+        """Store ``text`` as ``text_content``."""
         self.text_content = text
 
 

@@ -80,14 +80,17 @@ def build_citation_payload(result: RetrievalResult) -> dict[str, Any] | None:
 # --------------------------------------------------------------------------- #
 # Guarded LiveKit imports + shims                                             #
 # --------------------------------------------------------------------------- #
+# The optional LiveKit ``Agent`` base, held as ``type | None`` so the guarded
+# import needs no per-line type-ignore in either environment (with or without
+# ``livekit-agents`` installed). See _agent_base() below.
+_LiveKitAgent: type | None
 try:  # pragma: no cover - exercised only when livekit is installed
-    from livekit.agents import Agent as _LiveKitAgent
-    from livekit.agents.llm import ChatContext as _LiveKitChatContext
+    from livekit.agents import Agent as _ImportedLiveKitAgent
 
+    _LiveKitAgent = _ImportedLiveKitAgent
     LIVEKIT_AVAILABLE = True
 except ImportError:  # pragma: no cover - default path in this environment
-    _LiveKitAgent = None  # type: ignore[assignment]
-    _LiveKitChatContext = None  # type: ignore[assignment]
+    _LiveKitAgent = None
     LIVEKIT_AVAILABLE = False
 
 
@@ -100,7 +103,9 @@ class TurnContext(Protocol):
     below provides the same surface for tests.
     """
 
-    def add_message(self, *, role: str, content: str) -> Any:
+    # ANN401: return is Any because LiveKit's ChatContext.add_message return
+    # type is unknown without the optional ``livekit-agents`` dep (shim pattern).
+    def add_message(self, *, role: str, content: str) -> Any:  # noqa: ANN401
         """Append a message with ``role`` and ``content`` to the context."""
         ...
 
@@ -147,7 +152,9 @@ class CrossExamAgent(_agent_base()):  # type: ignore[misc]
         top_k: int = 5,
         alpha: float = 0.8,
         instructions: str = _DEFAULT_INSTRUCTIONS,
-        **agent_kwargs: Any,
+        # ANN401: forwarded verbatim to LiveKit's Agent.__init__, whose kwargs
+        # are untyped here without the optional ``livekit-agents`` dep.
+        **agent_kwargs: Any,  # noqa: ANN401
     ) -> None:
         """Create the agent.
 
@@ -175,13 +182,16 @@ class CrossExamAgent(_agent_base()):  # type: ignore[misc]
         self._room: Any | None = None
 
     # -- LiveKit room wiring (set by the session entrypoint) ----------------
+    # ANN401 on the room handle below is intrinsic to the optional-import shim:
+    # the LiveKit ``Room`` type is unavailable without the ``livekit-agents``
+    # dep, so the handle is typed ``Any`` to keep this module importable.
     @property
-    def room(self) -> Any | None:
+    def room(self) -> Any | None:  # noqa: ANN401 - LiveKit Room type optional
         """The LiveKit room handle used for publishing citations, if wired."""
         return self._room
 
     @room.setter
-    def room(self, room: Any | None) -> None:
+    def room(self, room: Any | None) -> None:  # noqa: ANN401 - LiveKit Room optional
         self._room = room
 
     # -- accessors for the frontend bridge ----------------------------------
@@ -221,7 +231,7 @@ class CrossExamAgent(_agent_base()):  # type: ignore[misc]
     async def publish_citation(
         self,
         result: RetrievalResult,
-        room: Any | None = None,
+        room: Any | None = None,  # noqa: ANN401 - LiveKit Room type is optional
     ) -> bool:
         """Publish the top citation from ``result`` to the LiveKit data channel.
 
@@ -263,7 +273,9 @@ class CrossExamAgent(_agent_base()):  # type: ignore[misc]
         return True
 
     @staticmethod
-    def _message_text(new_message: Any) -> str:
+    # ANN401: LiveKit's ChatMessage type is unavailable without the optional
+    # dep; this accepts it OR a plain str and normalises both.
+    def _message_text(new_message: Any) -> str:  # noqa: ANN401
         """Extract plain text from a LiveKit ``ChatMessage`` or a plain string."""
         if isinstance(new_message, str):
             return new_message
@@ -282,7 +294,9 @@ class CrossExamAgent(_agent_base()):  # type: ignore[misc]
     async def on_user_turn_completed(  # noqa: D401
         self,
         turn_ctx: TurnContext,
-        new_message: Any,
+        # ANN401: this is LiveKit's ChatMessage, untyped here without the
+        # optional ``livekit-agents`` dep (the runtime passes it in verbatim).
+        new_message: Any,  # noqa: ANN401
     ) -> None:
         """LiveKit hook: enrich the turn with retrieved document passages.
 

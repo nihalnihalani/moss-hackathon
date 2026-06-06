@@ -90,7 +90,7 @@ def _build_stt(settings: Settings) -> object:
                 "STT_PROVIDER=deepgram requires DEEPGRAM_API_KEY to be set."
             )
         try:
-            from livekit.plugins import deepgram  # type: ignore[import-not-found]
+            from livekit.plugins import deepgram
         except ImportError as exc:  # pragma: no cover - needs the plugin installed
             raise ProviderConfigError(
                 "STT_PROVIDER=deepgram requires the 'livekit-plugins-deepgram' "
@@ -112,7 +112,7 @@ def _build_llm(settings: Settings) -> object:
                 "LLM_PROVIDER=openai requires OPENAI_API_KEY to be set."
             )
         try:
-            from livekit.plugins import openai  # type: ignore[import-not-found]
+            from livekit.plugins import openai
         except ImportError as exc:  # pragma: no cover - needs the plugin installed
             raise ProviderConfigError(
                 "LLM_PROVIDER=openai requires the 'livekit-plugins-openai' "
@@ -134,7 +134,7 @@ def _build_tts(settings: Settings) -> object:
                 "TTS_PROVIDER=cartesia requires CARTESIA_API_KEY to be set."
             )
         try:
-            from livekit.plugins import cartesia  # type: ignore[import-not-found]
+            from livekit.plugins import cartesia
         except ImportError as exc:  # pragma: no cover - needs the plugin installed
             raise ProviderConfigError(
                 "TTS_PROVIDER=cartesia requires the 'livekit-plugins-cartesia' "
@@ -150,7 +150,9 @@ def _build_tts(settings: Settings) -> object:
 def _run_livekit_worker(settings: Settings, index: RetrievalIndex) -> int:
     """Start the LiveKit worker. Imported lazily so the module stays portable."""
     # Imports are local on purpose: they only exist when livekit is installed.
-    from livekit.agents import (  # type: ignore[import-not-found]
+    # mypy: ignore_missing_imports handles the optional ``livekit-agents`` dep,
+    # so no per-import ignore is needed here.
+    from livekit.agents import (
         AgentSession,
         JobContext,
         WorkerOptions,

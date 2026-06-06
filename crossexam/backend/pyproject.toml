@@ -20,8 +20,9 @@ dependencies = [
 dev = [
     "pytest>=8.0,<10.0",
     "pytest-asyncio>=0.23,<1.0",
-    "ruff>=0.4,<1.0",
-    "mypy>=1.9,<2.0",
+    # Pinned so ruff/mypy can run STRICT and reproducibly in CI and on-site.
+    "ruff==0.15.0",
+    "mypy==1.19.1",
 ]
 # Real-time voice pipeline plugins (STT / LLM / TTS + VAD). Optional so the
 # mock/test path installs and runs without them; required only for a live
@@ -35,6 +36,7 @@ voice = [
 
 [project.scripts]
 crossexam-worker = "crossexam_backend.server:main"
+crossexam-doctor = "crossexam_backend.doctor:main"
 
 [tool.setuptools.packages.find]
 include = ["crossexam_backend*"]
@@ -49,8 +51,9 @@ line-length = 100
 target-version = "py310"
 
 [tool.ruff.lint]
+# ANN101/ANN102 were removed in ruff >=0.13, so they are no longer listed here.
 select = ["E", "F", "I", "B", "UP", "ANN", "D"]
-ignore = ["D203", "D213", "ANN101", "ANN102"]
+ignore = ["D203", "D213"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
