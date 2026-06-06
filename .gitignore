@@ -1,0 +1,16 @@
+# OS
+.DS_Store
+
+# Env / secrets (never commit sponsor API keys)
+.env
+.env.*
+*.key
+
+# Node / Python (for when the CrossExam build lands here)
+node_modules/
+__pycache__/
+*.pyc
+.venv/
+venv/
+dist/
+build/
