@@ -160,7 +160,6 @@ index:
 	@echo ">> parse (deterministic fallback) -> chunks -> build-index (dry-run)"
 	cd "$(PIPELINE)" && $(PY) -m crossexam_pipeline.cli parse \
 		--dry-run \
-		--input sample.pdf \
 		--out "$(INDEX_CHUNKS)"
 	cd "$(PIPELINE)" && $(PY) -m crossexam_pipeline.cli build-index \
 		--input "$(INDEX_CHUNKS)" \

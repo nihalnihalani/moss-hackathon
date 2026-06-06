@@ -9,17 +9,18 @@ from crossexam_pipeline.models import BBox, ParsedChunk, WordCitation, chunks_to
 
 
 def _bbox(page: int = 1) -> BBox:
-    return BBox(page=page, x0=0.1, y0=0.1, x1=0.5, y1=0.2)
+    # PDF points (top-left origin), US Letter page.
+    return BBox(page=page, x0=72.0, y0=120.0, x1=540.0, y1=168.0)
 
 
-def test_bbox_rejects_out_of_range() -> None:
+def test_bbox_rejects_negative_coordinates() -> None:
     with pytest.raises(ValidationError):
-        BBox(page=1, x0=-0.1, y0=0.0, x1=0.5, y1=0.2)
+        BBox(page=1, x0=-1.0, y0=0.0, x1=540.0, y1=168.0)
 
 
 def test_bbox_rejects_inverted_coordinates() -> None:
     with pytest.raises(ValidationError):
-        BBox(page=1, x0=0.6, y0=0.1, x1=0.2, y1=0.2)
+        BBox(page=1, x0=540.0, y0=120.0, x1=72.0, y1=168.0)
 
 
 def test_chunk_bbox_page_must_match() -> None:
@@ -38,7 +39,7 @@ def test_to_index_record_has_exact_backend_shape() -> None:
         id="c1",
         text="warehouse on the night of the 14th",
         page=147,
-        bbox=BBox(page=147, x0=0.08, y0=0.1, x1=0.6, y1=0.15),
+        bbox=BBox(page=147, x0=72.0, y0=120.0, x1=540.0, y1=168.0),
         confidence=0.93,
         words=[WordCitation(text="warehouse", bbox=_bbox(147), confidence=0.95)],
         source="fallback",
@@ -46,7 +47,13 @@ def test_to_index_record_has_exact_backend_shape() -> None:
     rec = chunk.to_index_record()
     # Exact key set the backend mock index consumes -- no extras.
     assert set(rec.keys()) == {"id", "text", "page", "bbox", "confidence"}
-    assert set(rec["bbox"].keys()) == {"page", "x0", "y0", "x1", "y1"}
+    assert set(rec["bbox"].keys()) == {
+        "page", "x0", "y0", "x1", "y1", "page_width", "page_height"
+    }
+    # Coordinates are PDF points, not normalized [0, 1].
+    assert rec["bbox"]["x1"] > 1.0
+    assert rec["bbox"]["page_width"] == 612.0
+    assert rec["bbox"]["page_height"] == 792.0
     assert rec["page"] == 147
     assert isinstance(rec["page"], int)
     assert isinstance(rec["confidence"], float)

@@ -204,46 +204,59 @@ class UnsiloedParser:
 
     # --- Normalization -------------------------------------------------------
 
-    @staticmethod
-    def _coerce_bbox(raw: dict[str, Any], page: int) -> BBox:
-        """Coerce a raw bbox dict into a normalized :class:`BBox`.
+    # Fallback page dimensions (US Letter, points) when the API omits them.
+    _DEFAULT_PAGE_W = 612.0
+    _DEFAULT_PAGE_H = 792.0
 
-        Accepts ``x0/y0/x1/y1`` or ``left/top/right/bottom`` keys, and either
-        fractional ``[0, 1]`` coordinates or absolute coordinates accompanied by
-        ``page_width``/``page_height`` for normalization.
+    @classmethod
+    def _coerce_bbox(cls, raw: dict[str, Any], page: int) -> BBox:
+        """Coerce a raw bbox dict into a points-space :class:`BBox`.
+
+        Accepts ``x0/y0/x1/y1`` or ``left/top/right/bottom`` keys. Coordinates
+        are kept in absolute PDF points (the canonical end-to-end unit). If the
+        API reports fractional ``[0, 1]`` coordinates (max coord <= 1.0) they
+        are scaled up by the page dimensions to recover points. ``page_width``/
+        ``page_height`` are carried through (US Letter 612x792 when unknown).
 
         Args:
             raw: Raw bounding-box mapping from the API.
             page: 1-based page number to stamp on the box.
 
         Returns:
-            A normalized :class:`BBox`.
+            A :class:`BBox` with coordinates and page dims in points.
         """
         x0 = float(raw.get("x0", raw.get("left", 0.0)))
         y0 = float(raw.get("y0", raw.get("top", 0.0)))
         x1 = float(raw.get("x1", raw.get("right", x0)))
         y1 = float(raw.get("y1", raw.get("bottom", y0)))
 
-        page_w = float(raw.get("page_width", 0.0) or 0.0)
-        page_h = float(raw.get("page_height", 0.0) or 0.0)
-        # Normalize absolute pixel/point coordinates if page dims provided or if
-        # any coordinate clearly exceeds 1.0.
-        if page_w > 0 and page_h > 0 and max(x0, x1) > 1.0:
-            x0, x1 = x0 / page_w, x1 / page_w
-            y0, y1 = y0 / page_h, y1 / page_h
+        page_w = float(raw.get("page_width", 0.0) or 0.0) or cls._DEFAULT_PAGE_W
+        page_h = float(raw.get("page_height", 0.0) or 0.0) or cls._DEFAULT_PAGE_H
 
-        clamp = lambda v: max(0.0, min(1.0, v))  # noqa: E731
-        x0, y0, x1, y1 = clamp(x0), clamp(y0), clamp(x1), clamp(y1)
+        # If the source reports fractional [0, 1] coordinates, scale them up to
+        # absolute points using the page dimensions.
+        coords = (x0, y0, x1, y1)
+        if coords and max(abs(c) for c in coords) <= 1.0:
+            x0, x1 = x0 * page_w, x1 * page_w
+            y0, y1 = y0 * page_h, y1 * page_h
+
         if x1 < x0:
             x0, x1 = x1, x0
         if y1 < y0:
             y0, y1 = y1, y0
+        # Clamp into the page so the backend's ge=0 / ordering checks hold.
+        x0 = max(0.0, min(page_w, x0))
+        x1 = max(0.0, min(page_w, x1))
+        y0 = max(0.0, min(page_h, y0))
+        y1 = max(0.0, min(page_h, y1))
         return BBox(
             page=page,
-            x0=round(x0, 4),
-            y0=round(y0, 4),
-            x1=round(x1, 4),
-            y1=round(y1, 4),
+            x0=round(x0, 2),
+            y0=round(y0, 2),
+            x1=round(x1, 2),
+            y1=round(y1, 2),
+            page_width=round(page_w, 2),
+            page_height=round(page_h, 2),
         )
 
     @classmethod

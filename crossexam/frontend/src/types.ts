@@ -26,6 +26,14 @@ export interface BBox {
   x1: number;
   /** Bottom edge, PDF points (y grows downward). */
   y1: number;
+  /**
+   * Page width in PDF points (snake_case to match the backend/pipeline wire
+   * shape). Optional: the live citation payload carries it, but bbox.ts takes
+   * page dimensions from the render geometry, not the box.
+   */
+  page_width?: number;
+  /** Page height in PDF points (snake_case to match the wire shape). */
+  page_height?: number;
 }
 
 /** A retrieval result: the line the agent is citing, with its box and provenance. */

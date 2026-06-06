@@ -22,9 +22,13 @@ def test_parse_produces_valid_chunks_with_bboxes() -> None:
         assert c.text.strip()
         assert c.page >= 1
         assert c.bbox.page == c.page
-        # Normalized, non-degenerate box.
-        assert 0.0 <= c.bbox.x0 <= c.bbox.x1 <= 1.0
-        assert 0.0 <= c.bbox.y0 <= c.bbox.y1 <= 1.0
+        # Non-degenerate box in PDF points, within the page.
+        assert 0.0 <= c.bbox.x0 <= c.bbox.x1 <= c.bbox.page_width
+        assert 0.0 <= c.bbox.y0 <= c.bbox.y1 <= c.bbox.page_height
+        # Coordinates are points, not normalized [0, 1].
+        assert c.bbox.x1 > 1.0
+        assert c.bbox.page_width == 612.0
+        assert c.bbox.page_height == 792.0
         assert 0.0 <= c.confidence <= 1.0
         assert c.source == "fallback"
 
@@ -36,7 +40,7 @@ def test_word_level_citations_are_present_and_boxed() -> None:
         assert len(c.words) == len(c.text.split())
         for w in c.words:
             assert w.bbox.page == c.page
-            assert 0.0 <= w.bbox.x0 <= w.bbox.x1 <= 1.0
+            assert 0.0 <= w.bbox.x0 <= w.bbox.x1 <= w.bbox.page_width
 
 
 def test_key_admission_and_contradiction_present() -> None:

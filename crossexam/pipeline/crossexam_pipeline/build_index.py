@@ -124,6 +124,8 @@ def _index_payload(chunks: list[ParsedChunk], index_name: str) -> dict[str, Any]
                         "y0": c.bbox.y0,
                         "x1": c.bbox.x1,
                         "y1": c.bbox.y1,
+                        "page_width": c.bbox.page_width,
+                        "page_height": c.bbox.page_height,
                     },
                     "confidence": c.confidence,
                     "words": [
@@ -135,6 +137,8 @@ def _index_payload(chunks: list[ParsedChunk], index_name: str) -> dict[str, Any]
                                 "y0": w.bbox.y0,
                                 "x1": w.bbox.x1,
                                 "y1": w.bbox.y1,
+                                "page_width": w.bbox.page_width,
+                                "page_height": w.bbox.page_height,
                             },
                             "confidence": w.confidence,
                         }

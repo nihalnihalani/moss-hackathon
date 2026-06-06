@@ -83,12 +83,12 @@ def _load_chunks_json(path: Path) -> list[ParsedChunk]:
 
 @app.command()
 def parse(
-    input: Path = typer.Option(  # noqa: A002 - matches required CLI flag name
-        ...,
+    input: Path | None = typer.Option(  # noqa: A002 - matches required CLI flag name
+        None,
         "--input",
         "-i",
-        help="Source document to parse (PDF for Unsiloed; ignored sample is "
-        "used for --dry-run).",
+        help="Source document to parse (PDF, required for Unsiloed). Ignored "
+        "for --dry-run, which uses the bundled --sample instead.",
     ),
     out: Path = typer.Option(
         ...,
@@ -119,6 +119,14 @@ def parse(
         logger.info("Parsing with deterministic fallback (sample=%s).", sample)
         chunks = DeterministicParser(sample_path=sample).parse()
     else:
+        if input is None:
+            typer.secho(
+                "--input is required without --dry-run (path to the source "
+                "document to parse with Unsiloed).",
+                fg="red",
+                err=True,
+            )
+            raise typer.Exit(code=2)
         try:
             parser = UnsiloedParser.from_env()
         except MissingCredentialsError as exc:

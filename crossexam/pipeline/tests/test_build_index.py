@@ -26,7 +26,9 @@ def test_dry_run_writes_backend_compatible_chunks(tmp_path: Path) -> None:
     for rec in data:
         # Exact backend mock-index shape.
         assert set(rec.keys()) == {"id", "text", "page", "bbox", "confidence"}
-        assert set(rec["bbox"].keys()) == {"page", "x0", "y0", "x1", "y1"}
+        assert set(rec["bbox"].keys()) == {
+            "page", "x0", "y0", "x1", "y1", "page_width", "page_height"
+        }
         assert isinstance(rec["page"], int)
         assert isinstance(rec["confidence"], float)
         # Each record must re-validate as a ParsedChunk (backend can load it).

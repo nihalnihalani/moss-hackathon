@@ -5,7 +5,9 @@ without any Unsiloed/Moss credentials or network access. It reads a bundled
 sample document (the same JSON shape as ``fixtures/sample_deposition.json``)
 and lays each line out on a synthetic page grid, producing
 :class:`~crossexam_pipeline.models.ParsedChunk` records with plausible
-normalized bounding boxes, word-level citations, and confidence scores.
+bounding boxes (PDF points, top-left origin), word-level citations, and
+confidence scores. Boxes match the canonical backend fixture style (US Letter
+612x792 points, ~72pt margins).
 
 Everything here is a pure function of the input: identical input always yields
 byte-identical output, which keeps the generated fixture idempotent.
@@ -27,12 +29,14 @@ logger = logging.getLogger(__name__)
 _PACKAGE_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_SAMPLE_PATH = _PACKAGE_ROOT / "fixtures" / "sample_deposition.json"
 
-# --- Synthetic layout constants (normalized page units in [0, 1]) -----------
-_PAGE_MARGIN_X = 0.08
-_PAGE_MARGIN_TOP = 0.10
-_LINE_HEIGHT = 0.045
-_CHAR_WIDTH = 0.011  # approximate normalized width of one monospace glyph
-_LINE_GAP = 0.012
+# --- Synthetic layout constants (PDF points, US Letter 612x792) --------------
+_PAGE_WIDTH = 612.0
+_PAGE_HEIGHT = 792.0
+_PAGE_MARGIN_X = 72.0  # 1 inch left margin
+_PAGE_MARGIN_TOP = 96.0  # ~1.33 inch top margin
+_LINE_HEIGHT = 36.0  # box height per line (points)
+_CHAR_WIDTH = 6.5  # approximate width of one glyph (points)
+_LINE_GAP = 12.0  # vertical gap between line boxes (points)
 
 
 def _stable_confidence(text: str, floor: float = 0.82, ceiling: float = 0.99) -> float:
@@ -65,23 +69,32 @@ def _word_boxes(line: str, page: int, y0: float, y1: float) -> list[WordCitation
     Args:
         line: The line of text.
         page: 1-based page number.
-        y0: Top edge of the line (normalized).
-        y1: Bottom edge of the line (normalized).
+        y0: Top edge of the line (points).
+        y1: Bottom edge of the line (points).
 
     Returns:
         One :class:`WordCitation` per whitespace-delimited token.
     """
+    right_margin = _PAGE_WIDTH - _PAGE_MARGIN_X
     citations: list[WordCitation] = []
     cursor = _PAGE_MARGIN_X
     space = _CHAR_WIDTH  # one glyph of inter-word space
     for token in line.split():
         width = max(len(token) * _CHAR_WIDTH, _CHAR_WIDTH)
-        x0 = min(cursor, 1.0)
-        x1 = min(cursor + width, 1.0)
+        x0 = min(cursor, right_margin)
+        x1 = min(cursor + width, right_margin)
         citations.append(
             WordCitation(
                 text=token,
-                bbox=BBox(page=page, x0=round(x0, 4), y0=y0, x1=round(x1, 4), y1=y1),
+                bbox=BBox(
+                    page=page,
+                    x0=round(x0, 2),
+                    y0=y0,
+                    x1=round(x1, 2),
+                    y1=y1,
+                    page_width=_PAGE_WIDTH,
+                    page_height=_PAGE_HEIGHT,
+                ),
                 confidence=_stable_confidence(token),
             )
         )
@@ -143,12 +156,13 @@ class DeterministicParser:
                 stripped = line.strip()
                 if not stripped:
                     continue
-                y0 = round(_PAGE_MARGIN_TOP + line_idx * (_LINE_HEIGHT + _LINE_GAP), 4)
-                y1 = round(y0 + _LINE_HEIGHT, 4)
-                # Chunk box spans the text width; cap at right margin.
-                text_width = min(len(stripped) * _CHAR_WIDTH, 1.0 - 2 * _PAGE_MARGIN_X)
+                y0 = round(_PAGE_MARGIN_TOP + line_idx * (_LINE_HEIGHT + _LINE_GAP), 2)
+                y1 = round(min(y0 + _LINE_HEIGHT, _PAGE_HEIGHT), 2)
+                # Chunk box spans the text width; cap at the right margin.
+                max_text_width = _PAGE_WIDTH - 2 * _PAGE_MARGIN_X
+                text_width = min(len(stripped) * _CHAR_WIDTH, max_text_width)
                 x0 = _PAGE_MARGIN_X
-                x1 = round(min(x0 + text_width, 1.0), 4)
+                x1 = round(x0 + text_width, 2)
                 words = _word_boxes(stripped, page, y0, y1)
                 # Aggregate confidence = mean of word confidences (stable).
                 if words:
@@ -159,7 +173,15 @@ class DeterministicParser:
                     id=f"{slug}-p{page}-l{line_idx}",
                     text=stripped,
                     page=page,
-                    bbox=BBox(page=page, x0=round(x0, 4), y0=y0, x1=x1, y1=y1),
+                    bbox=BBox(
+                        page=page,
+                        x0=round(x0, 2),
+                        y0=y0,
+                        x1=x1,
+                        y1=y1,
+                        page_width=_PAGE_WIDTH,
+                        page_height=_PAGE_HEIGHT,
+                    ),
                     confidence=agg,
                     words=words,
                     source="fallback",

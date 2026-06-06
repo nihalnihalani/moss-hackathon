@@ -4,8 +4,13 @@ These shapes mirror what the CrossExam backend mock index consumes. The
 canonical on-disk chunk record (one element of the JSON list) is::
 
     {"id": str, "text": str, "page": int,
-     "bbox": {"page": int, "x0": float, "y0": float, "x1": float, "y1": float},
+     "bbox": {"page": int, "x0": float, "y0": float, "x1": float, "y1": float,
+              "page_width": float, "page_height": float},
      "confidence": float}
+
+All bbox coordinates are in PDF points (top-left origin), matching the backend
+:class:`crossexam_backend.models.BBox`. ``page_width``/``page_height`` carry the
+page size (also in points) so the frontend can map points to its render scale.
 
 ``ParsedChunk`` carries extra metadata (word-level citations, source) that the
 backend ignores; :meth:`ParsedChunk.to_index_record` projects a chunk down to
@@ -22,26 +27,33 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 class BBox(BaseModel):
     """An axis-aligned bounding box on a single page.
 
-    Coordinates are in normalized page units in ``[0.0, 1.0]`` where ``(0, 0)``
-    is the top-left corner of the page and ``(1, 1)`` is the bottom-right.
-    Using normalized coordinates lets the frontend draw the box regardless of
-    the rendered page resolution.
+    Coordinates are in PDF points (origin top-left, y growing downward) where
+    ``(x0, y0)`` is the top-left corner and ``(x1, y1)`` is the bottom-right.
+    This matches the canonical backend :class:`crossexam_backend.models.BBox`.
+    ``page_width``/``page_height`` carry the page size (also in points) so the
+    frontend can map points onto its render scale at any resolution.
 
     Attributes:
         page: 1-based page number the box lives on.
-        x0: Left edge (normalized, inclusive).
-        y0: Top edge (normalized, inclusive).
-        x1: Right edge (normalized).
-        y1: Bottom edge (normalized).
+        x0: Left edge (points, inclusive).
+        y0: Top edge (points, inclusive).
+        x1: Right edge (points).
+        y1: Bottom edge (points).
+        page_width: Page width in points (default US Letter 612.0).
+        page_height: Page height in points (default US Letter 792.0).
     """
 
-    model_config = ConfigDict(extra="forbid")
+    # Allow (and ignore) any extra keys so the canonical backend bbox shape
+    # validates here unchanged.
+    model_config = ConfigDict(extra="ignore")
 
     page: int = Field(..., ge=1, description="1-based page number.")
-    x0: float = Field(..., ge=0.0, le=1.0, description="Left edge (normalized).")
-    y0: float = Field(..., ge=0.0, le=1.0, description="Top edge (normalized).")
-    x1: float = Field(..., ge=0.0, le=1.0, description="Right edge (normalized).")
-    y1: float = Field(..., ge=0.0, le=1.0, description="Bottom edge (normalized).")
+    x0: float = Field(..., ge=0.0, description="Left edge (points).")
+    y0: float = Field(..., ge=0.0, description="Top edge (points).")
+    x1: float = Field(..., ge=0.0, description="Right edge (points).")
+    y1: float = Field(..., ge=0.0, description="Bottom edge (points).")
+    page_width: float = Field(default=612.0, gt=0.0, description="Page width (points).")
+    page_height: float = Field(default=792.0, gt=0.0, description="Page height (points).")
 
     @model_validator(mode="after")
     def _check_ordering(self) -> BBox:
@@ -115,7 +127,7 @@ class ParsedChunk(BaseModel):
         Returns:
             A dict with keys ``id``, ``text``, ``page``, ``bbox``, ``confidence``
             and nothing else. ``bbox`` is itself a plain dict with
-            ``page, x0, y0, x1, y1``.
+            ``page, x0, y0, x1, y1, page_width, page_height`` (all points).
         """
         return {
             "id": self.id,
@@ -127,6 +139,8 @@ class ParsedChunk(BaseModel):
                 "y0": self.bbox.y0,
                 "x1": self.bbox.x1,
                 "y1": self.bbox.y1,
+                "page_width": self.bbox.page_width,
+                "page_height": self.bbox.page_height,
             },
             "confidence": self.confidence,
         }
