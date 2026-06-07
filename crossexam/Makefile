@@ -16,8 +16,16 @@ BACKEND   := $(ROOT)/backend
 PIPELINE  := $(ROOT)/pipeline
 FRONTEND  := $(ROOT)/frontend
 
-# Prefer python3, fall back to python.
-PY := $(shell command -v python3 2>/dev/null || command -v python 2>/dev/null)
+# Load local developer settings when present so Make variables such as API_PORT
+# stay in sync with Docker Compose. Do not export the whole file globally:
+# hermetic test targets intentionally exercise "no keys" branches.
+ifneq (,$(wildcard $(ROOT)/.env))
+include $(ROOT)/.env
+endif
+
+# Prefer the project venv when present, then fall back to python3/python.
+VENV_PY := $(ROOT)/.venv/bin/python
+PY := $(shell if [ -x "$(VENV_PY)" ]; then printf '%s\n' "$(VENV_PY)"; else command -v python3 2>/dev/null || command -v python 2>/dev/null; fi)
 NPM := $(shell command -v npm 2>/dev/null)
 
 # Where `make index` writes its intermediate chunk JSON and final index records.
@@ -211,7 +219,7 @@ verify-live:
 	@echo ">> crossexam-backend preflight (doctor — no network calls):"
 	@cd "$(BACKEND)" && $(PY) -m crossexam_backend.doctor || true
 	@echo ""
-	@if [ -n "$$MOSS_PROJECT_ID" ] && [ -n "$$MOSS_PROJECT_KEY" ]; then \
+	@if [ -n "$(MOSS_PROJECT_ID)" ] && [ -n "$(MOSS_PROJECT_KEY)" ]; then \
 		echo ">> Moss creds present — running a REAL load_index probe (doctor --probe):"; \
 		cd "$(BACKEND)" && $(PY) -m crossexam_backend.doctor --probe || true; \
 	else \

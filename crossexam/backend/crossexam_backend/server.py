@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import sys
+from typing import Any, cast
 
 from crossexam_backend.agent import LIVEKIT_AVAILABLE, CrossExamAgent
 from crossexam_backend.config import Settings, get_settings
@@ -233,119 +234,134 @@ def _build_turn_detection() -> object | None:
         return None
 
 
-def _run_livekit_worker(settings: Settings, index: RetrievalIndex) -> int:
-    """Start the LiveKit worker. Imported lazily so the module stays portable."""
+async def _livekit_entrypoint(ctx: Any) -> None:  # noqa: ANN401
+    """Per-room LiveKit job: connect, prewarm, and run the voice session.
+
+    This function must live at module scope. LiveKit Agents 1.5 starts worker
+    subprocesses with Python's spawn multiprocessing context on macOS/Python
+    3.14, so nested entrypoint/prewarm functions cannot be pickled.
+    """
     # Imports are local on purpose: they only exist when livekit is installed.
     # mypy: ignore_missing_imports handles the optional ``livekit-agents`` dep,
     # so no per-import ignore is needed here.
-    from livekit.agents import (
-        AgentSession,
-        JobContext,
-        TurnHandlingOptions,
-        WorkerOptions,
-        cli,
-    )
+    from livekit.agents import AgentSession, TurnHandlingOptions
 
-    async def entrypoint(ctx: JobContext) -> None:
-        """Per-room LiveKit job: connect, prewarm, and run the voice session."""
-        await ctx.connect()
-        await index.prewarm()
-        # Scope conversation memory to the room so repeated citations within the
-        # same session are recalled (feat 5) rather than re-snapped.
-        room_name = getattr(ctx.room, "name", None) or settings.livekit_default_room
-        agent = build_agent(settings, index, session_id=room_name)
-        # Wire the room handle so on_user_turn_completed can publish citations
-        # to the frontend over the data channel.
-        agent.room = ctx.room
-        # Register the INBOUND data-channel handler so a typed Cmd+K question
-        # ({type:"ask"}) or Space push-to-talk ({type:"ptt"}) published by the
-        # frontend reaches the backend: an "ask" runs the same route as a spoken
-        # turn (retrieve / multi-hop -> publish a real citations/contradiction
-        # frame). Guarded — a no-op without a live room.
-        agent.register_inbound_handlers(ctx.room)
+    settings = get_settings()
+    userdata = getattr(getattr(ctx, "proc", None), "userdata", {})
+    index = userdata.get("index") if isinstance(userdata, dict) else None
+    if index is None:
+        index = build_index(settings)
 
-        # Build the STT/LLM/TTS providers from settings. A misconfigured or
-        # missing provider raises a CLEAR ProviderConfigError here instead of
-        # silently producing a no-op session.
-        stt = _build_stt(settings)
-        llm = _build_llm(settings)
-        tts = _build_tts(settings)
+    await ctx.connect()
+    await index.prewarm()
+    # Scope conversation memory to the room so repeated citations within the
+    # same session are recalled (feat 5) rather than re-snapped.
+    room_name = getattr(ctx.room, "name", None) or settings.livekit_default_room
+    agent = build_agent(settings, index, session_id=room_name)
+    # Wire the room handle so on_user_turn_completed can publish citations
+    # to the frontend over the data channel.
+    agent.room = ctx.room
+    # Register the INBOUND data-channel handler so a typed Cmd+K question
+    # ({type:"ask"}) or Space push-to-talk ({type:"ptt"}) published by the
+    # frontend reaches the backend: an "ask" runs the same route as a spoken
+    # turn (retrieve / multi-hop -> publish a real citations/contradiction
+    # frame). Guarded — a no-op without a live room.
+    agent.register_inbound_handlers(ctx.room)
 
-        # TURN DETECTION + BARGE-IN. The session uses LiveKit's model-based
-        # multilingual turn detector to decide when the user has truly finished
-        # speaking (beats raw VAD silence on conversational pauses). Barge-in
-        # (interruptions) is on by DEFAULT in livekit-agents 1.5.x, so we no
-        # longer pass the deprecated ``allow_interruptions=`` kwarg. These kwargs
-        # are assembled into a dict and only attached when the plugin / support
-        # is present — they ONLY activate in a real LiveKit session (never in
-        # mock/test, where this whole function is not reached).
-        session_kwargs: dict[str, object] = {
-            "stt": stt,
-            "llm": llm,
-            "tts": tts,
-        }
-        # VAD: required for end-of-turn detection + interruptions. Prefer a VAD
-        # warmed in prewarm (stashed on proc.userdata); fall back to loading it
-        # here if prewarm did not run (e.g. a fresh dispatch). Attached only when
-        # the silero plugin is present.
-        vad = getattr(getattr(ctx, "proc", None), "userdata", {}).get("vad")
-        if vad is None:
-            vad = _build_vad()
-        if vad is not None:
-            session_kwargs["vad"] = vad
-        # Turn detection is configured via the non-deprecated TurnHandlingOptions
-        # (livekit-agents 1.5.x): the bare ``turn_detection=`` kwarg is deprecated
-        # in favour of ``turn_handling=TurnHandlingOptions(turn_detection=...)``.
-        turn_detection = _build_turn_detection()
-        if turn_detection is not None:
-            session_kwargs["turn_handling"] = TurnHandlingOptions(
-                turn_detection=turn_detection
-            )
+    # Build the STT/LLM/TTS providers from settings. A misconfigured or
+    # missing provider raises a CLEAR ProviderConfigError here instead of
+    # silently producing a no-op session.
+    stt = _build_stt(settings)
+    llm = _build_llm(settings)
+    tts = _build_tts(settings)
 
-        session = AgentSession(**session_kwargs)
-        await session.start(agent=agent, room=ctx.room)
+    # TURN DETECTION + BARGE-IN. The session uses LiveKit's model-based
+    # multilingual turn detector to decide when the user has truly finished
+    # speaking (beats raw VAD silence on conversational pauses). Barge-in
+    # (interruptions) is on by DEFAULT in livekit-agents 1.5.x, so we no
+    # longer pass the deprecated ``allow_interruptions=`` kwarg. These kwargs
+    # are assembled into a dict and only attached when the plugin / support
+    # is present — they ONLY activate in a real LiveKit session (never in
+    # mock/test, where this whole function is not reached).
+    session_kwargs: dict[str, Any] = {
+        "stt": stt,
+        "llm": llm,
+        "tts": tts,
+    }
+    # VAD: required for end-of-turn detection + interruptions. Prefer a VAD
+    # warmed in prewarm (stashed on proc.userdata); fall back to loading it
+    # here if prewarm did not run (e.g. a fresh dispatch). Attached only when
+    # the silero plugin is present.
+    vad = userdata.get("vad") if isinstance(userdata, dict) else None
+    if vad is None:
+        vad = _build_vad()
+    if vad is not None:
+        session_kwargs["vad"] = vad
+    # Turn detection is configured via the non-deprecated TurnHandlingOptions
+    # (livekit-agents 1.5.x): the bare ``turn_detection=`` kwarg is deprecated
+    # in favour of ``turn_handling=TurnHandlingOptions(turn_detection=...)``.
+    turn_detection = _build_turn_detection()
+    if turn_detection is not None:
+        session_kwargs["turn_handling"] = TurnHandlingOptions(
+            turn_detection=cast(Any, turn_detection)
+        )
 
-        # SPECULATIVE PREFETCH WIRING. Feed ASR interim (non-final) transcripts
-        # into the agent's SpeculativeRetriever so the citation for the final
-        # transcript is frequently already cached by the time the user's turn
-        # ends. AgentSession emits "user_input_transcribed" with an event object
-        # carrying ``transcript`` and ``is_final`` (livekit-agents 1.5.x). This
-        # is the LiveKit-side interim hook — there is no agent-level one — and it
-        # ONLY runs in a live session. Defensive throughout (getattr, guarded).
-        def _on_transcript(ev: object) -> None:
-            if getattr(ev, "is_final", True):
-                return
-            text = getattr(ev, "transcript", "") or ""
-            if not text:
-                return
-            try:
-                asyncio.get_running_loop().create_task(agent.prefetch_partial(text))
-            except RuntimeError:
-                pass
+    session = AgentSession(**cast(Any, session_kwargs))
+    await session.start(agent=agent, room=ctx.room)
 
-        # Register via a plain call (not the @session.on decorator) so mypy does
-        # not flag an untyped decorator on _on_transcript; behaviour is identical.
-        session.on("user_input_transcribed", _on_transcript)
+    # SPECULATIVE PREFETCH WIRING. Feed ASR interim (non-final) transcripts
+    # into the agent's SpeculativeRetriever so the citation for the final
+    # transcript is frequently already cached by the time the user's turn
+    # ends. AgentSession emits "user_input_transcribed" with an event object
+    # carrying ``transcript`` and ``is_final`` (livekit-agents 1.5.x). This
+    # is the LiveKit-side interim hook — there is no agent-level one — and it
+    # ONLY runs in a live session. Defensive throughout (getattr, guarded).
+    def _on_transcript(ev: object) -> None:
+        if getattr(ev, "is_final", True):
+            return
+        text = getattr(ev, "transcript", "") or ""
+        if not text:
+            return
+        try:
+            asyncio.get_running_loop().create_task(agent.prefetch_partial(text))
+        except RuntimeError:
+            pass
 
-    async def prewarm(proc: object) -> None:
-        """Worker prewarm: eagerly load the index + Silero VAD before serving jobs.
+    # Register via a plain call (not the @session.on decorator) so mypy does
+    # not flag an untyped decorator on _on_transcript; behaviour is identical.
+    session.on("user_input_transcribed", _on_transcript)
 
-        Loading the Silero VAD weights here (once per process) keeps the first
-        job's first turn fast. The loaded VAD is stashed on ``proc.userdata`` so
-        the entrypoint reuses it instead of reloading. Guarded — a missing silero
-        plugin simply leaves no VAD stashed and the entrypoint starts without one.
-        """
-        await index.prewarm()
+
+def _livekit_prewarm(proc: object) -> None:
+    """Worker prewarm: eagerly load the index + Silero VAD before serving jobs.
+
+    Loading the Silero VAD weights here (once per process) keeps the first
+    job's first turn fast. The loaded VAD is stashed on ``proc.userdata`` so
+    the entrypoint reuses it instead of reloading. Guarded — a missing silero
+    plugin simply leaves no VAD stashed and the entrypoint starts without one.
+    """
+    settings = get_settings()
+    index = build_index(settings)
+    asyncio.run(index.prewarm())
+    userdata = getattr(proc, "userdata", None)
+    if isinstance(userdata, dict):
+        userdata["index"] = index
         vad = _build_vad()
         if vad is not None:
-            userdata = getattr(proc, "userdata", None)
-            if isinstance(userdata, dict):
-                userdata["vad"] = vad
+            userdata["vad"] = vad
+
+
+def _run_livekit_worker(settings: Settings, index: RetrievalIndex) -> int:
+    """Start the LiveKit worker. Imported lazily so the module stays portable."""
+    # Touch settings/index in the parent process so early boot logs and config
+    # failures remain visible before LiveKit starts worker subprocesses.
+    _ = (settings, index)
+    from livekit.agents import WorkerOptions, cli
 
     cli.run_app(
         WorkerOptions(
-            entrypoint_fnc=entrypoint,
-            prewarm_fnc=prewarm,
+            entrypoint_fnc=_livekit_entrypoint,
+            prewarm_fnc=_livekit_prewarm,
         )
     )
     return 0

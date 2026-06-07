@@ -42,7 +42,9 @@ class Settings(BaseSettings):
     """
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        # Support both direct package runs from `crossexam/backend` and the
+        # documented project-root `crossexam/.env` used by Makefile/Compose.
+        env_file=("../.env", ".env"),
         env_file_encoding="utf-8",
         extra="ignore",
         case_sensitive=False,

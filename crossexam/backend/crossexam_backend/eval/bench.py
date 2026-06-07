@@ -19,7 +19,7 @@ import asyncio
 import time
 from dataclasses import dataclass
 
-from crossexam_backend.config import get_settings
+from crossexam_backend.config import Settings, get_settings
 from crossexam_backend.eval.dataset import load_eval_queries
 from crossexam_backend.retrieval.base import RetrievalIndex
 from crossexam_backend.retrieval.factory import get_index
@@ -140,13 +140,18 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument(
         "--p99-budget-ms", type=float, default=DEFAULT_P99_BUDGET_MS
     )
+    parser.add_argument(
+        "--live",
+        action="store_true",
+        help="Use configured live retrieval instead of the offline mock fixture.",
+    )
     return parser.parse_args(argv)
 
 
 def run(argv: list[str] | None = None) -> int:
     """Run the benchmark, print the report, and return a process exit code."""
     args = _parse_args(argv)
-    settings = get_settings()
+    settings = get_settings() if args.live else Settings(use_mocks=True)
     index = get_index(settings)
     # Use the labeled eval queries as a realistic, varied workload.
     queries = [q.query for q in load_eval_queries()]
