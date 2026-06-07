@@ -120,7 +120,8 @@ client = MossClient("project_id", "project_key")      # POSITIONAL args
 await client.load_index("index-name")
 results = await client.query(
     "index-name", "query text",
-    QueryOptions(top_k=3, alpha=0.6, filter=...),  # alpha default 0.8
+    QueryOptions(top_k=3, alpha=0.6),  # alpha default 0.8
+    filter=...,  # optional metadata predicate
 )
 for doc in results.docs:               # ranked list
     doc.id, doc.text, doc.score, doc.metadata  # per-doc fields
@@ -137,11 +138,14 @@ string geometry with a safe fallback so a malformed value never crashes the turn
 and coerces page/confidence/scanned tolerantly. Locked by
 `tests/test_moss_adapter.py`.
 
-**Verified filter grammar:** single field is
+**Verified filter grammar:** the public SDK docs pass metadata filters as the
+`filter=` kwarg on `client.query(...)`; older/introspected SDK builds also
+accept `QueryOptions(filter=...)`, so the adapter supports both. Single field is
 `{"field": "documentId", "condition": {"$eq": id}}`; compound is
 `{"$and": [{"$or": [<per-id $eq clauses>]}]}`. The kwarg is `filter=` (singular).
-`query_multi` pushes this server-side when `QueryOptions` accepts `filter`, and
-otherwise falls back to over-fetch + post-filter.
+`query_multi` attempts the server-side filter and always applies an
+authoritative client-side post-filter, falling back to over-fetch + post-filter
+when the SDK rejects the filter shape.
 
 **Strict vs lenient mode:** `MossIndex` defaults to **strict** when Moss
 credentials are present — a query failure raises `MossQueryError` so a broken
@@ -151,24 +155,39 @@ always raises `MossClientUnavailableError`.
 
 ### LiveKit Agents provider plugins — `server.py`
 
-Source: [`livekit/agents`](https://github.com/livekit/agents) (via context7).
-Confirmed import paths and constructors (provider-key path, not LiveKit
-Inference):
+Sources: current LiveKit Agents 1.x documentation for `AgentSession`, Deepgram
+STT, OpenAI LLM, Cartesia TTS, Silero VAD, and the multilingual turn detector.
+CrossExam uses the provider-key plugin path rather than LiveKit Inference so the
+existing sponsor/provider keys in `.env` are honored.
 
 ```python
 from livekit.plugins import deepgram, openai, cartesia, silero
-stt = deepgram.STT(model="nova-3")        # livekit-plugins-deepgram
-llm = openai.LLM(model="gpt-4.1-mini")    # livekit-plugins-openai
-tts = cartesia.TTS(model="sonic-3", voice="...")  # livekit-plugins-cartesia
-vad = silero.VAD.load()                   # livekit-plugins-silero
-session = AgentSession(stt=stt, llm=llm, tts=tts, vad=vad)
+from livekit.plugins.turn_detector.multilingual import MultilingualModel
+
+stt = deepgram.STT(model="nova-3", language="en-US")
+llm = openai.responses.LLM(model="gpt-4.1")  # Responses API; default is env-overridable
+tts = cartesia.TTS(model="sonic-3", voice="...", language="en")
+vad = silero.VAD.load()
+session = AgentSession(
+    stt=stt,
+    llm=llm,
+    tts=tts,
+    vad=vad,
+    turn_handling=TurnHandlingOptions(turn_detection=MultilingualModel()),
+)
 ```
 
-The agent's `on_user_turn_completed(turn_ctx, new_message)` hook and
-`turn_ctx.add_message(role=, content=)` match LiveKit Agents `0.12.x`
-(the pinned `livekit-agents>=0.12,<1.0` range). LiveKit `1.0+` switched to
-`AgentServer` + `@server.rtc_session()`; if you upgrade, update `server.py`'s
-worker bootstrap accordingly.
+`server.py` prefers `openai.responses.LLM()` for direct OpenAI usage and falls
+back to `openai.LLM()` only for older `livekit-plugins-openai` builds that do
+not expose the `responses` namespace. The worker uses LiveKit Agents 1.x:
+`AgentSession`, `WorkerOptions`, `on_user_turn_completed`, `TurnHandlingOptions`,
+and `livekit.plugins.turn_detector.multilingual.MultilingualModel`.
+
+The default `OPENAI_MODEL=gpt-4.1` is intentional for a realtime voice agent:
+it is the model used in LiveKit's direct-OpenAI Responses example and is a fast
+non-reasoning option. OpenAI's current model docs recommend newer GPT-5.x models
+for more complex reasoning; set `OPENAI_MODEL` (for example to a GPT-5 mini /
+frontier model) only after validating live latency, cost and account access.
 
 ## Preflight / doctor
 

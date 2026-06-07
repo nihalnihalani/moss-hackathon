@@ -92,6 +92,28 @@ class FakeMossClient:
         self.closed = True
 
 
+class FakeMossClientWithQueryFilter(FakeMossClient):
+    """Fake client for the public ``query(..., filter=predicate)`` SDK shape."""
+
+    def __init__(self, result: FakeResult) -> None:
+        """Initialise with a canned result and record query filters."""
+        super().__init__(result)
+        self.filters: list[object] = []
+
+    async def query(
+        self,
+        index: str,
+        text: str,
+        options: FakeQueryOptions,
+        *,
+        filter: object = None,  # noqa: A002 - matches the SDK kwarg
+    ) -> FakeResult:
+        """Record the public query-level filter kwarg and return the fixture."""
+        self.calls.append((index, text, options))
+        self.filters.append(filter)
+        return self._result
+
+
 def _real_string_result() -> FakeResult:
     """PRIMARY fixture: two-doc response in the REAL Moss string contract.
 
@@ -617,6 +639,21 @@ async def test_query_multi_uses_server_filter_when_supported() -> None:
     }
     # Post-filter still applies defensively, yielding only the allowed doc.
     assert [c.documentId for c in result.citations] == ["contract-acme"]
+
+
+async def test_query_multi_prefers_public_query_filter_kwarg() -> None:
+    """Moss public docs show filtering as query(..., QueryOptions, filter=...)."""
+    client = FakeMossClientWithQueryFilter(_multi_doc_result())
+    idx = MossIndex(_settings(), client=client)
+    idx._module = type("M", (), {"QueryOptions": FakeQueryOptions})()  # noqa: SLF001
+
+    result = await idx.query_multi("subcontract", top_k=5, doc_ids=["email-thread"])
+
+    assert client.filters[-1] == {
+        "field": "documentId",
+        "condition": {"$eq": "email-thread"},
+    }
+    assert [c.documentId for c in result.citations] == ["email-thread"]
 
 
 async def test_query_multi_multi_id_filter_uses_and_or_eq() -> None:

@@ -203,8 +203,9 @@ typecheck-frontend:
 ## Prints the READY/MISSING/MOCK table; if MOSS_PROJECT_ID and MOSS_PROJECT_KEY
 ## are in the env it adds `doctor --probe` (a REAL load_index/get_index round-trip,
 ## needs the [moss] extra). With no creds it prints a clear note and still
-## exits 0 — this target is a read-out, not a hard gate. Then it best-effort
-## curls /healthz and /config at $(API_BASE).
+## exits 0 — this target is a read-out, not a hard gate. Then it probes
+## /healthz and /config at $(API_BASE). If an API is reachable but does not look
+## like CrossExam, it exits nonzero so a port conflict cannot masquerade as live.
 verify-live:
 	$(call need_py)
 	@echo ">> crossexam-backend preflight (doctor — no network calls):"
@@ -221,9 +222,28 @@ verify-live:
 	@echo ">> probing HTTP API at $(API_BASE) (best-effort):"
 	@if ! command -v curl >/dev/null 2>&1; then \
 		echo "   curl not found — skipping endpoint probe (install curl to enable)."; \
-	elif curl -fsS --max-time 3 "$(API_BASE)/healthz" >/dev/null 2>&1; then \
-		echo "   GET /healthz ->"; curl -fsS --max-time 3 "$(API_BASE)/healthz"; echo ""; \
-		echo "   GET /config  ->"; curl -fsS --max-time 3 "$(API_BASE)/config"; echo ""; \
+	elif health="$$(curl -fsS --max-time 3 "$(API_BASE)/healthz" 2>/dev/null)"; then \
+		if ! config="$$(curl -fsS --max-time 3 "$(API_BASE)/config" 2>/dev/null)"; then \
+			echo "   GET /healthz -> $$health"; \
+			echo "   GET /config  -> FAILED"; \
+			echo "   A service is reachable at $(API_BASE), but it is not serving CrossExam /config."; \
+			echo "   Stop the conflicting service, run 'make api', or pass API_PORT=..."; \
+			exit 1; \
+		fi; \
+		if [[ "$$health" != *'"mode"'* || "$$health" != *'"livekit_configured"'* ]]; then \
+			echo "   GET /healthz -> $$health"; \
+			echo "   Unexpected /healthz payload. This does not look like crossexam-api."; \
+			echo "   Stop the conflicting service, run 'make api', or pass API_PORT=..."; \
+			exit 1; \
+		fi; \
+		if [[ "$$config" != *'"live"'* || "$$config" != *'"livekit_url"'* ]]; then \
+			echo "   GET /config  -> $$config"; \
+			echo "   Unexpected /config payload. This does not look like crossexam-api."; \
+			echo "   Stop the conflicting service, run 'make api', or pass API_PORT=..."; \
+			exit 1; \
+		fi; \
+		echo "   GET /healthz -> $$health"; \
+		echo "   GET /config  -> $$config"; \
 	else \
 		echo "   API not reachable at $(API_BASE)."; \
 		echo "   Start it with 'make api' (or 'make dev-live' / 'docker compose up'),"; \

@@ -8,6 +8,9 @@ livekit plugin. That makes the path safe to exercise without the (uninstalled)
 
 from __future__ import annotations
 
+import sys
+import types
+
 import pytest
 
 from crossexam_backend.config import Settings
@@ -64,3 +67,60 @@ def test_build_tts_unsupported_provider_raises() -> None:
     settings = _settings(tts_provider="nope")
     with pytest.raises(ProviderConfigError, match="Unsupported TTS_PROVIDER"):
         _build_tts(settings)
+
+
+def test_build_llm_prefers_openai_responses_api(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Direct OpenAI usage prefers LiveKit's recommended Responses API class."""
+
+    class _ResponsesLLM:
+        def __init__(self, **kwargs: object) -> None:
+            self.kwargs = kwargs
+
+    class _ChatLLM:
+        def __init__(self, **kwargs: object) -> None:
+            self.kwargs = kwargs
+
+    fake_livekit = types.ModuleType("livekit")
+    fake_plugins = types.ModuleType("livekit.plugins")
+    fake_openai = types.ModuleType("livekit.plugins.openai")
+    fake_openai.responses = types.SimpleNamespace(LLM=_ResponsesLLM)  # type: ignore[attr-defined]
+    fake_openai.LLM = _ChatLLM  # type: ignore[attr-defined]
+    fake_plugins.openai = fake_openai  # type: ignore[attr-defined]
+    fake_livekit.plugins = fake_plugins  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "livekit", fake_livekit)
+    monkeypatch.setitem(sys.modules, "livekit.plugins", fake_plugins)
+    monkeypatch.setitem(sys.modules, "livekit.plugins.openai", fake_openai)
+
+    settings = _settings(openai_api_key="sk-test", openai_model="gpt-4.1")
+    llm = _build_llm(settings)
+
+    assert isinstance(llm, _ResponsesLLM)
+    assert llm.kwargs == {"api_key": "sk-test", "model": "gpt-4.1"}
+
+
+def test_build_llm_falls_back_to_chat_completions_constructor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Older livekit-plugins-openai builds without responses.LLM still work."""
+
+    class _ChatLLM:
+        def __init__(self, **kwargs: object) -> None:
+            self.kwargs = kwargs
+
+    fake_livekit = types.ModuleType("livekit")
+    fake_plugins = types.ModuleType("livekit.plugins")
+    fake_openai = types.ModuleType("livekit.plugins.openai")
+    fake_openai.LLM = _ChatLLM  # type: ignore[attr-defined]
+    fake_plugins.openai = fake_openai  # type: ignore[attr-defined]
+    fake_livekit.plugins = fake_plugins  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "livekit", fake_livekit)
+    monkeypatch.setitem(sys.modules, "livekit.plugins", fake_plugins)
+    monkeypatch.setitem(sys.modules, "livekit.plugins.openai", fake_openai)
+
+    settings = _settings(openai_api_key="sk-test", openai_model="gpt-4.1")
+    llm = _build_llm(settings)
+
+    assert isinstance(llm, _ChatLLM)
+    assert llm.kwargs == {"api_key": "sk-test", "model": "gpt-4.1"}

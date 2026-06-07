@@ -113,9 +113,9 @@ def test_faithfulness_threshold_out_of_range_rejected() -> None:
 def test_voice_model_pins_have_expected_defaults() -> None:
     """The live voice stack pins models explicitly (no silent plugin drift).
 
-    Verified against livekit-plugins-* 1.5.x: deepgram nova-3, openai gpt-4.1,
-    cartesia sonic-3. These are pinned in settings so a dependency bump cannot
-    silently change the deployed model/voice.
+    The defaults are pinned in settings so a dependency bump cannot silently
+    change the deployed model/voice. gpt-4.1 stays the realtime default, while
+    newer OpenAI models remain an env override after live latency validation.
     """
     settings = Settings(_env_file=None)  # type: ignore[call-arg]
     assert settings.deepgram_model == "nova-3"

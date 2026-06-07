@@ -56,7 +56,7 @@ VERIFIED API SHAPE (introspected from inferedge_moss 1.0.0b19):
     for d in docs:
         d.id, d.text, d.metadata      # DocumentInfo attrs
 
-    QueryOptions fields: top_k, alpha, embedding, filter
+    QueryOptions fields: top_k, alpha, embedding
     GetDocumentsOptions fields: doc_ids (list[str] | None)
     SearchResult fields: docs, query, index_name, time_taken_ms
     QueryResultDocumentInfo fields: id, text, metadata, score
@@ -75,7 +75,9 @@ VERIFIED METADATA CONTRACT (confirmed from the running pipeline + SDK):
     loop); page/confidence/scanned are coerced tolerantly.
 
 VERIFIED FILTER GRAMMAR (from ``query`` docstring in the SDK):
-  - The ``filter`` kwarg of ``QueryOptions`` accepts:
+  - The public docs show the ``filter`` kwarg passed to ``client.query``:
+    ``client.query(name, text, QueryOptions(...), filter=predicate)``.
+  - Older/introspected SDK builds also accept ``filter`` on ``QueryOptions``:
       ``{"$and": [{"field": "f", "condition": {"$eq": "v"}}, ...]}``
     Confirmed operators: ``$and``, ``$eq``, ``$lt``.
   - ``$or`` is NOT confirmed in the SDK docstring (only ``$and``/``$eq``/
@@ -260,9 +262,11 @@ class MossIndex(RetrievalIndex):
     def _make_query_options(
         self, top_k: int, alpha: float, *, doc_ids: list[str] | None = None
     ) -> Any | None:  # noqa: ANN401
-        """Build ``QueryOptions(top_k=, alpha=, filter=)`` if the SDK exposes it.
+        """Build ``QueryOptions(top_k=, alpha=)`` if the SDK exposes it.
 
-        Verified fields: ``top_k``, ``alpha``, ``embedding``, ``filter``.
+        Verified fields: ``top_k``, ``alpha``, ``embedding``. The current public
+        docs put metadata filtering on ``client.query(..., filter=predicate)``;
+        ``QueryOptions(filter=...)`` is retained as an older-SDK fallback.
         Returns ``None`` when no module is loaded (DI/test path) so the caller
         falls back to keyword args on ``query``. Typed ``Any`` because the SDK
         class is not importable at type-check time (optional dependency).
@@ -311,6 +315,8 @@ class MossIndex(RetrievalIndex):
 
         Verified surface (inferedge_moss 1.0.0b19):
             ``result: SearchResult = await client.query(name, text, QueryOptions(...))``
+            public docs show metadata filtering as
+            ``client.query(name, text, QueryOptions(...), filter=predicate)``
             ``result.docs`` — list of ``QueryResultDocumentInfo``
             ``result.time_taken_ms`` — float
 
@@ -325,12 +331,37 @@ class MossIndex(RetrievalIndex):
                 "Moss client exposes neither query() nor search()"
             )
 
-        options = self._make_query_options(top_k, alpha, doc_ids=doc_ids)
+        predicate = self._build_doc_filter(list(doc_ids)) if doc_ids else None
+        # Prefer the public SDK docs path for metadata filtering:
+        # query(index, text, QueryOptions(...), filter=predicate). Keep the
+        # older/introspected QueryOptions(filter=...) path as a fallback.
+        options = self._make_query_options(top_k, alpha)
         if options is not None:
-            result = query_fn(self._index_name, text, options)
+            if predicate is not None:
+                try:
+                    result = query_fn(self._index_name, text, options, filter=predicate)
+                except TypeError:
+                    if self._supports_server_filter():
+                        options = self._make_query_options(
+                            top_k, alpha, doc_ids=doc_ids
+                        )
+                        result = query_fn(self._index_name, text, options)
+                    else:
+                        raise
+            else:
+                result = query_fn(self._index_name, text, options)
         else:
             # DI/test path or older SDK: fall back to keyword args.
-            result = query_fn(self._index_name, text, top_k=top_k, alpha=alpha)
+            if predicate is not None:
+                result = query_fn(
+                    self._index_name,
+                    text,
+                    top_k=top_k,
+                    alpha=alpha,
+                    filter=predicate,
+                )
+            else:
+                result = query_fn(self._index_name, text, top_k=top_k, alpha=alpha)
 
         if hasattr(result, "__await__"):
             result = await result
@@ -652,12 +683,12 @@ class MossIndex(RetrievalIndex):
         """Query Moss across one or more documents (see base class).
 
         Strategy:
-          1. If the SDK accepts a ``filter`` kwarg, ATTEMPT a server-side
-             documentId filter (latency optimisation — pushes the allow-list to
-             Moss so only relevant docs are ranked). The ``$or`` operator is
-             NOT confirmed in the SDK, so the filtered query is wrapped in a
-             broad ``except`` that falls through to the over-fetch path rather
-             than raising, since a filter-shape rejection is a soft error.
+          1. ATTEMPT a server-side documentId filter using the public SDK shape
+             ``query(..., QueryOptions(...), filter=predicate)``. Older SDKs
+             that only accept ``QueryOptions(filter=...)`` are also supported.
+             The ``$or`` operator is not confirmed everywhere, so the filtered
+             query is wrapped in a broad ``except`` that falls through to
+             over-fetch rather than raising on a filter-shape rejection.
           2. CLIENT-SIDE POST-FILTER is ALWAYS applied as the authoritative
              correctness guarantee, regardless of whether the server filter
              succeeded. Post-filter is the truth; server-filter is a speed hint.
@@ -671,34 +702,31 @@ class MossIndex(RetrievalIndex):
             return await self.query(text, top_k=top_k, alpha=alpha)
         allow = set(doc_ids)
 
-        if self._supports_server_filter():
-            start = time.perf_counter()
-            try:
-                docs, server_latency = await self._raw_query(
-                    text, top_k=top_k, alpha=alpha, doc_ids=list(doc_ids)
-                )
-            except MossClientUnavailableError:
-                raise
-            except Exception:  # noqa: BLE001
-                # Server filter rejected or network error — fall through to
-                # over-fetch path. Do NOT propagate: $or may not be supported.
-                logger.debug(
-                    "moss_index.query_multi server filter failed; "
-                    "falling back to over-fetch text=%r",
-                    text,
-                )
-            else:
-                # Server-filtered result received. Post-filter is still applied
-                # as the AUTHORITATIVE correctness guarantee (server filter is a
-                # latency optimisation; may be a no-op on some SDK versions).
-                citations = [self._to_citation(m) for m in list(docs)]
-                self._record_document_ids(citations)
-                filtered = [c for c in citations if c.documentId in allow][:top_k]
-                wall_ms = (time.perf_counter() - start) * 1000.0
-                latency_ms = server_latency if server_latency is not None else wall_ms
-                return RetrievalResult(
-                    query=text, citations=filtered, latency_ms=latency_ms
-                )
+        start = time.perf_counter()
+        try:
+            docs, server_latency = await self._raw_query(
+                text, top_k=top_k, alpha=alpha, doc_ids=list(doc_ids)
+            )
+        except MossClientUnavailableError:
+            raise
+        except Exception:  # noqa: BLE001
+            # Server filter rejected or network error — fall through to
+            # over-fetch path. Do NOT propagate: $or may not be supported.
+            logger.debug(
+                "moss_index.query_multi server filter failed; "
+                "falling back to over-fetch text=%r",
+                text,
+            )
+        else:
+            # Server-filtered result received. Post-filter is still applied as
+            # the AUTHORITATIVE correctness guarantee (server filter is a
+            # latency optimisation; may be a no-op on some SDK versions).
+            citations = [self._to_citation(m) for m in list(docs)]
+            self._record_document_ids(citations)
+            filtered = [c for c in citations if c.documentId in allow][:top_k]
+            wall_ms = (time.perf_counter() - start) * 1000.0
+            latency_ms = server_latency if server_latency is not None else wall_ms
+            return RetrievalResult(query=text, citations=filtered, latency_ms=latency_ms)
 
         # Over-fetch + client-side post-filter (verified-safe path): fetch
         # top_k * 4 to ensure the allow-set has enough candidates after filtering.

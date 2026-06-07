@@ -89,9 +89,10 @@ class Settings(BaseSettings):
     cartesia_api_key: str | None = Field(default=None)
 
     # Explicit model/voice pins for the live voice stack. Pinned (not left to
-    # plugin defaults) so a dependency bump can't silently change the model:
-    # the openai plugin default already moved gpt-4o -> gpt-4.1 across a minor
-    # release. Values verified against livekit-plugins-* 1.5.x (2026-06).
+    # plugin defaults) so a dependency bump can't silently change the model.
+    # `gpt-4.1` is LiveKit's direct-OpenAI example model and OpenAI's strongest
+    # non-reasoning model; for deeper but slower/costlier reasoning, override
+    # OPENAI_MODEL to a current GPT-5.x model after live latency testing.
     deepgram_model: str = Field(default="nova-3")
     deepgram_language: str = Field(default="en-US")
     openai_model: str = Field(default="gpt-4.1")

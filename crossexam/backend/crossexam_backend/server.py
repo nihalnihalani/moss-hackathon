@@ -141,6 +141,17 @@ def _build_llm(settings: Settings) -> object:
                 "LLM_PROVIDER=openai requires the 'livekit-plugins-openai' "
                 "package. Install it with: pip install 'crossexam-backend[voice]'."
             ) from exc
+        # LiveKit's current OpenAI docs recommend the Responses API for direct
+        # OpenAI usage (`openai.responses.LLM`). Older plugin builds only expose
+        # the Chat Completions constructor (`openai.LLM`), so keep a guarded
+        # fallback while preferring the documented path.
+        responses = getattr(openai, "responses", None)
+        responses_llm = getattr(responses, "LLM", None)
+        if callable(responses_llm):
+            return responses_llm(
+                api_key=settings.openai_api_key,
+                model=settings.openai_model,
+            )
         return openai.LLM(api_key=settings.openai_api_key, model=settings.openai_model)
 
     raise ProviderConfigError(
