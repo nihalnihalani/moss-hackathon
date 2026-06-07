@@ -162,7 +162,7 @@ sequenceDiagram
 | Layer | Path | Stack |
 |---|---|---|
 | **Backend** | `crossexam/backend/` | Python · LiveKit Agents 1.x · FastAPI · Deepgram (Nova-3) · OpenAI (GPT-4.1) · Cartesia (Sonic-3) · Silero VAD |
-| **Retrieval** | in-process | **Moss** (`inferedge-moss`) — sub-10ms hybrid retrieval SDK, *not* a REST API |
+| **Retrieval** | in-process | **Moss** (`moss`) — sub-10ms hybrid retrieval SDK, *not* a REST API |
 | **Pipeline** | `crossexam/pipeline/` | Python · **Unsiloed** Parse/Extract/OCR · pdfplumber · deterministic dry-run parser |
 | **Frontend** | `crossexam/frontend/` | React 18 · TypeScript 5.7 · Vite 5 · pdf.js 4.7 · `@livekit/components-react` · framer-motion |
 | **Infra** | repo root | Docker Compose · GitHub Actions CI (mock + real-SDK jobs) · Makefile |
@@ -211,7 +211,7 @@ cd pipeline && python -m crossexam_pipeline.cli build-index \
 ../run.sh
 ```
 
-The retrieval path is the **in-process Moss SDK** (`inferedge-moss`) — there is no `MOSS_BASE_URL`. Full key list and step-by-step in **[`crossexam/KEYS.md`](crossexam/KEYS.md)**.
+The retrieval path is the **in-process Moss SDK** (`moss`) — there is no `MOSS_BASE_URL`. Full key list and step-by-step in **[`crossexam/KEYS.md`](crossexam/KEYS.md)**.
 
 </details>
 
@@ -253,14 +253,11 @@ moss-hackathon/
 │   ├── frontend/              ← React voice UI + pdf.js bbox-snap viewer
 │   ├── docker-compose.yml · Makefile · KEYS.md · STATUS.md
 │   └── .env.example           ← every env var, documented
-├── .claude/agents/            ← the 6-agent debate team that chose this idea
 └── docs/
     ├── pitch-crossexam.md         ← the Problem→Team pitch
     ├── co-pilot-positioning.md    ← competitive whitespace
     ├── v3-features-spec.md        ← memo export + multi-doc cross-examination
-    ├── demo-storyboard.md         ← the 90-second shot list
-    ├── build-plan.md              ← 24h critical path + risks
-    └── debate-transcript.md       ← the full multi-agent debate
+    └── demo-storyboard.md         ← the 90-second shot list
 ```
 
 ---
@@ -279,16 +276,6 @@ moss-hackathon/
 | **Prizes** | 🥇 YC interview + iPhones + sponsor credits · 🥈 AirPods Max · 🥉 AirPods Pro |
 
 **CrossExam competes in the Co-Pilot track** — its whole design *is* the track definition: an ambient agent that listens to a live conversation and displays the live, verifiable context (the cited line) the instant a claim is spoken. It leans on **Moss** (the host's retrieval core), **LiveKit** (real-time voice), and **Unsiloed** (citation-grade PDF bounding boxes), with **MiniMax** and **AWS** wired as optional providers.
-
----
-
-## 🤖 How the idea was chosen
-
-CrossExam was selected by a **Claude Code multi-agent debate team** (`.claude/agents/`) — an Ideator, a relentless **Devil's Advocate**, a Researcher, a Demo-Designer, and a BizDev pitch lead, conducted by an Orchestrator-Judge simulating four hackathon-judge archetypes. It beat 7 other candidates on the Devil's Advocate's decisive reframe:
-
-> *"If the differentiator can't be photographed, it can't win."*
-
-CrossExam is the only idea where Moss's sub-10ms edge is **visible and photographable** on stage — the box snapping onto the line, and the second box exposing the contradiction. Full transcript in [`docs/debate-transcript.md`](docs/debate-transcript.md).
 
 ---
 
