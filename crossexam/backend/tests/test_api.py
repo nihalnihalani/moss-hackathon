@@ -247,7 +247,13 @@ def test_token_200_with_fake_signer(
 def test_token_creates_named_agent_dispatch(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """/token should explicitly dispatch the configured LiveKit agent."""
+    """/token creates the room with a named RoomAgentDispatch attached.
+
+    Replaces the old list_dispatch/create_dispatch path. The new mechanism uses
+    an idempotent create_room call so the room is created AND the named agent is
+    attached in one step — avoiding the 404 that list_dispatch raised when called
+    before the room existed.
+    """
 
     class _FakeGrants:
         def __init__(self, **kwargs: object) -> None:
@@ -269,33 +275,34 @@ def test_token_creates_named_agent_dispatch(
         def to_jwt(self) -> str:
             return f"fake.jwt.for.{self.identity}"
 
-    class _FakeCreateAgentDispatchRequest:
-        def __init__(self, *, room: str, agent_name: str) -> None:
-            self.room = room
+    class _FakeCreateRoomRequest:
+        def __init__(self, *, name: str, agents: list[object]) -> None:
+            self.name = name
+            self.agents = agents
+
+    class _FakeRoomAgentDispatch:
+        def __init__(self, *, agent_name: str) -> None:
             self.agent_name = agent_name
 
     calls: dict[str, object] = {}
 
-    class _FakeAgentDispatchService:
-        async def list_dispatch(self, room_name: str) -> list[object]:
-            calls["listed_room"] = room_name
-            return []
-
-        async def create_dispatch(
-            self, req: _FakeCreateAgentDispatchRequest
-        ) -> object:
-            calls["created_room"] = req.room
-            calls["created_agent"] = req.agent_name
-            return types.SimpleNamespace(id="AD_created")
+    class _FakeRoomService:
+        async def create_room(self, req: _FakeCreateRoomRequest) -> object:
+            calls["created_room"] = req.name
+            calls["agents"] = [getattr(a, "agent_name", None) for a in req.agents]
+            return types.SimpleNamespace(name=req.name)
 
     class _FakeLiveKitAPI:
         def __init__(self, url: str | None, key: str, secret: str) -> None:
             calls["url"] = url
             calls["key"] = key
             calls["secret"] = secret
-            self.agent_dispatch = _FakeAgentDispatchService()
+            self.room = _FakeRoomService()
 
-        async def aclose(self) -> None:
+        async def __aenter__(self) -> _FakeLiveKitAPI:
+            return self
+
+        async def __aexit__(self, *_: object) -> None:
             calls["closed"] = True
 
     fake_livekit = types.ModuleType("livekit")
@@ -303,7 +310,8 @@ def test_token_creates_named_agent_dispatch(
     fake_api.AccessToken = _FakeAccessToken  # type: ignore[attr-defined]
     fake_api.VideoGrants = _FakeGrants  # type: ignore[attr-defined]
     fake_api.LiveKitAPI = _FakeLiveKitAPI  # type: ignore[attr-defined]
-    fake_api.CreateAgentDispatchRequest = _FakeCreateAgentDispatchRequest  # type: ignore[attr-defined]
+    fake_api.CreateRoomRequest = _FakeCreateRoomRequest  # type: ignore[attr-defined]
+    fake_api.RoomAgentDispatch = _FakeRoomAgentDispatch  # type: ignore[attr-defined]
     fake_livekit.api = fake_api  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "livekit", fake_livekit)
     monkeypatch.setitem(sys.modules, "livekit.api", fake_api)
@@ -319,21 +327,24 @@ def test_token_creates_named_agent_dispatch(
     with TestClient(create_app(settings)) as client:
         resp = client.post("/token", json={"room": "room-1", "identity": "alice"})
     assert resp.status_code == 200
-    assert calls == {
-        "url": "https://x.livekit.cloud",
-        "key": "key",
-        "secret": "secret",
-        "listed_room": "room-1",
-        "created_room": "room-1",
-        "created_agent": "crossexam-agent",
-        "closed": True,
-    }
+    assert calls["url"] == "https://x.livekit.cloud"
+    assert calls["key"] == "key"
+    assert calls["secret"] == "secret"
+    assert calls["created_room"] == "room-1"
+    assert calls["agents"] == ["crossexam-agent"]
+    assert calls["closed"] is True
 
 
-def test_token_reuses_active_named_agent_dispatch(
+def test_token_room_ensure_idempotent_on_existing_room(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """/token should not create duplicate dispatches for an active agent job."""
+    """/token create_room is called every time — idempotent on the live API.
+
+    The old reuse-check (list_dispatch) is gone. create_room is idempotent:
+    calling it on an existing room is a no-op server-side, so we simply always
+    call it. This test confirms the token endpoint returns 200 regardless of
+    how many times /token is called for the same room.
+    """
 
     class _FakeAccessToken:
         def __init__(self, key: str, secret: str) -> None:
@@ -348,54 +359,30 @@ def test_token_reuses_active_named_agent_dispatch(
         def to_jwt(self) -> str:
             return "fake.jwt"
 
-    class _FakeJobStatus:
-        @staticmethod
-        def Value(name: str) -> int:  # noqa: N802 - mimics protobuf enum API
-            return {
-                "JS_PENDING": 0,
-                "JS_RUNNING": 1,
-                "JS_SUCCESS": 2,
-                "JS_FAILED": 3,
-            }[name]
+    calls: dict[str, int] = {"create_room_calls": 0}
 
-    calls: dict[str, object] = {"created": False}
-
-    class _FakeAgentDispatchService:
-        async def list_dispatch(self, room_name: str) -> list[object]:
-            calls["listed_room"] = room_name
-            return [
-                types.SimpleNamespace(
-                    id="AD_existing",
-                    agent_name="crossexam-agent",
-                    state=types.SimpleNamespace(
-                        deleted_at=0,
-                        jobs=[
-                            types.SimpleNamespace(
-                                state=types.SimpleNamespace(status=1, ended_at=0)
-                            )
-                        ],
-                    ),
-                )
-            ]
-
-        async def create_dispatch(self, req: object) -> object:
-            calls["created"] = True
-            return types.SimpleNamespace(id="AD_created")
+    class _FakeRoomService:
+        async def create_room(self, req: object) -> object:
+            calls["create_room_calls"] += 1
+            return types.SimpleNamespace(name=getattr(req, "name", "room-1"))
 
     class _FakeLiveKitAPI:
         def __init__(self, url: str | None, key: str, secret: str) -> None:
-            self.agent_dispatch = _FakeAgentDispatchService()
+            self.room = _FakeRoomService()
 
-        async def aclose(self) -> None:
-            calls["closed"] = True
+        async def __aenter__(self) -> _FakeLiveKitAPI:
+            return self
+
+        async def __aexit__(self, *_: object) -> None:
+            pass
 
     fake_livekit = types.ModuleType("livekit")
     fake_api = types.ModuleType("livekit.api")
     fake_api.AccessToken = _FakeAccessToken  # type: ignore[attr-defined]
     fake_api.VideoGrants = lambda **_: object()  # type: ignore[attr-defined]
     fake_api.LiveKitAPI = _FakeLiveKitAPI  # type: ignore[attr-defined]
-    fake_api.CreateAgentDispatchRequest = lambda **_: object()  # type: ignore[attr-defined]
-    fake_api.JobStatus = _FakeJobStatus  # type: ignore[attr-defined]
+    fake_api.CreateRoomRequest = lambda **kwargs: types.SimpleNamespace(**kwargs)  # type: ignore[attr-defined]
+    fake_api.RoomAgentDispatch = lambda **kwargs: types.SimpleNamespace(**kwargs)  # type: ignore[attr-defined]
     fake_livekit.api = fake_api  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "livekit", fake_livekit)
     monkeypatch.setitem(sys.modules, "livekit.api", fake_api)
@@ -409,13 +396,12 @@ def test_token_reuses_active_named_agent_dispatch(
         _env_file=None,  # type: ignore[call-arg]
     )
     with TestClient(create_app(settings)) as client:
-        resp = client.post("/token", json={"room": "room-1"})
-    assert resp.status_code == 200
-    assert calls == {
-        "created": False,
-        "listed_room": "room-1",
-        "closed": True,
-    }
+        r1 = client.post("/token", json={"room": "room-1"})
+        r2 = client.post("/token", json={"room": "room-1"})
+    assert r1.status_code == 200
+    assert r2.status_code == 200
+    # create_room called once per /token hit (idempotent on server side)
+    assert calls["create_room_calls"] == 2
 
 
 def test_token_response_includes_url_field(
