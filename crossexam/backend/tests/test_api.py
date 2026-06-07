@@ -136,6 +136,25 @@ def test_mock_fixture_reupload_replaces_same_document_id(tmp_path: Path) -> None
     assert {record["id"] for record in records} == {"same-new-1", "other-1"}
 
 
+def test_mock_fixture_reupload_replaces_same_source_hash(tmp_path: Path) -> None:
+    """Fallback uploads with the same source hash cannot grow the fixture."""
+    settings = _mock_settings(tmp_path)
+    fixture = Path(settings.mock_fixture_path)
+    old = _fixture_record("old-doc-p1", "old-doc", "old text")
+    old["sourceHash"] = "same-hash"
+    other = _fixture_record("other-doc-p1", "other-doc", "other text")
+    other["sourceHash"] = "other-hash"
+    new = _fixture_record("new-doc-p1", "new-doc", "new text")
+    new["sourceHash"] = "same-hash"
+
+    _index_to_mock_fixture(settings, [old, other])
+    written, _index = _index_to_mock_fixture(settings, [new])
+
+    records = json.loads(fixture.read_text(encoding="utf-8"))
+    assert written == 1
+    assert {record["id"] for record in records} == {"new-doc-p1", "other-doc-p1"}
+
+
 # --------------------------------------------------------------------------- #
 # /config                                                                     #
 # --------------------------------------------------------------------------- #
@@ -557,6 +576,35 @@ def test_documents_accepts_pdf_and_indexes_in_mock_mode(client: TestClient) -> N
     assert uploaded
     assert {r["documentId"] for r in uploaded} == {body["document_id"]}
     assert {r["documentTitle"] for r in uploaded} == {"sample.pdf"}
+    assert {r["sourceHash"] for r in uploaded}
+
+
+@pytest.mark.skipif(
+    not (_HAVE_REPORTLAB and _HAVE_PDFPLUMBER),
+    reason="needs reportlab + pdfplumber",
+)
+def test_documents_reupload_same_pdf_reuses_document_id(client: TestClient) -> None:
+    """The same PDF bytes should replace one uploaded corpus, not append another."""
+    pdf_bytes = _make_pdf_bytes()
+
+    first = client.post(
+        "/documents",
+        files={"file": ("sample.pdf", pdf_bytes, "application/pdf")},
+    )
+    second = client.post(
+        "/documents",
+        files={"file": ("sample.pdf", pdf_bytes, "application/pdf")},
+    )
+
+    assert first.status_code == 200, first.text
+    assert second.status_code == 200, second.text
+    first_body = first.json()
+    second_body = second.json()
+    assert first_body["document_id"] == second_body["document_id"]
+    fixture_path = Path(client.app.state.settings.mock_fixture_path)  # type: ignore[attr-defined]
+    records = json.loads(fixture_path.read_text(encoding="utf-8"))
+    uploaded = [r for r in records if r["documentId"] == first_body["document_id"]]
+    assert len(uploaded) == first_body["chunks_indexed"]
 
 
 @pytest.mark.skipif(

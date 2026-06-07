@@ -8,6 +8,7 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
+import { StrictMode } from 'react';
 import { App } from '../App';
 import { ApiError } from '../lib/api';
 import { ToastProvider } from '../components/ToastContext';
@@ -41,6 +42,16 @@ import * as api from '../lib/api';
 const fetchConfig = vi.mocked(api.fetchConfig);
 const requestToken = vi.mocked(api.requestToken);
 
+function renderApp(): void {
+  render(
+    <StrictMode>
+      <ToastProvider>
+        <App />
+      </ToastProvider>
+    </StrictMode>,
+  );
+}
+
 describe('App startup session resolution', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -54,7 +65,7 @@ describe('App startup session resolution', () => {
       room: 'room-1',
     });
 
-    render(<ToastProvider><App /></ToastProvider>);
+    renderApp();
 
     await waitFor(() =>
       expect(screen.getByTestId('mode-badge').textContent).toMatch(/LIVE/),
@@ -63,14 +74,13 @@ describe('App startup session resolution', () => {
     expect(requestToken).toHaveBeenCalledTimes(1);
     expect(requestToken).toHaveBeenCalledWith(
       { room: expect.stringMatching(/^crossexam-[a-zA-Z0-9_-]+$/) },
-      expect.any(AbortSignal),
     );
   });
 
   it('falls back to MOCK when /config fails (backend unreachable)', async () => {
     fetchConfig.mockRejectedValue(new ApiError('unreachable'));
 
-    render(<ToastProvider><App /></ToastProvider>);
+    renderApp();
 
     await waitFor(() =>
       expect(screen.getByTestId('mode-badge').textContent).toBe('MOCK / OFFLINE'),
@@ -81,7 +91,7 @@ describe('App startup session resolution', () => {
   it('falls back to MOCK when /config reports live:false', async () => {
     fetchConfig.mockResolvedValue({ livekitUrl: null, live: false });
 
-    render(<ToastProvider><App /></ToastProvider>);
+    renderApp();
 
     await waitFor(() =>
       expect(screen.getByTestId('mode-badge').textContent).toBe('MOCK / OFFLINE'),

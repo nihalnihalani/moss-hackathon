@@ -620,10 +620,6 @@ export function useCrossExam(config: CrossExamConfig): CrossExamState {
         room.on(RoomEvent.TrackSubscribed, onTrackSubscribed);
         room.on(RoomEvent.TrackUnsubscribed, onTrackUnsubscribed);
 
-        // PUBLISH THE MIC: enable the local microphone after handlers are wired
-        // so we cannot miss the agent's first subscribed audio track.
-        await enableMicRef.current();
-
         cleanup = () => {
           room.off(RoomEvent.DataReceived, onData);
           room.off(RoomEvent.TrackSubscribed, onTrackSubscribed);

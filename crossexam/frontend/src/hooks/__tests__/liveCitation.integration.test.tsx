@@ -163,9 +163,14 @@ describe('live citation path (LiveKit DataReceived -> PdfCanvas)', () => {
     await waitFor(() => expect(screen.getByTestId('connected').textContent).toBe('true'));
   });
 
-  it('publishes the local microphone on a successful live connect', async () => {
+  it('waits for a push-to-talk gesture before publishing the local microphone', async () => {
     render(<Harness />);
     await waitFor(() => expect(screen.getByTestId('connected').textContent).toBe('true'));
+    expect(setMicrophoneEnabled).not.toHaveBeenCalled();
+    expect(screen.getByTestId('mic-status').textContent).toBe('off');
+
+    fireEvent.pointerDown(screen.getByTestId('talk-start'));
+
     await waitFor(() => expect(setMicrophoneEnabled).toHaveBeenCalledWith(true));
     expect(screen.getByTestId('mic-status').textContent).toBe('on');
   });
@@ -202,10 +207,13 @@ describe('live citation path (LiveKit DataReceived -> PdfCanvas)', () => {
     expect(document.querySelector('[data-crossexam-agent-audio]')).toBeNull();
   });
 
-  it('flags mic denial gracefully without dropping the session', async () => {
+  it('flags mic denial gracefully from push-to-talk without dropping the session', async () => {
     setMicrophoneEnabled.mockRejectedValueOnce(new Error('NotAllowedError'));
     render(<Harness />);
     await waitFor(() => expect(screen.getByTestId('connected').textContent).toBe('true'));
+
+    fireEvent.pointerDown(screen.getByTestId('talk-start'));
+
     await waitFor(() => expect(screen.getByTestId('mic-status').textContent).toBe('denied'));
     // Still connected — a denied mic must not crash or disconnect the room.
     expect(screen.getByTestId('connected').textContent).toBe('true');
@@ -214,6 +222,9 @@ describe('live citation path (LiveKit DataReceived -> PdfCanvas)', () => {
   it('retries microphone publication from a push-to-talk user gesture after initial denial', async () => {
     setMicrophoneEnabled.mockRejectedValueOnce(new Error('NotAllowedError'));
     render(<Harness />);
+    await waitFor(() => expect(screen.getByTestId('connected').textContent).toBe('true'));
+
+    fireEvent.pointerDown(screen.getByTestId('talk-start'));
     await waitFor(() => expect(screen.getByTestId('mic-status').textContent).toBe('denied'));
 
     fireEvent.pointerDown(screen.getByTestId('talk-start'));

@@ -46,6 +46,50 @@ function newSessionRoom(): string {
   return `crossexam-${randomId.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 12)}`;
 }
 
+let pendingLiveSession: Promise<BackendSession> | null = null;
+
+function resolveLiveSession(): Promise<BackendSession> {
+  pendingLiveSession ??= (async () => {
+    try {
+      const config = await fetchConfig();
+      if (!config.live) {
+        return {
+          status: 'mock',
+          livekitUrl: undefined,
+          livekitToken: undefined,
+          reason: 'Backend reports live:false',
+        };
+      }
+      const token = await requestToken({ room: newSessionRoom() });
+      const url = token.url || config.livekitUrl || undefined;
+      if (!url) {
+        return {
+          status: 'mock',
+          livekitUrl: undefined,
+          livekitToken: undefined,
+          reason: 'Backend live but no LiveKit URL provided',
+        };
+      }
+      return {
+        status: 'live',
+        livekitUrl: url,
+        livekitToken: token.token,
+        reason: undefined,
+      };
+    } catch (err) {
+      return {
+        status: 'mock',
+        livekitUrl: undefined,
+        livekitToken: undefined,
+        reason: `offline: ${err instanceof Error ? err.message : String(err)}`,
+      };
+    } finally {
+      pendingLiveSession = null;
+    }
+  })();
+  return pendingLiveSession;
+}
+
 export function useBackendSession(options: UseBackendSessionOptions = {}): BackendSession {
   const { forceMock } = options;
   const [session, setSession] = useState<BackendSession>({
@@ -71,57 +115,16 @@ export function useBackendSession(options: UseBackendSessionOptions = {}): Backe
     }
 
     let cancelled = false;
-    const controller = new AbortController();
     setSession((prev) => ({ ...prev, status: 'resolving', reason: undefined }));
 
     void (async () => {
-      try {
-        const config = await fetchConfig(controller.signal);
-        if (cancelled) return;
-        if (!config.live) {
-          setSession({
-            status: 'mock',
-            livekitUrl: undefined,
-            livekitToken: undefined,
-            reason: 'Backend reports live:false',
-          });
-          return;
-        }
-        const token = await requestToken({ room: newSessionRoom() }, controller.signal);
-        if (cancelled) return;
-        const url = token.url || config.livekitUrl || undefined;
-        if (!url) {
-          setSession({
-            status: 'mock',
-            livekitUrl: undefined,
-            livekitToken: undefined,
-            reason: 'Backend live but no LiveKit URL provided',
-          });
-          return;
-        }
-        setSession({
-          status: 'live',
-          livekitUrl: url,
-          livekitToken: token.token,
-          reason: undefined,
-        });
-      } catch (err) {
-        if (cancelled) return;
-        // A simple fetch failure means the backend is unreachable — this is the
-        // EXPECTED offline/no-backend path (mock demo). Tag it as "offline:" so
-        // the UI treats it silently (the MOCK/OFFLINE badge already says it all).
-        setSession({
-          status: 'mock',
-          livekitUrl: undefined,
-          livekitToken: undefined,
-          reason: `offline: ${err instanceof Error ? err.message : String(err)}`,
-        });
-      }
+      const resolved = await resolveLiveSession();
+      if (cancelled) return;
+      setSession(resolved);
     })();
 
     return () => {
       cancelled = true;
-      controller.abort();
     };
   }, [forceMock]);
 

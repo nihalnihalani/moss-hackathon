@@ -24,6 +24,7 @@ Run it with::
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
@@ -140,6 +141,16 @@ def _uploaded_pdf_path(settings: Settings, document_id: str) -> Path:
     return base / f"{document_id}.pdf"
 
 
+def _document_hash(data: bytes) -> str:
+    """Return the content fingerprint used to make upload ids stable."""
+    return hashlib.sha256(data).hexdigest()
+
+
+def _document_id_for_hash(source_hash: str) -> str:
+    """Build a short, stable, URL-safe document id from a PDF content hash."""
+    return f"doc-{source_hash[:12]}"
+
+
 def _livekit_http_url(livekit_url: str | None) -> str | None:
     """Convert a LiveKit websocket URL into the HTTP API URL."""
     if livekit_url is None:
@@ -236,10 +247,14 @@ def _index_to_mock_fixture(
     incoming_document_ids = {
         str(rec.get("documentId")) for rec in records if rec.get("documentId") is not None
     }
+    incoming_source_hashes = {
+        str(rec.get("sourceHash")) for rec in records if rec.get("sourceHash") is not None
+    }
     retained = [
         rec
         for rec in existing
         if str(rec.get("documentId")) not in incoming_document_ids
+        and str(rec.get("sourceHash")) not in incoming_source_hashes
     ]
     by_id: dict[str, dict[str, Any]] = {str(r["id"]): r for r in retained}
     for rec in records:
@@ -492,7 +507,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 detail="File does not look like a PDF (missing %PDF- header).",
             )
 
-        document_id = f"doc-{uuid.uuid4().hex[:12]}"
+        source_hash = _document_hash(data)
+        document_id = _document_id_for_hash(source_hash)
         tmp_path = Path(tempfile.gettempdir()) / f"{document_id}.pdf"
         document_title = Path(filename).name or f"{document_id}.pdf"
         tmp_path.write_bytes(data)
@@ -508,6 +524,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         finally:
             tmp_path.unlink(missing_ok=True)
+        for record in records:
+            record["sourceHash"] = source_hash
 
         upload_path = _uploaded_pdf_path(settings, document_id)
         upload_path.parent.mkdir(parents=True, exist_ok=True)
