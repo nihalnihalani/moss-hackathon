@@ -22,6 +22,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
+from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
 from crossexam_backend.memory import ConversationMemory
@@ -72,7 +74,243 @@ def _bbox_dict(bbox: BBox) -> dict[str, Any]:
     }
 
 
-def _citation_dict(citation: Citation, verdict: FaithfulnessVerdict) -> dict[str, Any]:
+@dataclass(frozen=True)
+class _FocusedCitation:
+    """Display-focused citation text and geometry."""
+
+    text: str
+    bbox: BBox
+    quads: list[BBox] | None
+
+
+_FOCUS_TOKEN_RE = re.compile(r"[a-z0-9]+")
+_FOCUS_MAX_LINES = 6
+_FOCUS_STOPWORDS = frozenset(
+    {
+        "a",
+        "an",
+        "and",
+        "are",
+        "as",
+        "at",
+        "be",
+        "been",
+        "by",
+        "can",
+        "did",
+        "do",
+        "does",
+        "for",
+        "from",
+        "had",
+        "has",
+        "have",
+        "he",
+        "her",
+        "his",
+        "how",
+        "i",
+        "in",
+        "is",
+        "it",
+        "of",
+        "on",
+        "or",
+        "she",
+        "that",
+        "the",
+        "their",
+        "there",
+        "they",
+        "this",
+        "to",
+        "was",
+        "we",
+        "were",
+        "what",
+        "when",
+        "where",
+        "which",
+        "who",
+        "why",
+        "with",
+        "you",
+        "your",
+    }
+)
+_FOCUS_EXPANSIONS: dict[str, tuple[str, ...]] = {
+    "cms": ("inspection", "inspections", "sanction", "sanctions"),
+    "involvement": ("engage", "engaged", "involved", "overseeing", "role"),
+    "overseeing": ("development", "lab", "laboratory", "product", "software"),
+    "represented": (
+        "appearance",
+        "appearances",
+        "behalf",
+        "counsel",
+        "esq",
+        "represent",
+        "representing",
+        "witness",
+    ),
+    "representing": (
+        "appearance",
+        "appearances",
+        "behalf",
+        "counsel",
+        "esq",
+        "represent",
+        "represented",
+        "witness",
+    ),
+    "testimony": ("date", "examination", "transcript", "witness"),
+}
+
+
+def _focus_terms(text: str) -> tuple[set[str], set[str]]:
+    """Return exact and expanded content terms for evidence focusing."""
+    exact = {
+        token
+        for token in _FOCUS_TOKEN_RE.findall(text.lower())
+        if token not in _FOCUS_STOPWORDS
+    }
+    expanded = set(exact)
+    for token in exact:
+        expanded.update(_FOCUS_EXPANSIONS.get(token, ()))
+    return exact, expanded
+
+
+def _quad_union(quads: list[BBox]) -> BBox:
+    """Union several same-page quad boxes into one display bbox."""
+    first = quads[0]
+    return BBox(
+        page=first.page,
+        x0=round(min(q.x0 for q in quads), 2),
+        y0=round(min(q.y0 for q in quads), 2),
+        x1=round(max(q.x1 for q in quads), 2),
+        y1=round(max(q.y1 for q in quads), 2),
+        page_width=first.page_width,
+        page_height=first.page_height,
+    )
+
+
+def _transcript_role(text: str) -> str | None:
+    """Classify transcript speaker starts used to keep Q/A evidence coherent."""
+    stripped = text.strip().upper()
+    if stripped.startswith("Q ") or stripped == "Q":
+        return "q"
+    if stripped.startswith("A ") or stripped == "A":
+        return "a"
+    if (
+        stripped.startswith("MS. ")
+        or stripped.startswith("MR. ")
+        or stripped.startswith("THE WITNESS:")
+        or stripped.startswith("THE REPORTER:")
+        or stripped.startswith("BY MS.")
+        or stripped.startswith("BY MR.")
+    ):
+        return "turn"
+    return None
+
+
+def _best_focus_range(
+    line_texts: list[str], exact_terms: set[str], expanded_terms: set[str]
+) -> range | None:
+    """Choose the compact line range that best matches the query terms."""
+    if not expanded_terms:
+        return None
+    tokenized = [_focus_terms(text)[0] for text in line_texts]
+    best_score = 0.0
+    best_start = 0
+    best_end = 0
+    for start in range(len(line_texts)):
+        exact_seen: set[str] = set()
+        expanded_seen: set[str] = set()
+        max_end = min(len(line_texts), start + _FOCUS_MAX_LINES)
+        for end in range(start, max_end):
+            line_terms = tokenized[end]
+            exact_seen.update(line_terms & exact_terms)
+            expanded_seen.update(line_terms & expanded_terms)
+            if not expanded_seen:
+                continue
+            span = end - start + 1
+            score = (
+                len(exact_seen) * 5.0
+                + len(expanded_seen) * 2.0
+                - span * 0.35
+            )
+            if score > best_score:
+                best_score = score
+                best_start = start
+                best_end = end
+    if best_score <= 0.0:
+        return None
+    return range(best_start, best_end + 1)
+
+
+def _expand_transcript_range(line_texts: list[str], selected: range) -> range:
+    """Include adjacent Q/A context without expanding to the whole chunk."""
+    start = selected.start
+    end = selected.stop
+    roles = [_transcript_role(text) for text in line_texts]
+    selected_roles = roles[start:end]
+    if not any(role in {"q", "a"} for role in selected_roles):
+        return selected
+
+    # If the answer line matched, include the immediately preceding question.
+    for idx in range(start, max(-1, start - 3), -1):
+        if roles[idx] == "q":
+            start = idx
+            break
+        if idx != start and roles[idx] in {"a", "turn"}:
+            break
+
+    # If only the question matched, include the adjacent answer line for
+    # context, but keep wrapped continuations only when the scorer selected them.
+    if "a" in selected_roles:
+        return range(start, end)
+    if selected.stop - selected.start > 1:
+        return range(start, end)
+    while end < len(line_texts) and end - start < _FOCUS_MAX_LINES:
+        role = roles[end]
+        if role in {"q", "turn"}:
+            break
+        if role == "a":
+            end += 1
+            break
+        end += 1
+    return range(start, end)
+
+
+def _focus_citation(citation: Citation, query_text: str) -> _FocusedCitation:
+    """Narrow broad chunk geometry to the line(s) that answer ``query_text``."""
+    chunk = citation.chunk
+    quads = citation.quads or chunk.quads
+    line_texts = chunk.quadTexts
+    if not quads or not line_texts or len(quads) != len(line_texts):
+        return _FocusedCitation(chunk.text, chunk.bbox, quads)
+
+    exact_terms, expanded_terms = _focus_terms(query_text)
+    selected = _best_focus_range(line_texts, exact_terms, expanded_terms)
+    if selected is None:
+        return _FocusedCitation(chunk.text, chunk.bbox, quads)
+    selected = _expand_transcript_range(line_texts, selected)
+    focused_quads = [quads[idx] for idx in selected]
+    if not focused_quads:
+        return _FocusedCitation(chunk.text, chunk.bbox, quads)
+    focused_text = " ".join(line_texts[idx].strip() for idx in selected).strip()
+    return _FocusedCitation(
+        focused_text or chunk.text,
+        _quad_union(focused_quads),
+        focused_quads,
+    )
+
+
+def _citation_dict(
+    citation: Citation,
+    verdict: FaithfulnessVerdict,
+    *,
+    query_text: str,
+) -> dict[str, Any]:
     """Serialise one (faithfulness-checked) :class:`Citation` to the wire shape.
 
     Carries the depth-v2 fields through verbatim: ``quads`` (per-line boxes),
@@ -80,10 +318,11 @@ def _citation_dict(citation: Citation, verdict: FaithfulnessVerdict) -> dict[str
     badge), plus the attached ``faithfulness`` verdict.
     """
     chunk = citation.chunk
+    focused = _focus_citation(citation, query_text)
     payload: dict[str, Any] = {
         "id": chunk.id,
-        "text": chunk.text,
-        "bbox": _bbox_dict(chunk.bbox),
+        "text": focused.text,
+        "bbox": _bbox_dict(focused.bbox),
         "confidence": chunk.confidence,
         "score": citation.score,
         "documentId": citation.documentId,
@@ -95,8 +334,8 @@ def _citation_dict(citation: Citation, verdict: FaithfulnessVerdict) -> dict[str
     }
     if citation.documentTitle is not None:
         payload["documentTitle"] = citation.documentTitle
-    if citation.quads:
-        payload["quads"] = [_bbox_dict(q) for q in citation.quads]
+    if focused.quads:
+        payload["quads"] = [_bbox_dict(q) for q in focused.quads]
     if citation.scanned:
         payload["scanned"] = True
     return payload
@@ -260,7 +499,7 @@ def build_frame(
         if not verdict.supported:
             # Drop a box that does not back up what was said.
             continue
-        kept.append(_citation_dict(citation, verdict))
+        kept.append(_citation_dict(citation, verdict, query_text=result.query))
         kept_ids.append(citation.chunk.id)
 
     frame: dict[str, Any] = {

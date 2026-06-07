@@ -97,6 +97,9 @@ class Chunk(BaseModel):
         documentTitle: Optional human label for the document switcher.
         quads: Optional per-line bounding boxes hugging the glyphs (all on
             ``bbox.page``); carried through onto the citation for rendering.
+        quadTexts: Optional per-line text snippets parallel to ``quads``. Used
+            to focus a broad retrieved chunk down to the exact evidence lines
+            before publishing highlight geometry.
         scanned: Whether the source page was a scan (OCR).
     """
 
@@ -108,6 +111,7 @@ class Chunk(BaseModel):
     documentId: str = Field(default=DEFAULT_DOCUMENT_ID)  # noqa: N815 - wire contract field name
     documentTitle: str | None = None  # noqa: N815 - wire contract field name
     quads: list[BBox] | None = None
+    quadTexts: list[str] | None = None  # noqa: N815 - wire contract field name
     scanned: bool = False
 
     @model_validator(mode="after")
@@ -118,6 +122,12 @@ class Chunk(BaseModel):
             for quad in self.quads:
                 if quad.page != self.bbox.page:
                     raise ValueError("Chunk.quads must be on the same page as bbox")
+        if (
+            self.quads is not None
+            and self.quadTexts is not None
+            and len(self.quadTexts) != len(self.quads)
+        ):
+            raise ValueError("Chunk.quadTexts must be parallel to Chunk.quads")
         return self
 
 

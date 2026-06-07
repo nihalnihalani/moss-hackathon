@@ -1227,10 +1227,9 @@ class MultiHopRetriever:
             contradiction flag and the primary citation id.
         """
         start = time.perf_counter()
-        is_multihop_q = self._decomposer.is_multihop(question)
         # The seeded contradiction fallback must only fire for questions that
         # explicitly SEEK a contradiction -- not for generic compare/both/and
-        # synthesis asks that is_multihop also matches.
+        # synthesis asks that the decomposer also treats as multi-hop.
         is_contradiction_q = _seeks_contradiction(question)
         sub_queries = self._decomposer.decompose(question)
 

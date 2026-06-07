@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import tempfile
 import uuid
 from pathlib import Path
@@ -33,6 +34,7 @@ from typing import Any
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from crossexam_backend import ingest
@@ -49,6 +51,8 @@ _PDF_CONTENT_TYPES = frozenset(
     {"application/pdf", "application/x-pdf", "application/octet-stream"}
 )
 _PDF_MAGIC = b"%PDF-"
+_DOCUMENT_ID_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+_CROSSEXAM_ROOT = Path(__file__).resolve().parents[2]
 
 
 # --------------------------------------------------------------------------- #
@@ -101,6 +105,10 @@ class DocumentResponse(BaseModel):
     pages: int
     chunks_indexed: int
     mode: str = Field(description="'moss' when upserted to Moss, else 'mock'.")
+    pdf_url: str | None = Field(
+        default=None,
+        description="API-relative URL for the persisted uploaded PDF.",
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -122,6 +130,16 @@ def _moss_configured(settings: Settings) -> bool:
     return settings.has_moss_credentials and _moss_import_available() is not None
 
 
+def _uploaded_pdf_path(settings: Settings, document_id: str) -> Path:
+    """Return the persisted local PDF path for a backend-assigned document id."""
+    if not _DOCUMENT_ID_RE.fullmatch(document_id):
+        raise HTTPException(status_code=400, detail="Invalid document id.")
+    base = Path(settings.uploaded_pdf_dir)
+    if not base.is_absolute():
+        base = _CROSSEXAM_ROOT / base
+    return base / f"{document_id}.pdf"
+
+
 def _livekit_http_url(livekit_url: str | None) -> str | None:
     """Convert a LiveKit websocket URL into the HTTP API URL."""
     if livekit_url is None:
@@ -131,52 +149,6 @@ def _livekit_http_url(livekit_url: str | None) -> str | None:
     if livekit_url.startswith("ws://"):
         return "http://" + livekit_url[len("ws://") :]
     return livekit_url
-
-
-def _enum_value(enum: object, name: str) -> int | None:
-    """Return a protobuf enum value by name, tolerating SDK/test fakes."""
-    value = getattr(enum, "Value", None)
-    if not callable(value):
-        return None
-    try:
-        return int(value(name))
-    except Exception:  # noqa: BLE001 - enum wrappers/fakes vary by SDK version
-        return None
-
-
-def _dispatch_is_active(dispatch: object, lk_api: object) -> bool:
-    """Return ``True`` when an existing LiveKit agent dispatch can be reused."""
-    state = getattr(dispatch, "state", None)
-    if state is None:
-        return True
-    deleted_at = int(getattr(state, "deleted_at", 0) or 0)
-    if deleted_at > 0:
-        return False
-
-    jobs = list(getattr(state, "jobs", []) or [])
-    if not jobs:
-        # Newly-created dispatches can exist before a job is attached.
-        return True
-
-    job_status = getattr(lk_api, "JobStatus", None)
-    pending = _enum_value(job_status, "JS_PENDING")
-    running = _enum_value(job_status, "JS_RUNNING")
-    success = _enum_value(job_status, "JS_SUCCESS")
-    failed = _enum_value(job_status, "JS_FAILED")
-    active_statuses = {s for s in (pending, running) if s is not None}
-    terminal_statuses = {s for s in (success, failed) if s is not None}
-
-    for job in jobs:
-        job_state = getattr(job, "state", None)
-        if job_state is None:
-            return True
-        status = getattr(job_state, "status", None)
-        if status in active_statuses:
-            return True
-        ended_at = int(getattr(job_state, "ended_at", 0) or 0)
-        if ended_at <= 0 and status not in terminal_statuses:
-            return True
-    return False
 
 
 async def _ensure_agent_dispatch(
@@ -537,6 +509,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         finally:
             tmp_path.unlink(missing_ok=True)
 
+        upload_path = _uploaded_pdf_path(settings, document_id)
+        upload_path.parent.mkdir(parents=True, exist_ok=True)
+        upload_path.write_bytes(data)
+
         pages = ingest.page_count(records)
         if _moss_configured(settings):
             chunks_indexed, mode = await _index_to_moss(settings, records)
@@ -571,6 +547,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             pages=pages,
             chunks_indexed=chunks_indexed,
             mode=mode,
+            pdf_url=f"/documents/{document_id}/pdf",
+        )
+
+    @app.get("/documents/{document_id}/pdf")
+    async def document_pdf(document_id: str) -> FileResponse:
+        """Return the persisted PDF for an uploaded document id."""
+        path = _uploaded_pdf_path(settings, document_id)
+        if not path.is_file():
+            raise HTTPException(status_code=404, detail="Document PDF not found.")
+        return FileResponse(
+            path,
+            media_type="application/pdf",
+            filename=f"{document_id}.pdf",
         )
 
     return app

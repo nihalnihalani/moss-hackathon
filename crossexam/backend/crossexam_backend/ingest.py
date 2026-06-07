@@ -124,12 +124,18 @@ def _coalesce_transcript_records(
         if not boxes:
             return
         quads: list[dict[str, Any]] = []
+        quad_texts: list[str] = []
         for record in current:
+            body = _strip_transcript_line_number(str(record.get("text", "")))
             record_quads = record.get("quads")
             if isinstance(record_quads, list) and record_quads:
-                quads.extend(q for q in record_quads if isinstance(q, dict))
+                for quad in record_quads:
+                    if isinstance(quad, dict):
+                        quads.append(quad)
+                        quad_texts.append(body)
             elif isinstance(record.get("bbox"), dict):
                 quads.append(dict(record["bbox"]))
+                quad_texts.append(body)
         confidence_values = [
             float(r.get("confidence", 0.95) or 0.95) for r in current
         ]
@@ -145,6 +151,7 @@ def _coalesce_transcript_records(
                 "documentId": id_prefix,
                 "documentTitle": document_title,
                 "quads": quads or None,
+                "quadTexts": quad_texts or None,
                 "scanned": any(bool(r.get("scanned")) for r in current),
             }
         )

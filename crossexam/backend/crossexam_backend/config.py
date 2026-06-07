@@ -157,13 +157,15 @@ class Settings(BaseSettings):
     api_host: str = Field(default="0.0.0.0")  # noqa: S104 - bind-all is intended for the dev/container service  # noqa: E501
     api_port: int = Field(default=8000, ge=1, le=65535)
     # Comma-separated list of allowed CORS origins for the browser frontend.
-    cors_origins: str = Field(default="http://localhost:5173")
+    cors_origins: str = Field(default="http://localhost:5173,http://127.0.0.1:5173")
     # Default room a /token request joins when the body omits ``room``.
     livekit_default_room: str = Field(default="crossexam")
     # Token TTL in seconds for minted LiveKit access tokens.
     token_ttl_seconds: int = Field(default=3600, ge=60, le=86400)
     # Max accepted upload size for POST /documents, in megabytes.
     max_upload_mb: int = Field(default=25, ge=1, le=200)
+    # Directory where POST /documents persists source PDFs for later rendering.
+    uploaded_pdf_dir: str = Field(default="runtime/uploads")
 
     @property
     def cors_origin_list(self) -> list[str]:

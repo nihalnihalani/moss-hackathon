@@ -63,3 +63,14 @@ def test_transcript_records_coalesce_into_answer_sized_chunks() -> None:
         in record["text"]
         for record in coalesced
     )
+    matching = next(
+        record
+        for record in coalesced
+        if "A Sunny Balwani was overseeing the lab and software side."
+        in record["text"]
+    )
+    assert matching["quads"]
+    assert matching["quadTexts"]
+    assert len(matching["quadTexts"]) == len(matching["quads"])
+    assert any("A Sunny Balwani" in text for text in matching["quadTexts"])
+    assert all(not text.split(" ", 1)[0].isdigit() for text in matching["quadTexts"])

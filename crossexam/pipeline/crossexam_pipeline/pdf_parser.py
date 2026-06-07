@@ -276,6 +276,27 @@ def _line_quads(words: list[WordCitation], page: int, page_w: float, page_h: flo
     return quads
 
 
+def _line_texts(words: list[WordCitation]) -> list[str]:
+    """Return per-line text snippets parallel to :func:`_line_quads`."""
+    if not words:
+        return []
+    y_tol = 3.0
+    lines: list[list[WordCitation]] = []
+    for w in sorted(words, key=lambda c: (round(c.bbox.y0, 1), c.bbox.x0)):
+        placed = False
+        for line in lines:
+            if abs(line[0].bbox.y0 - w.bbox.y0) <= y_tol:
+                line.append(w)
+                placed = True
+                break
+        if not placed:
+            lines.append([w])
+    lines.sort(key=lambda ln: ln[0].bbox.y0)
+    for line in lines:
+        line.sort(key=lambda c: c.bbox.x0)
+    return [" ".join(w.text for w in line).strip() for line in lines]
+
+
 class PdfTextParser:
     """Parses a born-digital PDF's text layer into :class:`ParsedChunk` records.
 
@@ -346,6 +367,7 @@ class PdfTextParser:
                     y1 = max(c.bbox.y1 for c in citations)
                     conf = round(sum(c.confidence for c in citations) / len(citations), 4)
                     quads = _line_quads(citations, page_idx, page_w, page_h)
+                    quad_texts = _line_texts(citations)
                     chunks.append(
                         ParsedChunk(
                             id=f"{self.id_prefix}-p{page_idx}-l{line_idx}",
@@ -364,6 +386,7 @@ class PdfTextParser:
                             document_id=self.document_id,
                             document_title=self.document_title,
                             quads=quads,
+                            quad_texts=quad_texts,
                             words=citations,
                             source="pdf-text",
                         )

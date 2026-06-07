@@ -500,6 +500,45 @@ class MossIndex(RetrievalIndex):
         document_title = get(match, "documentTitle", get(meta, "documentTitle", None))
         scanned = cls._coerce_bool(get(match, "scanned", get(meta, "scanned", False)))
 
+        quads: list[BBox] = []
+        quads_value = get(match, "quads", get(meta, "quads", None))
+        quads_raw = cls._coerce_json(quads_value, [])
+        if isinstance(quads_raw, list):
+            for item in quads_raw:
+                if not isinstance(item, dict):
+                    continue
+                try:
+                    quads.append(
+                        BBox(
+                            page=cls._coerce_int(get(item, "page", page), page),
+                            x0=cls._coerce_float(get(item, "x0", 0.0), 0.0),
+                            y0=cls._coerce_float(get(item, "y0", 0.0), 0.0),
+                            x1=cls._coerce_float(get(item, "x1", 0.0), 0.0),
+                            y1=cls._coerce_float(get(item, "y1", 0.0), 0.0),
+                            page_width=cls._coerce_float(
+                                get(item, "page_width", bbox.page_width),
+                                bbox.page_width,
+                            ),
+                            page_height=cls._coerce_float(
+                                get(item, "page_height", bbox.page_height),
+                                bbox.page_height,
+                            ),
+                        )
+                    )
+                except ValueError:
+                    logger.debug("moss_index.to_citation skipped malformed quad")
+
+        quad_texts: list[str] | None = None
+        quad_texts_value = get(match, "quadTexts", get(meta, "quadTexts", None))
+        quad_texts_raw = cls._coerce_json(quad_texts_value, [])
+        if isinstance(quad_texts_raw, list):
+            quad_texts = [str(item) for item in quad_texts_raw]
+        if quads and quad_texts is not None and len(quad_texts) != len(quads):
+            logger.debug(
+                "moss_index.to_citation dropped mismatched quadTexts length"
+            )
+            quad_texts = None
+
         chunk_kwargs: dict[str, Any] = {
             "id": str(get(match, "id", get(meta, "id", "unknown"))),
             "text": str(get(match, "text", get(meta, "text", ""))),
@@ -513,6 +552,10 @@ class MossIndex(RetrievalIndex):
         }
         if document_id is not None:
             chunk_kwargs["documentId"] = str(document_id)
+        if quads:
+            chunk_kwargs["quads"] = quads
+        if quad_texts is not None:
+            chunk_kwargs["quadTexts"] = quad_texts
         chunk = Chunk(**chunk_kwargs)
         raw_score = cls._coerce_float(get(match, "score", 0.0), 0.0)
         # Clamp into [0, 1] in case Moss returns distances/logits.
@@ -520,6 +563,7 @@ class MossIndex(RetrievalIndex):
         return Citation(
             chunk=chunk,
             score=score,
+            quads=chunk.quads,
             documentId=chunk.documentId,
             documentTitle=chunk.documentTitle,
             scanned=chunk.scanned,

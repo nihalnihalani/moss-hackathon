@@ -38,6 +38,14 @@ export interface UseBackendSessionOptions {
   forceMock?: boolean;
 }
 
+function newSessionRoom(): string {
+  const randomId =
+    typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID()
+      : Math.random().toString(36).slice(2);
+  return `crossexam-${randomId.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 12)}`;
+}
+
 export function useBackendSession(options: UseBackendSessionOptions = {}): BackendSession {
   const { forceMock } = options;
   const [session, setSession] = useState<BackendSession>({
@@ -79,7 +87,7 @@ export function useBackendSession(options: UseBackendSessionOptions = {}): Backe
           });
           return;
         }
-        const token = await requestToken({}, controller.signal);
+        const token = await requestToken({ room: newSessionRoom() }, controller.signal);
         if (cancelled) return;
         const url = token.url || config.livekitUrl || undefined;
         if (!url) {

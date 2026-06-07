@@ -61,6 +61,10 @@ describe('App startup session resolution', () => {
     );
     expect(fetchConfig).toHaveBeenCalledTimes(1);
     expect(requestToken).toHaveBeenCalledTimes(1);
+    expect(requestToken).toHaveBeenCalledWith(
+      { room: expect.stringMatching(/^crossexam-[a-zA-Z0-9_-]+$/) },
+      expect.any(AbortSignal),
+    );
   });
 
   it('falls back to MOCK when /config fails (backend unreachable)', async () => {

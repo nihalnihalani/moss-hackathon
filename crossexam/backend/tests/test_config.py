@@ -47,6 +47,15 @@ def test_defaults_for_top_k_and_alpha() -> None:
     assert settings.alpha == pytest.approx(0.8)
 
 
+def test_local_dev_cors_allows_localhost_and_loopback() -> None:
+    """Both common Vite dev origins should be accepted by default."""
+    settings = Settings(_env_file=None)  # type: ignore[call-arg]
+    assert settings.cors_origin_list == [
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ]
+
+
 def test_has_livekit_credentials_requires_all_three() -> None:
     """LiveKit credentials are only complete when all three are present."""
     partial = Settings(

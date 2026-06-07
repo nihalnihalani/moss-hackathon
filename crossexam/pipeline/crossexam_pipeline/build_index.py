@@ -224,6 +224,8 @@ def _chunk_metadata(c: ParsedChunk) -> dict[str, str]:
                 for q in c.quads
             ]
         )
+    if c.quad_texts:
+        metadata["quadTexts"] = json.dumps(list(c.quad_texts))
     return metadata
 
 

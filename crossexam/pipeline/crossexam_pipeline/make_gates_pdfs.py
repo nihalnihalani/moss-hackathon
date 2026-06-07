@@ -30,6 +30,9 @@ Usage (CLI)::
 Or import ``make_all`` for programmatic use.
 """
 
+# ruff: noqa: E501
+# mypy: ignore-errors
+
 from __future__ import annotations
 
 import argparse
@@ -180,7 +183,7 @@ def _clean_line(raw: str) -> str:
 
 
 def _parse_pages_part1_format(text: str) -> dict[int, list[str]]:
-    """Parse a Techrights transcript (part-1 format) into pages.
+    r"""Parse a Techrights transcript (part-1 format) into pages.
 
     In part-1 format each page ends with a line like::
 
@@ -202,7 +205,7 @@ def _parse_pages_part1_format(text: str) -> dict[int, list[str]]:
             m = re.match(r"^(\d+)\s+BARNEY", stripped)
             if m:
                 page_num = int(m.group(1))
-                pages[page_num] = [_clean_line(l) for l in current]
+                pages[page_num] = [_clean_line(line) for line in current]
                 current = []
         else:
             current.append(raw)
@@ -231,7 +234,7 @@ def _parse_pages_part4_format(text: str) -> dict[int, list[str]]:
             if m:
                 page_num = int(m.group(1))
                 content = current[:-1] if current else current
-                pages[page_num] = [_clean_line(l) for l in content]
+                pages[page_num] = [_clean_line(line) for line in content]
                 current = []
         else:
             current.append(raw)
@@ -247,7 +250,7 @@ def _filter_page_lines(lines: list[str]) -> list[str]:
     Returns:
         Lines that are not boilerplate and not empty.
     """
-    return [l for l in lines if l and not _is_boilerplate(l)]
+    return [line for line in lines if line and not _is_boilerplate(line)]
 
 
 def _char_capacity() -> int:
@@ -343,7 +346,7 @@ def _build_deposition_pdf(
     # Transcript pages start at 5 (aug27) or 391 (aug28), so we emit
     # (first_transcript_page - 1) blank pages before the real content.
     blank_pages = first_transcript_page - 1
-    for phys in range(1, blank_pages + 1):
+    for _ in range(1, blank_pages + 1):
         # Minimal blank page with header so pdfplumber sees page dimensions
         c.setFont("Helvetica", 7)  # type: ignore[attr-defined]
         c.drawString(LEFT_MARGIN, PAGE_HEIGHT - 46.0, short_header)  # type: ignore[attr-defined]

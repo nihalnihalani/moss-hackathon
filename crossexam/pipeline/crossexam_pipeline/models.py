@@ -119,6 +119,9 @@ class ParsedChunk(BaseModel):
     * ``quads`` (feat 2): per-LINE bounding boxes that hug the actual glyphs of
       the chunk across line wraps. ``bbox`` remains the UNION rect for the
       page-jump and the label; the frontend renders ``quads``.
+    * ``quad_texts``: per-line text snippets parallel to ``quads``. The backend
+      uses these to narrow broad transcript chunks to the exact evidence lines
+      before publishing highlight geometry.
     * ``scanned`` (feat 3): the source page was a scan (OCR / vision path), so
       the frontend shows a "scanned source" badge and ``quads`` are region boxes
       rather than tight glyph lines.
@@ -133,6 +136,7 @@ class ParsedChunk(BaseModel):
         document_title: Human-readable document label for the switcher.
         scanned: Whether the source page came from a scan / OCR path.
         quads: Per-line bounding boxes hugging the glyphs; union ~= ``bbox``.
+        quad_texts: Per-line strings parallel to ``quads``.
         words: Optional word-level citations within the chunk.
         source: Optional provenance tag, e.g. ``"unsiloed"`` or ``"fallback"``.
     """
@@ -163,6 +167,10 @@ class ParsedChunk(BaseModel):
         default_factory=list,
         description="Per-line glyph boxes; their union ~= bbox (feat 2).",
     )
+    quad_texts: list[str] = Field(
+        default_factory=list,
+        description="Per-line text snippets parallel to quads.",
+    )
     words: list[WordCitation] = Field(default_factory=list)
     source: str | None = Field(default=None)
 
@@ -176,7 +184,11 @@ class ParsedChunk(BaseModel):
         precedence when both are present.
         """
         if isinstance(data, dict):
-            mapped = {"documentId": "document_id", "documentTitle": "document_title"}
+            mapped = {
+                "documentId": "document_id",
+                "documentTitle": "document_title",
+                "quadTexts": "quad_texts",
+            }
             for wire, snake in mapped.items():
                 if wire in data and snake not in data:
                     data = {**data, snake: data[wire]}
@@ -194,6 +206,8 @@ class ParsedChunk(BaseModel):
                 raise ValueError(
                     f"quad.page ({q.page}) must match chunk.page ({self.page})"
                 )
+        if self.quads and self.quad_texts and len(self.quad_texts) != len(self.quads):
+            raise ValueError("quad_texts must be parallel to quads")
         return self
 
     def to_index_record(self) -> dict[str, Any]:
@@ -224,6 +238,8 @@ class ParsedChunk(BaseModel):
             record["scanned"] = True
         if self.quads:
             record["quads"] = [_bbox_to_dict(q) for q in self.quads]
+        if self.quad_texts:
+            record["quadTexts"] = list(self.quad_texts)
         return record
 
 

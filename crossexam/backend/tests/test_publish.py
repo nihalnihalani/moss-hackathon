@@ -138,6 +138,59 @@ async def test_frame_values_come_from_top_citation(index: MockIndex) -> None:
     assert citation["bbox"]["page_height"] == top.chunk.bbox.page_height
 
 
+def test_frame_focuses_transcript_quads_to_exact_evidence_lines() -> None:
+    """A broad transcript chunk publishes only the matching Q/A line boxes."""
+    quads = [
+        BBox(page=51, x0=72.0, y0=100.0, x1=520.0, y1=110.0),
+        BBox(page=51, x0=72.0, y0=112.0, x1=520.0, y1=122.0),
+        BBox(page=51, x0=72.0, y0=124.0, x1=520.0, y1=134.0),
+    ]
+    chunk = Chunk(
+        id="holmes-p51-t3",
+        text=(
+            "Q What was Mr. Balwani responsible for? "
+            "A Sunny Balwani was overseeing the lab and software side. "
+            "Unrelated continuation about scheduling."
+        ),
+        page=51,
+        bbox=BBox(page=51, x0=72.0, y0=100.0, x1=520.0, y1=134.0),
+        confidence=0.97,
+        documentId="holmes",
+        documentTitle="Holmes transcript",
+        quads=quads,
+        quadTexts=[
+            "Q What was Mr. Balwani responsible for?",
+            "A Sunny Balwani was overseeing the lab and software side.",
+            "Unrelated continuation about scheduling.",
+        ],
+    )
+    result = RetrievalResult(
+        query="What was Sunny Balwani overseeing?",
+        citations=[
+            Citation(
+                chunk=chunk,
+                score=0.93,
+                quads=chunk.quads,
+                documentId="holmes",
+                documentTitle="Holmes transcript",
+            )
+        ],
+        latency_ms=3.0,
+    )
+
+    frame = build_frame(result)
+    citation = frame["citations"][0]
+
+    assert citation["text"] == (
+        "Q What was Mr. Balwani responsible for? "
+        "A Sunny Balwani was overseeing the lab and software side."
+    )
+    assert len(citation["quads"]) == 2
+    assert [quad["y0"] for quad in citation["quads"]] == [100.0, 112.0]
+    assert citation["bbox"]["y0"] == pytest.approx(100.0)
+    assert citation["bbox"]["y1"] == pytest.approx(122.0)
+
+
 def test_frame_is_json_serializable() -> None:
     """The frame round-trips through JSON unchanged (it is the wire frame)."""
     frame = build_frame(_supported_result())

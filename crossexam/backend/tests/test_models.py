@@ -116,7 +116,7 @@ def test_citation_quads_must_match_bbox_page() -> None:
 
 
 def test_chunk_carries_document_fields() -> None:
-    """Chunk validates with documentId/quads/scanned."""
+    """Chunk validates with documentId/quads/quadTexts/scanned."""
     quad = BBox(page=12, x0=72.0, y0=120.0, x1=300.0, y1=132.0)
     chunk = Chunk(
         id="c1",
@@ -126,10 +126,26 @@ def test_chunk_carries_document_fields() -> None:
         documentId="exhibit-7",
         documentTitle="Exhibit 7",
         quads=[quad],
+        quadTexts=["matching line"],
         scanned=True,
     )
     assert chunk.documentId == "exhibit-7"
+    assert chunk.quadTexts == ["matching line"]
     assert chunk.scanned is True
+
+
+def test_chunk_quad_texts_must_match_quads_length() -> None:
+    """Per-line text snippets must stay parallel to per-line boxes."""
+    quad = BBox(page=12, x0=72.0, y0=120.0, x1=300.0, y1=132.0)
+    with pytest.raises(ValueError):
+        Chunk(
+            id="c1",
+            text="t",
+            page=12,
+            bbox=BBox(page=12, x0=72.0, y0=120.0, x1=540.0, y1=168.0),
+            quads=[quad],
+            quadTexts=["one", "two"],
+        )
 
 
 def test_memory_ref_model() -> None:

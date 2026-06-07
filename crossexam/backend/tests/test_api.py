@@ -51,6 +51,7 @@ def _mock_settings(tmp_path: Path) -> Settings:
     fixture = tmp_path / "chunks.json"
     return Settings(
         mock_fixture_path=str(fixture),
+        uploaded_pdf_dir=str(tmp_path / "uploads"),
         _env_file=None,  # type: ignore[call-arg]
     )
 
@@ -546,6 +547,10 @@ def test_documents_accepts_pdf_and_indexes_in_mock_mode(client: TestClient) -> N
     assert body["pages"] == 2
     assert body["chunks_indexed"] > 0
     assert body["document_id"].startswith("doc-")
+    assert body["pdf_url"] == f"/documents/{body['document_id']}/pdf"
+    pdf_resp = client.get(body["pdf_url"])
+    assert pdf_resp.status_code == 200
+    assert pdf_resp.content == pdf_bytes
     fixture_path = Path(client.app.state.settings.mock_fixture_path)  # type: ignore[attr-defined]
     records = json.loads(fixture_path.read_text(encoding="utf-8"))
     uploaded = [r for r in records if r["id"].startswith(body["document_id"])]
@@ -596,6 +601,7 @@ def _live_settings(tmp_path: Path) -> Settings:
         moss_index_name="crossexam-test",
         use_mocks=False,
         mock_fixture_path=str(tmp_path / "chunks.json"),
+        uploaded_pdf_dir=str(tmp_path / "uploads"),
         _env_file=None,  # type: ignore[call-arg]
     )
 

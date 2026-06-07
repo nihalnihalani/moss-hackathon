@@ -10,6 +10,7 @@ import {
   ApiError,
   apiBaseUrl,
   checkHealth,
+  documentPdfUrl,
   fetchConfig,
   requestToken,
   uploadDocument,
@@ -204,6 +205,7 @@ describe('uploadDocument', () => {
         pages: 42,
         chunks_indexed: 117,
         mode: 'live',
+        pdf_url: '/documents/doc-1/pdf',
       };
       xhr.onload?.();
     }
@@ -213,8 +215,16 @@ describe('uploadDocument', () => {
       pages: 42,
       chunksIndexed: 117,
       mode: 'live',
+      pdfUrl: '/documents/doc-1/pdf',
     });
     expect(progress).toContain(0.5);
+  });
+
+  it('builds a persisted PDF URL for an uploaded document id', () => {
+    expect(documentPdfUrl('doc-1')).toBe('http://localhost:8000/documents/doc-1/pdf');
+    expect(documentPdfUrl('doc with spaces')).toBe(
+      'http://localhost:8000/documents/doc%20with%20spaces/pdf',
+    );
   });
 
   it('rejects with ApiError on a non-2xx status', async () => {

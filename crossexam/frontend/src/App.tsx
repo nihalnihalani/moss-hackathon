@@ -33,7 +33,7 @@ import {
 import { ExportMenu } from './components/ExportMenu';
 import { MemoSheet } from './components/MemoSheet';
 import { buildMemo } from './lib/memo';
-import type { UploadResponse } from './lib/api';
+import { apiBaseUrl, documentPdfUrl, type UploadResponse } from './lib/api';
 import type { Citation, MemoryRef } from './types';
 
 const ENV = import.meta.env as Record<string, string | undefined>;
@@ -115,12 +115,14 @@ export function App(): JSX.Element {
     // Render the uploaded file locally so the canvas reflects the new document.
     // Key it by the backend-assigned documentId so a live citation referencing
     // that id resolves to THIS object URL (not a bundled fixture / the default).
-    const objectUrl = URL.createObjectURL(file);
+    const objectUrl = result.pdfUrl
+      ? new URL(result.pdfUrl, apiBaseUrl()).toString()
+      : URL.createObjectURL(file);
     setUploadedDocUrls((prev) => {
       const next = { ...prev };
       // Revoke any prior URL mapped to the same id so re-uploading never leaks (m3).
       const prior = next[result.documentId];
-      if (prior) URL.revokeObjectURL(prior);
+      if (prior?.startsWith('blob:')) URL.revokeObjectURL(prior);
       next[result.documentId] = objectUrl;
       return next;
     });
@@ -135,7 +137,7 @@ export function App(): JSX.Element {
   useEffect(() => {
     return () => {
       for (const url of Object.values(uploadedDocUrlsRef.current)) {
-        URL.revokeObjectURL(url);
+        if (url.startsWith('blob:')) URL.revokeObjectURL(url);
       }
     };
   }, []);
@@ -196,7 +198,9 @@ export function App(): JSX.Element {
   // (e.g. the scanned field-notes exhibit) resolves to undefined so PdfCanvas
   // draws its placeholder page — this is intentional, not "unavailable".
   const pdfUrl = useMemo<string | undefined>(() => {
-    if (activeDocId) return docUrlMap[activeDocId];
+    if (activeDocId) {
+      return docUrlMap[activeDocId] ?? (activeDocId.startsWith('doc-') ? documentPdfUrl(activeDocId) : undefined);
+    }
     return PDF_URL;
   }, [activeDocId, docUrlMap]);
 
@@ -206,7 +210,10 @@ export function App(): JSX.Element {
   // image — we show a clear "source PDF unavailable" state instead.
   const sourceUnavailable = useMemo(() => {
     if (!activeDocId) return false;
-    const known = activeDocId in DOC_TITLES || activeDocId in uploadedDocUrls;
+    const known =
+      activeDocId in DOC_TITLES ||
+      activeDocId in uploadedDocUrls ||
+      activeDocId.startsWith('doc-');
     return !known;
   }, [activeDocId, uploadedDocUrls]);
 
@@ -318,7 +325,9 @@ export function App(): JSX.Element {
     setDocLoaded(false);
     // Revoke every uploaded object URL (fixes the m3 leak) and clear the map.
     setUploadedDocUrls((prev) => {
-      for (const url of Object.values(prev)) URL.revokeObjectURL(url);
+      for (const url of Object.values(prev)) {
+        if (url.startsWith('blob:')) URL.revokeObjectURL(url);
+      }
       return {};
     });
     setLastUploadedId(null);
@@ -387,6 +396,7 @@ export function App(): JSX.Element {
   });
 
   // The mic affordance is a real button (pointer push-to-talk mirrors Space).
+  const micNeedsPermission = cx.micStatus === 'denied' && !micActive;
   const onMicDown = useCallback((): void => onTalkStart(), [onTalkStart]);
   const onMicUp = useCallback((): void => onTalkEnd(), [onTalkEnd]);
 
@@ -481,20 +491,24 @@ export function App(): JSX.Element {
             data-testid="mic-control"
             aria-keyshortcuts="Space"
             aria-pressed={micActive}
-            aria-label="Push to talk. Hold Space or this button to talk."
+            aria-label={
+              micNeedsPermission
+                ? 'Enable microphone. Hold Space or this button to talk.'
+                : 'Push to talk. Hold Space or this button to talk.'
+            }
             onPointerDown={onMicDown}
             onPointerUp={onMicUp}
             onPointerLeave={() => micActive && onMicUp()}
           >
             <Mic size={13} aria-hidden="true" />
-            {micActive ? 'Listening…' : 'Hold Space to talk'}
+            {micActive ? 'Listening…' : micNeedsPermission ? 'Enable mic' : 'Hold Space to talk'}
           </button>
           <span className="visually-hidden" role="status" aria-live="polite" data-testid="mic-announce">
             {micActive ? 'Listening…' : 'Mic off'}
           </span>
           {cx.micStatus === 'denied' && (
             <span className="mic-denied" role="alert" data-testid="mic-denied">
-              Microphone blocked — enable mic access so the co-pilot can hear you.
+              Microphone blocked — click Enable mic, then allow access in the browser.
             </span>
           )}
 

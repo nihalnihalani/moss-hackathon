@@ -415,9 +415,10 @@ const IDLE_SNAPSHOT: MutableSnapshot = {
 };
 
 export function useCrossExam(config: CrossExamConfig): CrossExamState {
+  const { forceMock, livekitUrl, livekitToken, connectTimeoutMs, onConnectFailed } = config;
   const isMock = useMemo(
-    () => config.forceMock === true || !config.livekitUrl || !config.livekitToken,
-    [config.forceMock, config.livekitUrl, config.livekitToken],
+    () => forceMock === true || !livekitUrl || !livekitToken,
+    [forceMock, livekitUrl, livekitToken],
   );
 
   const [snap, setSnap] = useState<MutableSnapshot>(() => ({ ...IDLE_SNAPSHOT }));
@@ -429,6 +430,8 @@ export function useCrossExam(config: CrossExamConfig): CrossExamState {
   // Best-effort publisher for the live data channel, set once a room connects.
   // Used to forward typed questions / push-to-talk signals to the agent.
   const publishRef = useRef<((payload: Record<string, unknown>) => void) | null>(null);
+  const enableMicRef = useRef<(() => Promise<boolean>) | null>(null);
+  const resumeRemoteAudioRef = useRef<(() => void) | null>(null);
   const remoteAudioElementsRef = useRef<HTMLMediaElement[]>([]);
 
   const clearTimers = useCallback(() => {
@@ -468,6 +471,8 @@ export function useCrossExam(config: CrossExamConfig): CrossExamState {
       setMicStatus('off');
       setOutputStream(null);
       publishRef.current = null;
+      enableMicRef.current = null;
+      resumeRemoteAudioRef.current = null;
       for (const el of remoteAudioElementsRef.current) {
         el.remove();
       }
@@ -486,7 +491,7 @@ export function useCrossExam(config: CrossExamConfig): CrossExamState {
         // leaves the presenter staring at a blank screen. Default: 5 s. The timeout
         // rejects with a recognisable sentinel so we can distinguish it from other
         // failures and call onConnectFailed to let the app auto-flip to mock mode.
-        const timeoutMs = config.connectTimeoutMs ?? 5000;
+        const timeoutMs = connectTimeoutMs ?? 5000;
         let timeoutId: ReturnType<typeof setTimeout> | undefined;
         const timeoutPromise = new Promise<never>((_, reject) => {
           timeoutId = setTimeout(
@@ -497,19 +502,19 @@ export function useCrossExam(config: CrossExamConfig): CrossExamState {
 
         try {
           await Promise.race([
-            room.connect(config.livekitUrl as string, config.livekitToken as string),
+            room.connect(livekitUrl as string, livekitToken as string),
             timeoutPromise,
           ]);
           // Connect won — cancel the pending timeout so it never fires late.
           clearTimeout(timeoutId);
-        } catch (connectErr) {
+        } catch {
           clearTimeout(timeoutId);
           if (!disposed) {
             setIsConnected(false);
             setMicStatus('off');
             setOutputStream(null);
             // Notify the app so it can auto-flip to mock mode.
-            config.onConnectFailed?.();
+            onConnectFailed?.();
           }
           // Disconnect the partially-opened room (best-effort).
           void room.disconnect();
@@ -533,6 +538,23 @@ export function useCrossExam(config: CrossExamConfig): CrossExamState {
             void lp.publishData?.(bytes);
           } catch {
             /* best-effort; the agent still drives state if this no-ops */
+          }
+        };
+        resumeRemoteAudioRef.current = (): void => {
+          for (const el of remoteAudioElementsRef.current) {
+            void el.play?.().catch(() => {
+              /* Browser autoplay policy can still require another user gesture. */
+            });
+          }
+        };
+        enableMicRef.current = async (): Promise<boolean> => {
+          try {
+            await room.localParticipant.setMicrophoneEnabled(true);
+            if (!disposed) setMicStatus('on');
+            return true;
+          } catch {
+            if (!disposed) setMicStatus('denied');
+            return false;
           }
         };
 
@@ -581,9 +603,7 @@ export function useCrossExam(config: CrossExamConfig): CrossExamState {
           el.style.display = 'none';
           document.body.appendChild(el);
           remoteAudioElementsRef.current.push(el);
-          void el.play?.().catch(() => {
-            /* Browser autoplay policy can still require a user gesture. */
-          });
+          resumeRemoteAudioRef.current?.();
         };
         const onTrackUnsubscribed = (track: { kind: string; detach?: () => HTMLMediaElement[] }): void => {
           if (track.kind !== Track.Kind.Audio) return;
@@ -602,18 +622,15 @@ export function useCrossExam(config: CrossExamConfig): CrossExamState {
 
         // PUBLISH THE MIC: enable the local microphone after handlers are wired
         // so we cannot miss the agent's first subscribed audio track.
-        try {
-          await room.localParticipant.setMicrophoneEnabled(true);
-          if (!disposed) setMicStatus('on');
-        } catch {
-          if (!disposed) setMicStatus('denied');
-        }
+        await enableMicRef.current();
 
         cleanup = () => {
           room.off(RoomEvent.DataReceived, onData);
           room.off(RoomEvent.TrackSubscribed, onTrackSubscribed);
           room.off(RoomEvent.TrackUnsubscribed, onTrackUnsubscribed);
           publishRef.current = null;
+          enableMicRef.current = null;
+          resumeRemoteAudioRef.current = null;
           setOutputStream(null);
           setMicStatus('off');
           for (const el of remoteAudioElementsRef.current) {
@@ -630,7 +647,7 @@ export function useCrossExam(config: CrossExamConfig): CrossExamState {
           setIsConnected(false);
           setMicStatus('off');
           setOutputStream(null);
-          config.onConnectFailed?.();
+          onConnectFailed?.();
         }
       }
     })();
@@ -641,10 +658,10 @@ export function useCrossExam(config: CrossExamConfig): CrossExamState {
     };
   }, [
     isMock,
-    config.livekitUrl,
-    config.livekitToken,
-    config.connectTimeoutMs,
-    config.onConnectFailed,
+    livekitUrl,
+    livekitToken,
+    connectTimeoutMs,
+    onConnectFailed,
   ]);
 
   useEffect(() => () => clearTimers(), [clearTimers]);
@@ -661,6 +678,9 @@ export function useCrossExam(config: CrossExamConfig): CrossExamState {
     if (isMock) {
       setSnap((prev) => ({ ...prev, agentState: 'listening', silenceReason: null }));
     } else {
+      setSnap((prev) => ({ ...prev, agentState: 'listening', silenceReason: null }));
+      resumeRemoteAudioRef.current?.();
+      void enableMicRef.current?.();
       publishRef.current?.({ type: 'ptt', state: 'start' });
     }
   }, [isMock]);
@@ -671,6 +691,7 @@ export function useCrossExam(config: CrossExamConfig): CrossExamState {
     if (isMock) {
       setSnap((prev) => (prev.agentState === 'listening' ? { ...prev, agentState: 'idle' } : prev));
     } else {
+      setSnap((prev) => (prev.agentState === 'listening' ? { ...prev, agentState: 'idle' } : prev));
       publishRef.current?.({ type: 'ptt', state: 'stop' });
     }
   }, [isMock]);
@@ -736,6 +757,7 @@ export function useCrossExam(config: CrossExamConfig): CrossExamState {
           }));
         }
       } else {
+        resumeRemoteAudioRef.current?.();
         publishRef.current?.({ type: 'ask', text: q });
         setSnap((prev) => ({ ...prev, question: q, agentState: 'thinking' }));
       }

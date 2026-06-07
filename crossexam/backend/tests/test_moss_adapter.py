@@ -380,6 +380,26 @@ def _string_contract_result() -> FakeResult:
         "page_height": 792.0,
     }
     words = [{"text": "warehouse", "bbox": bbox, "confidence": 0.99}]
+    quads = [
+        {
+            "page": 3,
+            "x0": 72.0,
+            "y0": 120.5,
+            "x1": 300.0,
+            "y1": 132.0,
+            "page_width": 612.0,
+            "page_height": 792.0,
+        },
+        {
+            "page": 3,
+            "x0": 72.0,
+            "y0": 134.0,
+            "x1": 540.0,
+            "y1": 156.25,
+            "page_width": 612.0,
+            "page_height": 792.0,
+        },
+    ]
     return FakeResult(
         docs=[
             FakeDoc(
@@ -394,6 +414,10 @@ def _string_contract_result() -> FakeResult:
                     "confidence": "0.97",
                     "bbox": json.dumps(bbox),
                     "words": json.dumps(words),
+                    "quads": json.dumps(quads),
+                    "quadTexts": json.dumps(
+                        ["The witness remained", "past midnight."]
+                    ),
                 },
             ),
         ],
@@ -436,6 +460,16 @@ async def test_string_contract_scanned_and_doc_fields(string_index: MossIndex) -
     assert cit.scanned is True
     assert cit.documentId == "depo-001"
     assert cit.documentTitle == "Holloway Deposition"
+
+
+async def test_string_contract_quads_and_quad_texts(string_index: MossIndex) -> None:
+    """Moss string metadata restores line quads and parallel line text."""
+    result = await string_index.query("warehouse", top_k=5)
+    cit = result.citations[0]
+    assert cit.quads is not None
+    assert len(cit.quads) == 2
+    assert cit.quads[0].y0 == pytest.approx(120.5)
+    assert cit.chunk.quadTexts == ["The witness remained", "past midnight."]
 
 
 async def test_malformed_json_bbox_falls_back_to_default() -> None:

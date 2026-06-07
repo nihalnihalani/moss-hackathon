@@ -13,7 +13,7 @@
  * like App.tsx does (page = targetPage, citation = activeCitation).
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { render, screen, act, waitFor } from '@testing-library/react';
+import { render, screen, act, waitFor, fireEvent } from '@testing-library/react';
 import { PdfCanvas } from '../../components/PdfCanvas';
 import { Captions } from '../../components/Captions';
 import { LiveLatencyBadge } from '../../components/LiveLatencyBadge';
@@ -100,6 +100,12 @@ function Harness(): JSX.Element {
       <span data-testid="agent-state">{cx.agentState}</span>
       <span data-testid="proactive">{String(cx.proactive)}</span>
       <span data-testid="silence">{cx.silenceReason ?? 'none'}</span>
+      <button type="button" data-testid="talk-start" onPointerDown={cx.startListening}>
+        Talk
+      </button>
+      <button type="button" data-testid="ask-live" onClick={() => cx.ask('What did the witness say?')}>
+        Ask
+      </button>
       <LiveLatencyBadge latencyMs={cx.lastLatencyMs} />
       <Captions
         text={cx.caption}
@@ -182,6 +188,10 @@ describe('live citation path (LiveKit DataReceived -> PdfCanvas)', () => {
     await waitFor(() => expect(play).toHaveBeenCalled());
     expect(document.querySelector('[data-crossexam-agent-audio]')).toBe(el);
 
+    play.mockClear();
+    fireEvent.click(screen.getByTestId('ask-live'));
+    await waitFor(() => expect(play).toHaveBeenCalled());
+
     act(() => {
       capturedOnTrackUnsubscribed?.({
         kind: Track.Kind.Audio,
@@ -199,6 +209,18 @@ describe('live citation path (LiveKit DataReceived -> PdfCanvas)', () => {
     await waitFor(() => expect(screen.getByTestId('mic-status').textContent).toBe('denied'));
     // Still connected — a denied mic must not crash or disconnect the room.
     expect(screen.getByTestId('connected').textContent).toBe('true');
+  });
+
+  it('retries microphone publication from a push-to-talk user gesture after initial denial', async () => {
+    setMicrophoneEnabled.mockRejectedValueOnce(new Error('NotAllowedError'));
+    render(<Harness />);
+    await waitFor(() => expect(screen.getByTestId('mic-status').textContent).toBe('denied'));
+
+    fireEvent.pointerDown(screen.getByTestId('talk-start'));
+
+    await waitFor(() => expect(setMicrophoneEnabled).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.getByTestId('mic-status').textContent).toBe('on'));
+    expect(screen.getByTestId('agent-state').textContent).toBe('listening');
   });
 
   it('sets crossDocument from a live frame', async () => {

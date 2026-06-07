@@ -4,7 +4,8 @@
  * The backend exposes:
  *   GET  {VITE_API_URL}/config    -> { livekit_url: string|null, live: boolean }
  *   POST {VITE_API_URL}/token     -> { token, room, url | livekit_url }
- *   POST {VITE_API_URL}/documents -> { document_id, pages, chunks_indexed, mode }
+ *   POST {VITE_API_URL}/documents -> { document_id, pages, chunks_indexed, mode, pdf_url? }
+ *   GET  {VITE_API_URL}/documents/{id}/pdf -> persisted uploaded PDF bytes
  *   GET  {VITE_API_URL}/healthz   -> 200 when up
  *
  * Every call is defensively typed: responses are narrowed at runtime so a
@@ -58,10 +59,16 @@ export interface UploadResponse {
   pages: number;
   chunksIndexed: number;
   mode: string;
+  pdfUrl?: string;
 }
 
 /** Progress callback for uploadDocument (0..1, or undefined if indeterminate). */
 export type UploadProgress = (fraction: number | undefined) => void;
+
+/** Resolve the API URL serving a persisted uploaded PDF. */
+export function documentPdfUrl(documentId: string): string {
+  return `${apiBaseUrl()}/documents/${encodeURIComponent(documentId)}/pdf`;
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
@@ -206,6 +213,7 @@ export function uploadDocument(
         pages: data.pages,
         chunksIndexed: data.chunks_indexed,
         mode: data.mode,
+        pdfUrl: typeof data.pdf_url === 'string' ? data.pdf_url : undefined,
       });
     };
 
