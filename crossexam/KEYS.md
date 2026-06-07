@@ -82,6 +82,11 @@ cp .env.example .env                              # 1. fill MOSS_PROJECT_ID/KEY
 
 make install-moss                                 # 2. install [moss] (backend + pipeline)
 
+# 2b. one-time: fetch the LiveKit voice model weights (turn-detector + Silero VAD).
+#     Required for a live voice worker; without it the worker degrades to VAD
+#     turn detection. run.sh / the Docker image do this automatically.
+python -m livekit.agents download-files
+
 make verify-live                                  # 3. real load_index probe (creds present)
 #    -> prints READY + a live get_index/load_index round-trip via doctor --probe
 

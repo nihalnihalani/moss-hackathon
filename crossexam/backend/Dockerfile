@@ -56,6 +56,15 @@ COPY fixtures ./fixtures
 
 USER crossexam
 
+# Pre-download the LiveKit voice model weights (turn-detector multilingual model +
+# Silero VAD) into the image so a live voice worker starts immediately with no
+# first-run network fetch. Run as the runtime user so the cache lands in this
+# user's HOME and persists in the image. Tolerant: a mock-only image (built with
+# INSTALL_EXTRAS="" so the voice plugins are absent) has nothing to fetch, and a
+# missing turn-detector model degrades to VAD turn detection at runtime
+# (see crossexam_backend/server.py _build_turn_detection).
+RUN python -m livekit.agents download-files || true
+
 # Runs the LiveKit worker; falls back to a helpful message + mock index when
 # livekit-agents / credentials are absent (see crossexam_backend/server.py).
 ENTRYPOINT ["python", "-m", "crossexam_backend.server"]

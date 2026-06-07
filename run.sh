@@ -130,6 +130,18 @@ if [ "$MOSS_READY" = "1" ]; then
   fi
 fi
 
+# LiveKit voice models: the turn-detector multilingual model + Silero VAD weights
+# are fetched separately from the pip install. Pre-download them (idempotent —
+# download-files skips already-cached files) so the worker's first session starts
+# without a cold-download stall. Tolerant: if the turn-detector plugin isn't
+# installed (mock-only) we skip; if the download fails the worker degrades to
+# VAD turn detection (see crossexam_backend/server.py _build_turn_detection).
+if "$PY" -c "import livekit.plugins.turn_detector" >/dev/null 2>&1; then
+  "$PY" -m livekit.agents download-files >/dev/null 2>&1 \
+    && ok "LiveKit voice models present" \
+    || warn "LiveKit model download skipped/failed — worker falls back to VAD turn detection"
+fi
+
 # frontend deps?
 if [ -d "$FRONTEND/node_modules" ]; then
   ok "frontend deps present"

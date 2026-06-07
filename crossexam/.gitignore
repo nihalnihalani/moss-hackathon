@@ -27,5 +27,12 @@ coverage/
 # pipeline `make index` artifacts
 pipeline/build/
 
+# run.sh / make dev-live runtime logs
+logs/
+
+# installed agent skills (npx skills add) — not source
+.agents/
+skills-lock.json
+
 # OS
 .DS_Store

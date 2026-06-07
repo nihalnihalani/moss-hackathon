@@ -108,6 +108,7 @@ REST API** — there is no `MOSS_BASE_URL`. Flip from mock to real like this:
 ```bash
 cp .env.example .env                 # set MOSS_PROJECT_ID/KEY and USE_MOCKS=false
 make install-moss                    # install backend + pipeline with the [moss] extra
+python -m livekit.agents download-files   # one-time: fetch turn-detector + Silero VAD weights
 make verify-live                     # with creds present this runs a REAL load_index probe
 # pre-build the index offline from your PDFs, then serve it live:
 cd pipeline && python -m crossexam_pipeline.cli build-index \

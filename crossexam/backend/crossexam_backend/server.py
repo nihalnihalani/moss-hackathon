@@ -232,6 +232,16 @@ def _build_turn_detection() -> object | None:
             "turn-detector plugin not installed; session uses VAD turn detection."
         )
         return None
+    except Exception:  # noqa: BLE001 - a missing/failed model must NOT kill the session
+        # The model weights are fetched separately (`python -m livekit.agents
+        # download-files`). If they are absent or fail to load, degrade to
+        # VAD-based turn detection instead of crashing the whole voice session.
+        logger.warning(
+            "turn-detector model unavailable (run `python -m livekit.agents "
+            "download-files`); falling back to VAD turn detection.",
+            exc_info=True,
+        )
+        return None
 
 
 async def _livekit_entrypoint(ctx: Any) -> None:  # noqa: ANN401
