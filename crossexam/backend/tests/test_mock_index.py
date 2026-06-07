@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from crossexam_backend.models import BBox, Chunk
 from crossexam_backend.retrieval.mock_index import MockIndex
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "sample_chunks.json"
@@ -127,8 +128,6 @@ def test_from_fixture_missing_file() -> None:
 # --------------------------------------------------------------------------- #
 def _multi_doc_index() -> MockIndex:
     """A self-contained 2-document index for the cross-doc query tests."""
-    from crossexam_backend.models import BBox, Chunk
-
     def _c(cid: str, text: str, page: int, doc: str) -> Chunk:
         bbox = BBox(page=page, x0=72.0, y0=100.0, x1=540.0, y1=136.0)
         return Chunk(id=cid, text=text, page=page, bbox=bbox, documentId=doc)
@@ -175,3 +174,108 @@ async def test_citation_carries_document_id_from_chunk(index: MockIndex) -> None
     for cit in result.citations:
         assert cit.documentId == cit.chunk.documentId
         assert cit.documentId
+
+
+# --------------------------------------------------------------------------- #
+# Legal transcript query wording                                              #
+# --------------------------------------------------------------------------- #
+def _single_doc_chunk(cid: str, text: str, page: int) -> Chunk:
+    bbox = BBox(page=page, x0=72.0, y0=100.0, x1=540.0, y1=136.0)
+    return Chunk(
+        id=cid,
+        text=text,
+        page=page,
+        bbox=bbox,
+        documentId="doc-test",
+        documentTitle="Transcript",
+    )
+
+
+def _legal_query_index() -> MockIndex:
+    return MockIndex(
+        [
+            _single_doc_chunk(
+                "cover",
+                "SECURITIES AND EXCHANGE COMMISSION WITNESS: Elizabeth Holmes "
+                "DATE: Tuesday, July 11, 2017",
+                1,
+            ),
+            _single_doc_chunk(
+                "appearance",
+                "APPEARANCES: On behalf of the Witness: Stephen Neal, Esq. "
+                "John Dwyer, Esq. Alexandra Leeper, Esq.",
+                2,
+            ),
+            _single_doc_chunk(
+                "sec-testimony",
+                "Q Have you had conversations about the substance of your SEC "
+                "testimony? A I have not.",
+                637,
+            ),
+            _single_doc_chunk(
+                "media",
+                "The beginning of Media No. 3 of Elizabeth Holmes.",
+                166,
+            ),
+            _single_doc_chunk(
+                "sunny-overseeing",
+                "Q Mr. Balwani was overseeing the lab and some product "
+                "development, particularly on the software side.",
+                51,
+            ),
+            _single_doc_chunk(
+                "sunny-email",
+                "Elizabeth Holmes to Sunny Balwani, subject line Forward "
+                "project test company overview.",
+                630,
+            ),
+            _single_doc_chunk(
+                "product",
+                "Q Were you also involved in product development? A I was the "
+                "CEO, so I would engage with different teams and was engaged "
+                "on the product challenges.",
+                51,
+            ),
+            _single_doc_chunk(
+                "product-data",
+                "Product development data on all the tests we created.",
+                853,
+            ),
+        ]
+    )
+
+
+async def test_legal_query_expansion_promotes_testimony_header() -> None:
+    """Natural witness/date wording should match transcript front matter."""
+    result = await _legal_query_index().query(
+        "Who was the witness and when was the SEC testimony taken?",
+        top_k=3,
+    )
+    assert result.citations[0].chunk.id == "cover"
+
+
+async def test_legal_query_expansion_matches_representation_language() -> None:
+    """'Represented' should match transcript 'On behalf of the Witness'."""
+    result = await _legal_query_index().query(
+        "Who represented Elizabeth Holmes at the deposition?",
+        top_k=3,
+    )
+    assert result.citations[0].chunk.id == "appearance"
+
+
+async def test_legal_query_expansion_promotes_involvement_answer() -> None:
+    """'Involvement' should match involved/engaged transcript answers."""
+    result = await _legal_query_index().query(
+        "What was Holmes involvement in product development?",
+        top_k=3,
+    )
+    assert result.citations[0].chunk.id == "product"
+
+
+async def test_legal_query_expansion_promotes_overseeing_answer() -> None:
+    """'Overseeing' should prefer the lab/software answer over subject lines."""
+    result = await _legal_query_index().query(
+        "What did Holmes say Sunny Balwani was overseeing?",
+        top_k=3,
+    )
+    assert result.citations[0].chunk.id == "sunny-overseeing"

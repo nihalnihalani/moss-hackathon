@@ -538,9 +538,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         document_id = f"doc-{uuid.uuid4().hex[:12]}"
         tmp_path = Path(tempfile.gettempdir()) / f"{document_id}.pdf"
+        document_title = Path(filename).name or f"{document_id}.pdf"
         tmp_path.write_bytes(data)
         try:
-            records = ingest.parse_pdf_to_records(tmp_path, id_prefix=document_id)
+            records = ingest.parse_pdf_to_records(
+                tmp_path,
+                id_prefix=document_id,
+                document_title=document_title,
+            )
         except ingest.PdfDependencyError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         except ingest.PdfParseError as exc:

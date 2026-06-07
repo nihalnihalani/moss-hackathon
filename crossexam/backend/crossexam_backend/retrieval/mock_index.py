@@ -86,10 +86,85 @@ _PROXIMITY_WEIGHT = 0.45
 # How many first-stage candidates to feed the optional second-stage reranker.
 _RERANK_CANDIDATES = 20
 
+# Common legal transcript phrasing differs from how users naturally ask
+# questions. Expand only the query side so "who represented..." can match
+# "On behalf of the Witness" / "representing Elizabeth Holmes", and "when was
+# testimony taken" can match front-matter DATE lines.
+_QUERY_EXPANSIONS: dict[str, tuple[str, ...]] = {
+    "deposition": ("testimony", "examination", "witness", "counsel"),
+    "involvement": ("involved", "overseeing", "engage", "engaged", "role"),
+    "overseeing": (
+        "lab",
+        "laboratory",
+        "software",
+        "product",
+        "development",
+        "operations",
+    ),
+    "represented": (
+        "represent",
+        "representing",
+        "represents",
+        "counsel",
+        "behalf",
+        "appearance",
+        "appearances",
+        "witness",
+        "esq",
+    ),
+    "representing": (
+        "represent",
+        "represented",
+        "represents",
+        "counsel",
+        "behalf",
+        "appearance",
+        "appearances",
+        "witness",
+        "esq",
+    ),
+    "taken": ("date", "time", "place"),
+    "testimony": ("date", "examination", "transcript", "witness"),
+}
+_REPRESENTATION_QUERY_TERMS = frozenset(
+    {"represented", "representing", "represent", "represents", "counsel"}
+)
+_REPRESENTATION_DOC_CUES = frozenset(
+    {
+        "represented",
+        "representing",
+        "represent",
+        "counsel",
+        "behalf",
+        "esq",
+        "appearance",
+        "appearances",
+    }
+)
+_INVOLVEMENT_QUERY_TERMS = frozenset({"involvement", "role"})
+_INVOLVEMENT_DOC_CUES = frozenset(
+    {"involved", "overseeing", "engage", "engaged", "role"}
+)
+_TESTIMONY_HEADER_DOC_CUES = frozenset({"date", "witness"})
+_LEGAL_INTENT_BOOST = 0.65
+_HEADER_INTENT_BOOST = 1.1
+
 
 def _tokenize(text: str) -> list[str]:
     """Lowercase, strip stopwords and split ``text`` into alphanumeric tokens."""
     return [t for t in _TOKEN_RE.findall(text.lower()) if t not in _STOPWORDS]
+
+
+def _expand_query_tokens(tokens: list[str]) -> list[str]:
+    """Add legal-transcript synonyms to user-query tokens."""
+    expanded = list(tokens)
+    seen = set(expanded)
+    for token in tokens:
+        for synonym in _QUERY_EXPANSIONS.get(token, ()):
+            if synonym not in seen:
+                expanded.append(synonym)
+                seen.add(synonym)
+    return expanded
 
 
 def _raw_tokens(text: str) -> list[str]:
@@ -305,6 +380,29 @@ class MockIndex(RetrievalIndex):
         ) / sum(_query_term_weight(t) * self._idf.get(t, 1.0) for t in distinct)
         return idf_mass * tightness
 
+    def _legal_intent_boost(
+        self, original_query_tokens: set[str], doc_idx: int
+    ) -> float:
+        """Boost transcript chunks that match legal-query intent cues."""
+        doc_terms = set(self._doc_vectors[doc_idx])
+        boost = 0.0
+        if (
+            original_query_tokens & _REPRESENTATION_QUERY_TERMS
+            and doc_terms & _REPRESENTATION_DOC_CUES
+        ):
+            boost += _LEGAL_INTENT_BOOST
+        if (
+            original_query_tokens & _INVOLVEMENT_QUERY_TERMS
+            and doc_terms & _INVOLVEMENT_DOC_CUES
+        ):
+            boost += _LEGAL_INTENT_BOOST
+        if (
+            {"witness", "taken"} <= original_query_tokens
+            and _TESTIMONY_HEADER_DOC_CUES <= doc_terms
+        ):
+            boost += _HEADER_INTENT_BOOST
+        return boost
+
     # -- hybrid fusion -------------------------------------------------------
     def _candidate_indices(
         self, query_term_set: set[str], doc_ids: set[str] | None = None
@@ -405,10 +503,12 @@ class MockIndex(RetrievalIndex):
         """
         start = time.perf_counter()
 
-        query_tokens = _tokenize(text)
+        original_query_tokens = _tokenize(text)
+        query_tokens = _expand_query_tokens(original_query_tokens)
         query_raw = _raw_tokens(text)
         query_vec: Counter[str] = Counter(query_tokens)
         query_term_set = set(query_tokens)
+        original_query_term_set = set(original_query_tokens)
 
         doc_filter = set(doc_ids) if doc_ids is not None else None
         candidates = self._candidate_indices(query_term_set, doc_filter)
@@ -423,6 +523,7 @@ class MockIndex(RetrievalIndex):
                 base
                 + _PHRASE_WEIGHT * phrase
                 + _PROXIMITY_WEIGHT * proximity
+                + self._legal_intent_boost(original_query_term_set, idx)
             )
             if blended > 0.0:
                 scored.append((blended, idx))

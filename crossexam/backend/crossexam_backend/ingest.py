@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -32,6 +33,14 @@ _DEFAULT_PAGE_H = 792.0
 # Top-to-top spacing (points) below which two physical lines belong to the same
 # wrapped paragraph. Mirrors the pipeline's ``_PARAGRAPH_GAP_MAX``.
 _PARAGRAPH_GAP_MAX = 18.0
+_LINE_NO_RE = re.compile(r"^\s*\d{1,2}\s+(?P<body>.+?)\s*$")
+_SPEAKER_START_RE = re.compile(
+    r"^(?:Q\b|A\b|MS\.|MR\.|THE WITNESS:|THE REPORTER:|BY\s+(?:MS\.|MR\.))"
+)
+_TURN_START_RE = re.compile(
+    r"^(?:Q\b|MS\.|MR\.|THE WITNESS:|THE REPORTER:|BY\s+(?:MS\.|MR\.))"
+)
+_TRANSCRIPT_BLOCK_MAX_LINES = 16
 
 
 class PdfParseError(RuntimeError):
@@ -42,7 +51,141 @@ class PdfDependencyError(RuntimeError):
     """Raised when no PDF text-layer parser dependency is available."""
 
 
-def _pipeline_records(pdf_path: Path, id_prefix: str) -> list[dict[str, Any]] | None:
+def _with_document_metadata(
+    records: list[dict[str, Any]], *, document_id: str, document_title: str
+) -> list[dict[str, Any]]:
+    """Stamp parsed records with the uploaded document identity."""
+    for record in records:
+        record["documentId"] = document_id
+        record["documentTitle"] = document_title
+    return records
+
+
+def _strip_transcript_line_number(text: str) -> str:
+    """Remove legal-transcript line numbers from one extracted line."""
+    match = _LINE_NO_RE.match(text)
+    if match:
+        return match.group("body").strip()
+    return text.strip()
+
+
+def _is_transcript_like(records: list[dict[str, Any]]) -> bool:
+    """Heuristic: many numbered lines and Q/A markers mean legal transcript."""
+    if len(records) < 100:
+        return False
+    numbered = 0
+    speaker_starts = 0
+    for record in records:
+        text = str(record.get("text", ""))
+        body = _strip_transcript_line_number(text)
+        if body != text.strip():
+            numbered += 1
+        if _SPEAKER_START_RE.match(body):
+            speaker_starts += 1
+    return numbered >= 100 and speaker_starts >= 20
+
+
+def _bbox_union(boxes: list[dict[str, Any]]) -> dict[str, Any]:
+    """Union several bbox dictionaries on the same page."""
+    page = int(boxes[0]["page"])
+    return {
+        "page": page,
+        "x0": round(min(float(b["x0"]) for b in boxes), 2),
+        "y0": round(min(float(b["y0"]) for b in boxes), 2),
+        "x1": round(max(float(b["x1"]) for b in boxes), 2),
+        "y1": round(max(float(b["y1"]) for b in boxes), 2),
+        "page_width": round(float(boxes[0].get("page_width", _DEFAULT_PAGE_W)), 2),
+        "page_height": round(float(boxes[0].get("page_height", _DEFAULT_PAGE_H)), 2),
+    }
+
+
+def _coalesce_transcript_records(
+    records: list[dict[str, Any]], *, id_prefix: str, document_title: str
+) -> list[dict[str, Any]]:
+    """Merge legal transcript line chunks into answer-sized turn chunks."""
+    if not _is_transcript_like(records):
+        return records
+
+    out: list[dict[str, Any]] = []
+    current: list[dict[str, Any]] = []
+    current_bodies: list[str] = []
+    current_page: int | None = None
+    block_idx_by_page: dict[int, int] = {}
+
+    def flush() -> None:
+        if not current or current_page is None:
+            return
+        text = " ".join(current_bodies).strip()
+        if not text:
+            return
+        block_idx = block_idx_by_page.get(current_page, 0) + 1
+        block_idx_by_page[current_page] = block_idx
+        boxes = [dict(r["bbox"]) for r in current if isinstance(r.get("bbox"), dict)]
+        if not boxes:
+            return
+        quads: list[dict[str, Any]] = []
+        for record in current:
+            record_quads = record.get("quads")
+            if isinstance(record_quads, list) and record_quads:
+                quads.extend(q for q in record_quads if isinstance(q, dict))
+            elif isinstance(record.get("bbox"), dict):
+                quads.append(dict(record["bbox"]))
+        confidence_values = [
+            float(r.get("confidence", 0.95) or 0.95) for r in current
+        ]
+        out.append(
+            {
+                "id": f"{id_prefix}-p{current_page}-t{block_idx}",
+                "text": text,
+                "page": current_page,
+                "bbox": _bbox_union(boxes),
+                "confidence": round(
+                    sum(confidence_values) / len(confidence_values), 4
+                ),
+                "documentId": id_prefix,
+                "documentTitle": document_title,
+                "quads": quads or None,
+                "scanned": any(bool(r.get("scanned")) for r in current),
+            }
+        )
+
+    for record in records:
+        page = int(record["page"])
+        body = _strip_transcript_line_number(str(record.get("text", "")))
+        if body.isdigit():
+            continue
+        turn_start = bool(_TURN_START_RE.match(body))
+        if (
+            current
+            and (
+                page != current_page
+                or turn_start
+                or (
+                    len(current_bodies) >= _TRANSCRIPT_BLOCK_MAX_LINES
+                    and not current_bodies[-1].endswith("-")
+                )
+            )
+        ):
+            flush()
+            current = []
+            current_bodies = []
+        current.append(record)
+        current_bodies.append(body)
+        current_page = page
+    flush()
+
+    logger.info(
+        "ingest.transcript_coalesce records=%d chunks=%d title=%s",
+        len(records),
+        len(out),
+        document_title,
+    )
+    return out or records
+
+
+def _pipeline_records(
+    pdf_path: Path, id_prefix: str, *, document_title: str
+) -> list[dict[str, Any]] | None:
     """Parse via the real pipeline parser if it is installed, else ``None``.
 
     Returns backend-compatible chunk records (``to_index_record`` shape) so the
@@ -54,7 +197,16 @@ def _pipeline_records(pdf_path: Path, id_prefix: str) -> list[dict[str, Any]] | 
         return None
     parser = PdfTextParser(pdf_path, id_prefix=id_prefix)
     chunks = parser.parse()
-    return [c.to_index_record() for c in chunks]
+    records = _with_document_metadata(
+        [c.to_index_record() for c in chunks],
+        document_id=id_prefix,
+        document_title=document_title,
+    )
+    return _coalesce_transcript_records(
+        records,
+        id_prefix=id_prefix,
+        document_title=document_title,
+    )
 
 
 def _stable_confidence(text: str, floor: float = 0.90, ceiling: float = 0.99) -> float:
@@ -103,7 +255,9 @@ def _group_lines_into_paragraphs(
     return paragraphs
 
 
-def _fallback_records(pdf_path: Path, id_prefix: str) -> list[dict[str, Any]]:
+def _fallback_records(
+    pdf_path: Path, id_prefix: str, *, document_title: str
+) -> list[dict[str, Any]]:
     """Self-contained ``pdfplumber`` text-layer parse to backend chunk records.
 
     Used only when the pipeline package is not installed. Coordinates are in PDF
@@ -155,6 +309,8 @@ def _fallback_records(pdf_path: Path, id_prefix: str) -> list[dict[str, Any]]:
                             "page_height": round(page_h, 2),
                         },
                         "confidence": _stable_confidence(text),
+                        "documentId": id_prefix,
+                        "documentTitle": document_title,
                     }
                 )
     logger.info(
@@ -162,10 +318,19 @@ def _fallback_records(pdf_path: Path, id_prefix: str) -> list[dict[str, Any]]:
         len(records),
         pdf_path.name,
     )
-    return records
+    return _coalesce_transcript_records(
+        records,
+        id_prefix=id_prefix,
+        document_title=document_title,
+    )
 
 
-def parse_pdf_to_records(pdf_path: Path | str, id_prefix: str = "doc") -> list[dict[str, Any]]:
+def parse_pdf_to_records(
+    pdf_path: Path | str,
+    id_prefix: str = "doc",
+    *,
+    document_title: str | None = None,
+) -> list[dict[str, Any]]:
     """Parse a PDF into backend-compatible chunk records.
 
     Prefers the installed pipeline parser; otherwise falls back to a
@@ -175,6 +340,8 @@ def parse_pdf_to_records(pdf_path: Path | str, id_prefix: str = "doc") -> list[d
         pdf_path: Path to the source PDF on disk.
         id_prefix: Prefix used for the generated chunk ids (keeps ids unique
             across uploaded documents).
+        document_title: Human label for the uploaded document. Defaults to the
+            source PDF filename.
 
     Returns:
         A list of chunk records, each shaped like the JSON fixture entries.
@@ -189,9 +356,10 @@ def parse_pdf_to_records(pdf_path: Path | str, id_prefix: str = "doc") -> list[d
     if not path.is_file():
         raise FileNotFoundError(f"PDF not found: {path}")
 
-    records = _pipeline_records(path, id_prefix)
+    title = document_title or path.name
+    records = _pipeline_records(path, id_prefix, document_title=title)
     if records is None:
-        records = _fallback_records(path, id_prefix)
+        records = _fallback_records(path, id_prefix, document_title=title)
 
     if not records:
         raise PdfParseError(

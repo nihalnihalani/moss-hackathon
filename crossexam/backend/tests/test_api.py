@@ -560,6 +560,12 @@ def test_documents_accepts_pdf_and_indexes_in_mock_mode(client: TestClient) -> N
     assert body["pages"] == 2
     assert body["chunks_indexed"] > 0
     assert body["document_id"].startswith("doc-")
+    fixture_path = Path(client.app.state.settings.mock_fixture_path)  # type: ignore[attr-defined]
+    records = json.loads(fixture_path.read_text(encoding="utf-8"))
+    uploaded = [r for r in records if r["id"].startswith(body["document_id"])]
+    assert uploaded
+    assert {r["documentId"] for r in uploaded} == {body["document_id"]}
+    assert {r["documentTitle"] for r in uploaded} == {"sample.pdf"}
 
 
 @pytest.mark.skipif(
