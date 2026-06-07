@@ -16,7 +16,7 @@
   /* Text */
   --text:        #e8eaf0;
   --text-dim:    #9aa0ae;
-  --text-mute:   #5c6270;
+  --text-mute:   #7a8394;
 
   /* THE accent — Evidence Amber. Rationed to citation, aura, focus, primary CTA */
   --amber:       #ffb020;
@@ -251,7 +251,7 @@ body {
 .live-latency__label {
   text-transform: uppercase;
   letter-spacing: 0.12em;
-  color: var(--text-mute);
+  color: var(--text-dim);
 }
 .live-latency__value {
   font-variant-numeric: tabular-nums;
@@ -460,8 +460,8 @@ body {
   border: 1px solid var(--hairline);
   background: rgba(19, 22, 29, 0.6);
   font-family: var(--font-mono);
-  font-size: 12px;
-  letter-spacing: 0.14em;
+  font-size: 13px;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--text-dim);
   transition: color var(--dur-med) var(--ease-emph), border-color var(--dur-med) var(--ease-emph);
@@ -514,7 +514,7 @@ body {
 }
 .state-pill__ambient {
   font-family: var(--font-mono);
-  font-size: 9px;
+  font-size: 11px;
   letter-spacing: 0.16em;
   text-transform: uppercase;
   color: #1a1206;
@@ -578,7 +578,7 @@ body {
   align-items: center;
   gap: 5px;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 13px;
   letter-spacing: 0.02em;
   color: var(--amber);
   background: var(--amber-soft);
@@ -609,7 +609,7 @@ body {
   align-items: center;
   gap: 6px;
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 11px;
   letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--amber);
@@ -701,7 +701,7 @@ body {
   font-family: var(--font-serif);
   font-size: 13px;
   line-height: 1.5;
-  color: var(--text-mute);
+  color: var(--text-dim);
 }
 
 /* ============================================================================
@@ -765,7 +765,7 @@ body {
 
 /* latency chip */
 .latency-chip {
-  font-size: 12px;
+  font-size: 13px;
   color: var(--text-dim);
   animation: chip-pop var(--dur-snap) var(--ease-snap) both;
   will-change: transform;
@@ -875,7 +875,7 @@ body {
   z-index: 10;
   border-radius: 3px;
   background: var(--amber-soft);
-  border: 2px solid var(--amber);
+  border: 3px solid var(--amber);
   cursor: pointer;
   transform-origin: center;
   animation: bbox-snap var(--dur-snap) var(--ease-snap) both;
@@ -916,15 +916,16 @@ body {
   position: absolute;
   background: var(--amber);
 }
-.bbox-highlight__tick::before { top: 0; left: 0; width: 12px; height: 2px; }
-.bbox-highlight__tick::after { top: 0; left: 0; width: 2px; height: 12px; }
+.bbox-highlight__tick::before { top: 0; left: 0; width: 12px; height: 3px; }
+.bbox-highlight__tick::after { top: 0; left: 0; width: 3px; height: 12px; }
 
 .bbox-highlight__label {
   position: absolute;
   bottom: -30px;
   left: -1px;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 13px;
+  font-weight: 700;
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.02em;
   color: #1a1206;
@@ -960,7 +961,8 @@ body {
   align-items: center;
   gap: 5px;
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 12px;
+  font-weight: 700;
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: #1a1206;
@@ -1014,7 +1016,7 @@ body {
   align-items: center;
   gap: 5px;
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 11px;
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--state-listen);
@@ -1169,10 +1171,10 @@ body {
 }
 .hops__label {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 11px;
   letter-spacing: 0.14em;
   text-transform: uppercase;
-  color: var(--text-mute);
+  color: var(--text-dim);
 }
 .hops__step {
   display: flex;
@@ -1952,10 +1954,10 @@ body {
 
 /* Role label on the conflicting chips; counter chip = rose. */
 .contradiction__chip-role {
-  font-size: 9px;
+  font-size: 11px;
   letter-spacing: 0.1em;
   text-transform: uppercase;
-  color: var(--text-mute);
+  color: var(--text-dim);
   padding-right: 4px;
   border-right: 1px solid var(--hairline);
 }
