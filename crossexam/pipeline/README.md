@@ -65,11 +65,13 @@ pip install -e ".[dev]"        # includes the PDF tooling used by the demo
 pip install -e ".[pdf]"        # reportlab + pypdf + pdfplumber
 ```
 
-Runtime deps: `pydantic`, `typer`, `httpx`. The optional **`pdf`** extra adds
-`reportlab` (generate the sample PDF) and `pdfplumber`/`pypdf` (read a PDF text
-layer). Dev: `pytest`, `ruff`, `mypy` plus the `pdf` extra. The core tests run on
-**stdlib + pydantic** alone; the PDF tests skip cleanly when `reportlab`/
-`pdfplumber` are absent.
+Runtime deps: `pydantic`, `typer`, `httpx` (Unsiloed Parse/Extract HTTP client).
+The optional **`pdf`** extra adds `reportlab` (generate the sample PDF) and
+`pdfplumber`/`pypdf` (read a PDF text layer). The optional **`moss`** extra adds
+`inferedge-moss` (the in-process Moss SDK used by `build-index`). Dev: `pytest`,
+`ruff`, `mypy` plus the `pdf` extra. The core tests run on **stdlib + pydantic**
+alone; the PDF tests skip cleanly when `reportlab`/`pdfplumber` are absent, and
+the Moss-path tests use a fake SDK so they pass without `inferedge-moss`.
 
 ## Usage
 
@@ -120,11 +122,37 @@ the CLI exits with a clear message.
 
 ### 2. Build the index
 
-Upsert to Moss (requires all three Moss env vars):
+Create or upsert a Moss index (requires all three Moss env vars **and** the
+Moss SDK). Moss is an **in-process SDK** (`inferedge-moss`), not a REST API —
+there is no endpoint to POST to. Install the optional extra first:
 
 ```bash
+pip install -e ".[moss]"        # installs inferedge-moss
 crossexam-pipeline build-index --input chunks.json --index-name crossexam-demo
 ```
+
+**Async entry point.** The public async function is `build_index_async`; the
+synchronous CLI wrapper `build_index` drives it via `_run_async`. The backend
+`api.py` can `await build_index_async(...)` directly on its own event loop.
+
+**Job lifecycle.**  `create_index` and `add_docs` both kick off an asynchronous
+background job.  The pipeline submits the job and then polls
+`get_job_status(job_id)` until the job reaches `COMPLETED`, `FAILED`, or the
+`MOSS_JOB_TIMEOUT_S` wall-clock limit is exceeded.  The index is **not
+queryable** before `COMPLETED`.
+
+**Create vs upsert.**  The pipeline calls `get_index(name)` first:
+- Index already exists → `add_docs(name, docs, MutationOptions(upsert=True))`.
+- `get_index` raises (Rust backend surfaces "not found" as `RuntimeError`) →
+  `create_index(name, docs, model_id)`.
+
+Each chunk becomes a `DocumentInfo` whose **metadata values are all strings**
+(Moss rejects nested dicts/ints/floats/bools) — bbox/words/quads are
+JSON-encoded, scalars are stringified, and the backend parses them back out.
+The embedding model is `MOSS_MODEL_ID` (default `moss-minilm`).
+
+If the Moss SDK is not installed, `build-index` raises a clear error telling you
+to `pip install '.[moss]'`.
 
 Offline — write the backend-compatible mock fixture instead:
 
@@ -170,10 +198,12 @@ Also pure and idempotent.
 | ------------------- | ---------------------------------------------------- |
 | `UNSILOED_API_KEY`  | Enables the real Unsiloed Parse/Extract path.        |
 | `UNSILOED_BASE_URL` | Optional Unsiloed API base URL override.             |
-| `MOSS_PROJECT_ID`   | Moss project id (required to upsert to Moss).        |
-| `MOSS_API_KEY`      | Moss API key (required to upsert to Moss).           |
-| `MOSS_INDEX_NAME`   | Moss index name (required to upsert to Moss).        |
-| `MOSS_BASE_URL`     | Optional Moss API base URL override.                 |
+| `MOSS_PROJECT_ID`   | Moss project id (required to build the Moss index).  |
+| `MOSS_PROJECT_KEY`  | Moss project key (required to build the Moss index). |
+| `MOSS_INDEX_NAME`   | Moss index name (required to build the Moss index).  |
+| `MOSS_MODEL_ID`          | Moss embedding model (default `moss-minilm`).           |
+| `MOSS_JOB_TIMEOUT_S`     | Max seconds to wait for a Moss job (default `120`).     |
+| `MOSS_JOB_POLL_INTERVAL_S` | Seconds between job-status polls (default `1.0`).     |
 
 No secrets are stored in code; all credentials come from the environment.
 

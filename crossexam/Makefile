@@ -28,6 +28,7 @@ INDEX_OUT    := $(PIPELINE)/build/index_records.json
 
 .PHONY: help setup setup-backend setup-pipeline setup-frontend \
         dev dev-live api verify-live test test-backend test-pipeline test-frontend \
+        install-moss test-moss \
         lint lint-py lint-frontend fmt typecheck typecheck-py typecheck-frontend \
         eval bench build index clean
 
@@ -77,6 +78,32 @@ setup-pipeline:
 setup-frontend:
 	$(call need_npm)
 	cd "$(FRONTEND)" && $(NPM) ci
+
+# =============================================================================
+# moss (real in-process retrieval SDK — OPTIONAL; mock path needs none of this)
+# =============================================================================
+## install-moss: install backend + pipeline WITH the real Moss SDK ([dev,moss]).
+## Resolves inferedge-moss + its prebuilt native core. The app still runs without
+## it (MockIndex fallback); install only for the LIVE retrieval path.
+install-moss:
+	$(call need_py)
+	@echo ">> installing crossexam-backend[dev,moss] + crossexam-pipeline[dev,moss]"
+	$(PY) -m pip install -e "$(BACKEND)[dev,moss]" -e "$(PIPELINE)[dev,moss]"
+
+## test-moss: run BOTH pytest suites with the real Moss SDK present.
+## Exercises the real-SDK tests gated by pytest.importorskip("inferedge_moss").
+## Needs NO API keys (those tests make no network calls). Run `make install-moss`
+## first (or use the project venv at .venv where moss is already installed).
+test-moss:
+	$(call need_py)
+	@if ! $(PY) -c "import inferedge_moss" >/dev/null 2>&1; then \
+		echo ">> inferedge_moss not importable. Run 'make install-moss' first"; \
+		echo "   (or activate the project venv: source .venv/bin/activate)."; \
+		exit 1; \
+	fi
+	@echo ">> backend + pipeline pytest WITH real Moss SDK (no keys needed)"
+	cd "$(BACKEND)"  && $(PY) -m pytest
+	cd "$(PIPELINE)" && $(PY) -m pytest
 
 # =============================================================================
 # dev
@@ -172,14 +199,24 @@ typecheck-frontend:
 # =============================================================================
 # verify-live
 # =============================================================================
-## verify-live: preflight (doctor) + best-effort curl of /healthz and /config.
-## Prints the READY/MISSING/MOCK table, then probes the API at $(API_BASE).
-## If the server is not up, it prints guidance (start it with `make api`) and
-## still exits 0 — this target is a read-out, not a hard gate.
+## verify-live: preflight (doctor) + a real Moss smoke when creds are present.
+## Prints the READY/MISSING/MOCK table; if MOSS_PROJECT_ID and MOSS_PROJECT_KEY
+## are in the env it adds `doctor --probe` (a REAL load_index/get_index round-trip,
+## needs the [moss] extra). With no creds it prints a clear note and still
+## exits 0 — this target is a read-out, not a hard gate. Then it best-effort
+## curls /healthz and /config at $(API_BASE).
 verify-live:
 	$(call need_py)
 	@echo ">> crossexam-backend preflight (doctor — no network calls):"
 	@cd "$(BACKEND)" && $(PY) -m crossexam_backend.doctor || true
+	@echo ""
+	@if [ -n "$$MOSS_PROJECT_ID" ] && [ -n "$$MOSS_PROJECT_KEY" ]; then \
+		echo ">> Moss creds present — running a REAL load_index probe (doctor --probe):"; \
+		cd "$(BACKEND)" && $(PY) -m crossexam_backend.doctor --probe || true; \
+	else \
+		echo ">> MOSS_PROJECT_ID / MOSS_PROJECT_KEY not set — skipping the live Moss probe."; \
+		echo "   Set them (and 'make install-moss', USE_MOCKS=false) to smoke the real index."; \
+	fi
 	@echo ""
 	@echo ">> probing HTTP API at $(API_BASE) (best-effort):"
 	@if ! command -v curl >/dev/null 2>&1; then \

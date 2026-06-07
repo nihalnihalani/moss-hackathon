@@ -100,6 +100,28 @@ CrossExam is built to demo with **zero secrets**:
 
 Copy `.env.example` → `.env` only when you want to wire up the real services. `.env` is gitignored.
 
+## Going live with Moss
+
+The real retrieval path is the **in-process Moss SDK** (`inferedge-moss`), **not a
+REST API** — there is no `MOSS_BASE_URL`. Flip from mock to real like this:
+
+```bash
+cp .env.example .env                 # set MOSS_PROJECT_ID/KEY and USE_MOCKS=false
+make install-moss                    # install backend + pipeline with the [moss] extra
+make verify-live                     # with creds present this runs a REAL load_index probe
+# pre-build the index offline from your PDFs, then serve it live:
+cd pipeline && python -m crossexam_pipeline.cli build-index \
+    --input build/chunks.json --index-name "$MOSS_INDEX_NAME" && cd ..
+../run.sh                            # repo-root launcher; or: make dev-live / docker compose up
+```
+
+`run.sh` lives at the repository root (run `./run.sh` from there, or `../run.sh`
+from this `crossexam/` directory — it resolves its own paths, so cwd doesn't
+matter). It auto-installs `[moss]` when it detects Moss creds in `.env`. The full
+step-by-step (parse → build-index → worker/api) is in [`KEYS.md`](./KEYS.md)
+under "Going live with Moss". The offline index-builder also ships as a one-shot
+container image: `docker build -t crossexam-pipeline ./pipeline`.
+
 ## Run the 90-second demo
 
 ```bash
@@ -128,8 +150,10 @@ Full documentation lives in [`.env.example`](./.env.example). Summary:
 
 | Variable                                            | Used by            | Required?                          |
 | --------------------------------------------------- | ------------------ | ---------------------------------- |
-| `MOSS_PROJECT_ID`, `MOSS_PROJECT_KEY`               | backend, pipeline  | Real Moss only (else mock)         |
-| `MOSS_INDEX_NAME`                                   | backend, pipeline  | Optional (defaults set)            |
+| `MOSS_PROJECT_ID`, `MOSS_PROJECT_KEY`               | backend, pipeline  | Real Moss only (else mock); needs `pip install '.[moss]'` (in-process SDK, NOT a REST API) |
+| `MOSS_INDEX_NAME`, `MOSS_MODEL_ID`                  | backend, pipeline  | Optional (defaults set)            |
+| `MOSS_AUTO_REFRESH`, `MOSS_REFRESH_INTERVAL_S`      | backend            | Optional (default off / 600s)      |
+| `MOSS_JOB_TIMEOUT_S`, `MOSS_JOB_POLL_INTERVAL_S`    | backend, pipeline  | Optional (async index-job poll loop tuning) |
 | `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` | backend         | Live voice only                    |
 | `UNSILOED_API_KEY`                                  | pipeline           | Real `parse` only (not `--dry-run`)|
 | `MINIMAX_API_KEY` / `AWS_*`                         | backend            | Optional LLM/TTS provider          |
@@ -145,9 +169,13 @@ Full documentation lives in [`.env.example`](./.env.example). Summary:
 
 ## CI
 
-`.github/workflows/ci.yml` runs three jobs on every push and pull request — backend, pipeline,
-frontend — entirely in mock mode (no secrets). pytest / eslint / tsc / vitest / vite build are
-blocking; ruff and mypy are advisory (see note above).
+`.github/workflows/ci.yml` runs on every push and pull request. The core jobs —
+backend, pipeline, eval, frontend — run entirely in mock mode (no secrets); pytest /
+eslint / tsc / vitest / vite build are blocking, while ruff and mypy are advisory
+(see note above). A separate **`moss`** job installs the real `inferedge-moss` SDK
+(via the `[moss]` extra) and re-runs the backend + pipeline pytest suites with the
+SDK present — proving the live integration builds and imports in CI. It still needs
+**no API keys** (the real-SDK tests make no network calls).
 
 ## Docs
 

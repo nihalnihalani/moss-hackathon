@@ -18,13 +18,21 @@ RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
 # Install dependencies first (cached unless project metadata changes), then the
-# package itself. Include the [api,voice] extras so ONE image can run BOTH the
-# LiveKit voice worker (Deepgram/OpenAI/Cartesia/Silero plugins for a real
+# package itself. Include the [api,voice,moss] extras so ONE image can run BOTH
+# the LiveKit voice worker (Deepgram/OpenAI/Cartesia/Silero plugins for a real
 # STT->LLM->TTS session) AND the FastAPI HTTP service (`crossexam-api`:
-# token minting via livekit-api + PDF upload via pdfplumber).
-# Override with --build-arg INSTALL_EXTRAS="[voice]" (worker-only) or
-# INSTALL_EXTRAS="" for a smaller mock-only image.
-ARG INSTALL_EXTRAS="[api,voice]"
+# token minting via livekit-api + PDF upload via pdfplumber), AND the real Moss
+# in-process retrieval path ([moss] -> inferedge-moss + its native core).
+#
+# The Moss native core (inferedge-moss-core) ships as a prebuilt manylinux/macos
+# wheel, so pip resolves it on python:3.12-slim with NO extra apt build tooling
+# (no gcc/rust toolchain needed). If a future release ever lacks a slim-compatible
+# wheel, prefer pinning to a version that has one over adding a build toolchain.
+#
+# Override with --build-arg INSTALL_EXTRAS="[voice]" (worker-only, no Moss) or
+# INSTALL_EXTRAS="" for a smaller mock-only image (the app falls back to MockIndex
+# when inferedge-moss is absent — see retrieval/factory.py).
+ARG INSTALL_EXTRAS="[api,voice,moss]"
 COPY pyproject.toml README.md ./
 COPY crossexam_backend ./crossexam_backend
 RUN pip install ".${INSTALL_EXTRAS}"

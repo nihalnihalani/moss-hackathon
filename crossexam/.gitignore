@@ -7,7 +7,11 @@
 # Python
 __pycache__/
 *.pyc
+# Virtualenvs — never commit (incl. the local Moss-verification venv at
+# crossexam/.venv). Match at any depth so nested venvs are also ignored.
 .venv/
+crossexam/.venv/
+**/.venv/
 venv/
 *.egg-info/
 .pytest_cache/

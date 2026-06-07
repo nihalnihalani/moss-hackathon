@@ -52,6 +52,22 @@ class Settings(BaseSettings):
     moss_project_id: str | None = Field(default=None)
     moss_project_key: str | None = Field(default=None)
     moss_index_name: str = Field(default="crossexam-documents")
+    # Embedding model the Moss index is built/queried with. Default is Moss's
+    # edge model; "moss-mediumlm" trades latency for accuracy. Pipeline (build)
+    # and backend (query) must agree, so both read this single value.
+    moss_model_id: str = Field(default="moss-minilm")
+    # load_index tuning: when auto_refresh is on, Moss re-pulls the index from
+    # the cloud every refresh_interval_s so a live-upserted doc becomes
+    # queryable without an explicit reload. Off by default (deterministic demo).
+    moss_auto_refresh: bool = Field(default=False)
+    moss_refresh_interval_s: int = Field(default=600, ge=30, le=86400)
+    # create_index / add_docs return an async JOB; we poll get_job_status until
+    # COMPLETED. These bound that poll loop (timeout + interval, seconds).
+    moss_job_timeout_s: float = Field(default=120.0, ge=1.0, le=3600.0)
+    # ge=0.0 so a 0 interval is valid (poll as fast as the deadline allows —
+    # used by tests; the deadline still bounds the loop). The pipeline reads the
+    # MOSS_JOB_POLL_INTERVAL_S env var directly, so this bound must not reject 0.
+    moss_job_poll_interval_s: float = Field(default=1.0, ge=0.0, le=60.0)
 
     # --- LiveKit ------------------------------------------------------------
     livekit_url: str | None = Field(default=None)

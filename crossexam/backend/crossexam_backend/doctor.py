@@ -21,13 +21,19 @@ that would stop a live session the current config asks for.
 
 from __future__ import annotations
 
+import argparse
+import asyncio
+import importlib
 import importlib.util
+import logging
 from dataclasses import dataclass
 from enum import Enum
 
 from crossexam_backend.agent import LIVEKIT_AVAILABLE
 from crossexam_backend.config import Settings, get_settings
 from crossexam_backend.tracing import tracing_status
+
+logger = logging.getLogger(__name__)
 
 
 class Status(str, Enum):
@@ -80,8 +86,127 @@ def _moss_import_available() -> str | None:
     return None
 
 
-def _check_retrieval(settings: Settings) -> Check:
-    """Check the retrieval backend (Moss vs MockIndex)."""
+def _moss_client_cls(module_name: str) -> type | None:
+    """Import ``module_name`` and return its ``MossClient``/``Client`` class.
+
+    Returns ``None`` when the module fails to import or exposes neither class,
+    so the probe can report a clear reason instead of raising.
+    """
+    try:
+        module = importlib.import_module(module_name)
+    except Exception:  # noqa: BLE001 - probe must never crash the doctor
+        logger.debug("doctor.moss_probe SDK import failed", exc_info=True)
+        return None
+    return getattr(module, "MossClient", None) or getattr(module, "Client", None)
+
+
+async def _probe_moss_index_async(
+    settings: Settings, module_name: str
+) -> tuple[bool, str]:
+    """Async core of the live probe — reports the index's REAL readiness.
+
+    Uses the real ``inferedge_moss`` async lifecycle:
+
+    * ``await client.list_indexes()`` to confirm the project is reachable and the
+      configured index exists,
+    * ``await client.get_index(name)`` to read ``IndexInfo.status`` and
+      ``doc_count``, and
+    * ``await client.load_index(name)`` to confirm the index actually loads.
+
+    Returns ``(ok, detail)`` where ``ok`` is ``True`` only when the index exists,
+    reports a Ready status and loads. Every failure is caught and surfaced in the
+    detail string; the probe is non-fatal and never raises.
+    """
+    client_cls = _moss_client_cls(module_name)
+    if client_cls is None:
+        return False, (
+            f"SDK {module_name!r} import failed or exposes neither MossClient "
+            "nor Client."
+        )
+
+    name = settings.moss_index_name
+    client = client_cls(settings.moss_project_id, settings.moss_project_key)
+    try:
+        # 1) list_indexes -> reachability + existence.
+        try:
+            indexes = await client.list_indexes()
+        except Exception as exc:  # noqa: BLE001 - reported, not raised
+            logger.debug("doctor.moss_probe list_indexes failed", exc_info=True)
+            return False, (
+                f"index={name!r} NOT reachable via {module_name!r}: "
+                f"list_indexes failed: {exc}"
+            )
+        existing = {getattr(i, "name", None) for i in (indexes or [])}
+        if name not in existing:
+            available = sorted(n for n in existing if n)
+            return False, (
+                f"index={name!r} not found via {module_name!r}; "
+                f"available={available}."
+            )
+
+        # 2) get_index -> status + doc_count.
+        info = await client.get_index(name)
+        status = getattr(info, "status", None)
+        status_str = getattr(status, "value", None) or getattr(
+            status, "name", None
+        ) or str(status)
+        doc_count = getattr(info, "doc_count", None)
+
+        # 3) load_index -> confirm it loads.
+        load_status = await client.load_index(name)
+
+        ready = str(status_str).lower() in {"ready", "completed"}
+        detail = (
+            f"index={name!r} status={status_str} docs={doc_count} "
+            f"(load_index -> {load_status!r}) via {module_name!r}."
+        )
+        return ready, detail
+    finally:
+        close = getattr(client, "close", None)
+        if callable(close):
+            try:
+                closed = close()
+                if hasattr(closed, "__await__"):
+                    await closed
+            except Exception:  # noqa: BLE001 - close failure is non-fatal
+                logger.debug("doctor.moss_probe client.close failed", exc_info=True)
+
+
+def _probe_moss_index(settings: Settings, module_name: str) -> tuple[bool, str]:
+    """Live-probe Moss readiness via the real async lifecycle (CLI-only).
+
+    This is the ONLY check that makes network calls, so it runs ONLY under
+    ``--probe``/``--live``. It drives :func:`_probe_moss_index_async` through
+    :func:`asyncio.run`, reporting the configured index's real status and
+    doc_count (e.g. ``index='x' status=Ready docs=42``).
+
+    CLI-only (uses ``asyncio.run``): do NOT call from a coroutine or from any
+    context that already has a running event loop — it will raise
+    ``RuntimeError: This event loop is already running``.
+
+    Returns:
+        ``(ok, detail)`` — ``ok`` is ``True`` only when the index exists, is
+        Ready and loads. Every failure is caught and reported; the probe is
+        non-fatal and never raises.
+    """
+    try:
+        return asyncio.run(_probe_moss_index_async(settings, module_name))
+    except Exception as exc:  # noqa: BLE001 - probe failure is reported, not raised
+        logger.debug("doctor.moss_probe failed", exc_info=True)
+        return False, (
+            f"index={settings.moss_index_name!r} probe failed via "
+            f"{module_name!r}: {exc}"
+        )
+
+
+def _check_retrieval(settings: Settings, *, probe: bool = False) -> Check:
+    """Check the retrieval backend (Moss vs MockIndex).
+
+    When ``probe`` is ``True`` and the live path is configured, this makes a
+    LIVE network call to confirm the index is reachable (see
+    :func:`_probe_moss_index`). Otherwise it only verifies creds + SDK import and
+    reports the index existence as UNVERIFIED.
+    """
     if settings.use_mocks:
         return Check(
             "Moss retrieval",
@@ -100,13 +225,17 @@ def _check_retrieval(settings: Settings) -> Check:
             "Moss retrieval",
             Status.MISSING,
             "Credentials set but Moss SDK not installed "
-            "(pip install inferedge-moss).",
+            "(pip install '.[moss]').",
         )
+    if probe:
+        ok, detail = _probe_moss_index(settings, moss_module)
+        return Check("Moss retrieval", Status.READY if ok else Status.MISSING, detail)
     return Check(
         "Moss retrieval",
         Status.READY,
         f"Credentials set; SDK importable as {moss_module!r}; "
-        f"index={settings.moss_index_name!r}.",
+        f"index={settings.moss_index_name!r} configured (index existence "
+        "unverified — re-run with --probe to confirm reachability).",
     )
 
 
@@ -318,9 +447,14 @@ def _check_memory() -> Check:
     )
 
 
-def run_checks(settings: Settings) -> list[Check]:
-    """Run every preflight check against ``settings`` (no network calls)."""
-    checks = [_check_retrieval(settings), _check_livekit(settings)]
+def run_checks(settings: Settings, *, probe: bool = False) -> list[Check]:
+    """Run every preflight check against ``settings``.
+
+    No network calls are made unless ``probe`` is ``True``, in which case the
+    Moss retrieval check makes a single live ``load_index`` call to confirm the
+    configured index is reachable.
+    """
+    checks = [_check_retrieval(settings, probe=probe), _check_livekit(settings)]
     for leg, provider_attr, key_attr, plugin in _PROVIDERS:
         checks.append(_check_provider(settings, leg, provider_attr, key_attr, plugin))
     checks.append(_check_silero())
@@ -357,13 +491,37 @@ def format_table(checks: list[Check]) -> str:
 
 
 def main() -> int:
-    """Print the preflight table. Returns ``1`` if anything is MISSING, else ``0``."""
+    """Print the preflight table. Returns ``1`` if anything is MISSING, else ``0``.
+
+    Accepts ``--probe`` / ``--live`` to additionally make a single live Moss
+    ``load_index`` call confirming the configured index is reachable. Without it,
+    no network calls are made and the Moss row reports index existence as
+    unverified.
+    """
+    parser = argparse.ArgumentParser(
+        prog="crossexam-doctor",
+        description="CrossExam backend preflight (config + dependency table).",
+    )
+    parser.add_argument(
+        "--probe",
+        "--live",
+        dest="probe",
+        action="store_true",
+        help="Make a live Moss load_index call to confirm the index is reachable.",
+    )
+    # parse_known_args (not parse_args) so the doctor stays callable in contexts
+    # where sys.argv carries unrelated flags (e.g. under pytest's `-q`).
+    args, _unknown = parser.parse_known_args()
+
     settings = get_settings()
-    checks = run_checks(settings)
+    checks = run_checks(settings, probe=args.probe)
     mode = overall_mode(checks)
 
     print("CrossExam backend preflight")
-    print(f"resolved mode: {mode}  (use_mocks={settings.use_mocks})")
+    print(
+        f"resolved mode: {mode}  (use_mocks={settings.use_mocks}, "
+        f"probe={args.probe})"
+    )
     print()
     print(format_table(checks))
     print()

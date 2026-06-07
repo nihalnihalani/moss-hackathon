@@ -54,6 +54,14 @@ api = [
     "livekit-api>=1.0,<2.0",
     "pdfplumber>=0.10,<1.0",
 ]
+# Real Moss retrieval SDK (sub-10ms in-process hybrid retrieval). Optional: the
+# mock/test path runs fully WITHOUT it (deterministic MockIndex). Install + set
+# MOSS_PROJECT_ID/MOSS_PROJECT_KEY only for the live retrieval path. The import
+# package is resolved as `inferedge_moss` then `moss`. Install with:
+# pip install 'crossexam-backend[moss]'.
+moss = [
+    "inferedge-moss>=1.0.0b19",
+]
 # Optional cross-encoder reranker. The default LexicalReranker is zero-dependency
 # and always available; install this extra only to enable CrossEncoderReranker
 # (a sentence-transformers cross-encoder). Install with:
