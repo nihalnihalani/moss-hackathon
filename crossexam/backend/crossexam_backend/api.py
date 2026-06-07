@@ -141,8 +141,10 @@ def _index_to_mock_fixture(
 ) -> tuple[int, RetrievalIndex]:
     """Append ``records`` to the fixture JSON and reload a fresh MockIndex.
 
-    Existing chunks are preserved and deduplicated by ``id`` (new records win),
-    so repeated uploads accumulate into one queryable corpus offline.
+    Existing chunks for the same uploaded ``documentId`` are replaced before new
+    records are merged. The parser generates fresh chunk IDs for every upload,
+    so ID-only dedupe would append the same PDF on every retry/restart and make
+    the fallback fixture grow without bound.
 
     Returns:
         ``(chunks_indexed, new_index)`` where ``chunks_indexed`` is the number of
@@ -154,7 +156,15 @@ def _index_to_mock_fixture(
         loaded = json.loads(fixture_path.read_text(encoding="utf-8"))
         if isinstance(loaded, list):
             existing = loaded
-    by_id: dict[str, dict[str, Any]] = {str(r["id"]): r for r in existing}
+    incoming_document_ids = {
+        str(rec.get("documentId")) for rec in records if rec.get("documentId") is not None
+    }
+    retained = [
+        rec
+        for rec in existing
+        if str(rec.get("documentId")) not in incoming_document_ids
+    ]
+    by_id: dict[str, dict[str, Any]] = {str(r["id"]): r for r in retained}
     for rec in records:
         by_id[str(rec["id"])] = rec
     merged = list(by_id.values())
@@ -425,7 +435,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 # build_index fell back to the disk fixture (it did NOT upsert to
                 # Moss). Reload the mock index from that fixture so queries see
                 # the new docs, and report the honest "mock" mode.
-                app.state.index = _initial_index(settings)
+                app.state.index = MockIndex.from_fixture(_resolve_fixture_path(settings))
         else:
             chunks_indexed, new_index = _index_to_mock_fixture(settings, records)
             app.state.index = new_index

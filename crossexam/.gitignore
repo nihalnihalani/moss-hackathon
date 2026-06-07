@@ -29,6 +29,7 @@ pipeline/build/
 
 # run.sh / make dev-live runtime logs
 logs/
+runtime/
 
 # installed agent skills (npx skills add) — not source
 .agents/

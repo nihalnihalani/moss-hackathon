@@ -18,6 +18,7 @@ shipping a binary fixture).
 from __future__ import annotations
 
 import io
+import json
 import sys
 import types
 from collections.abc import Iterator
@@ -26,8 +27,9 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from crossexam_backend.api import create_app
+from crossexam_backend.api import _index_to_mock_fixture, create_app
 from crossexam_backend.config import Settings
+from crossexam_backend.retrieval.mock_index import MockIndex
 
 try:
     from reportlab.pdfgen import canvas  # type: ignore[import-untyped]
@@ -74,6 +76,28 @@ def _make_pdf_bytes() -> bytes:
     return buf.getvalue()
 
 
+def _fixture_record(chunk_id: str, document_id: str, text: str) -> dict[str, object]:
+    return {
+        "id": chunk_id,
+        "text": text,
+        "page": 1,
+        "bbox": {
+            "page": 1,
+            "x0": 72.0,
+            "y0": 100.0,
+            "x1": 220.0,
+            "y1": 120.0,
+            "page_width": 612.0,
+            "page_height": 792.0,
+        },
+        "confidence": 1.0,
+        "documentId": document_id,
+        "documentTitle": f"Document {document_id}",
+        "quads": None,
+        "scanned": False,
+    }
+
+
 # --------------------------------------------------------------------------- #
 # /healthz                                                                    #
 # --------------------------------------------------------------------------- #
@@ -86,6 +110,29 @@ def test_healthz_mock_mode_with_no_keys(client: TestClient) -> None:
     assert body["mode"] == "mock"
     assert body["livekit_configured"] is False
     assert body["moss_configured"] is False
+
+
+def test_mock_fixture_reupload_replaces_same_document_id(tmp_path: Path) -> None:
+    """Repeated fallback uploads replace a document instead of duplicating it."""
+    settings = _mock_settings(tmp_path)
+    fixture = Path(settings.mock_fixture_path)
+
+    _index_to_mock_fixture(
+        settings,
+        [
+            _fixture_record("same-old-1", "same-doc", "old text one"),
+            _fixture_record("same-old-2", "same-doc", "old text two"),
+            _fixture_record("other-1", "other-doc", "other text"),
+        ],
+    )
+    written, _index = _index_to_mock_fixture(
+        settings,
+        [_fixture_record("same-new-1", "same-doc", "new text")],
+    )
+
+    records = json.loads(fixture.read_text(encoding="utf-8"))
+    assert written == 1
+    assert {record["id"] for record in records} == {"same-new-1", "other-1"}
 
 
 # --------------------------------------------------------------------------- #
@@ -500,3 +547,4 @@ def test_documents_live_moss_failure_degrades_to_mock(
     body = resp.json()
     assert body["mode"] == "mock"
     assert body["chunks_indexed"] > 0
+    assert isinstance(app.state.index, MockIndex)  # type: ignore[attr-defined]

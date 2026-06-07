@@ -70,6 +70,9 @@ class Settings(BaseSettings):
     # used by tests; the deadline still bounds the loop). The pipeline reads the
     # MOSS_JOB_POLL_INTERVAL_S env var directly, so this bound must not reject 0.
     moss_job_poll_interval_s: float = Field(default=1.0, ge=0.0, le=60.0)
+    # Bound live index warmup so a broken/corrupt local Moss model cannot block
+    # LiveKit worker initialization forever. On timeout we use MockIndex fallback.
+    moss_load_timeout_s: float = Field(default=15.0, ge=1.0, le=300.0)
 
     # --- LiveKit ------------------------------------------------------------
     livekit_url: str | None = Field(default=None)

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import sys
 from typing import Any, cast
 
@@ -368,10 +369,32 @@ def _run_livekit_worker(settings: Settings, index: RetrievalIndex) -> int:
     _ = (settings, index)
     from livekit.agents import WorkerOptions, cli
 
+    # Each agent subprocess prewarms by loading the Moss index (load_index +
+    # get_docs enumeration) and the embedding/VAD models, which can take ~10s on
+    # a larger index — right at LiveKit's default initialize_process_timeout
+    # (10s), causing repeated "error initializing process" TimeoutErrors and a
+    # dispatched job that never starts (no answer). Give init real headroom.
+    # Override with WORKER_INIT_TIMEOUT_S.
+    init_timeout = float(os.environ.get("WORKER_INIT_TIMEOUT_S", "90"))
+    # LiveKit's production default is 8081 for the worker health server. Local
+    # dev runs often leave an old worker on that port, so run.sh sets
+    # WORKER_HTTP_PORT=0 to ask the OS for a free port. Production can pin 8081.
+    worker_http_port = int(os.environ.get("WORKER_HTTP_PORT", "8081"))
+    # The production SDK default can keep up to four warm subprocesses. That is
+    # expensive when each subprocess preloads a large retrieval fallback fixture,
+    # so make the pool explicit and let run.sh default local demos to one.
+    worker_idle_processes = int(os.environ.get("WORKER_IDLE_PROCESSES", "4"))
+    worker_memory_warn_mb = float(os.environ.get("WORKER_MEMORY_WARN_MB", "500"))
+    worker_memory_limit_mb = float(os.environ.get("WORKER_MEMORY_LIMIT_MB", "0"))
     cli.run_app(
         WorkerOptions(
             entrypoint_fnc=_livekit_entrypoint,
             prewarm_fnc=_livekit_prewarm,
+            initialize_process_timeout=init_timeout,
+            port=worker_http_port,
+            num_idle_processes=worker_idle_processes,
+            job_memory_warn_mb=worker_memory_warn_mb,
+            job_memory_limit_mb=worker_memory_limit_mb,
         )
     )
     return 0

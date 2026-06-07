@@ -182,6 +182,8 @@ class MossIndex(RetrievalIndex):
         # operator wired up Moss, a broken query should be loud, not silent.
         self._strict = settings.has_moss_credentials if strict is None else strict
         self._module: ModuleType | None = None
+        self._loaded = False
+        self._last_prewarm_error: Exception | None = None
         # Distinct documentIds observed so far. Seeded in prewarm() via the
         # real get_docs() enumeration, then grown by query results. Backs the
         # document_ids property that multi-hop anchor-expansion reads.
@@ -214,6 +216,16 @@ class MossIndex(RetrievalIndex):
         :meth:`refresh_document_ids` to re-enumerate at any point.
         """
         return sorted(self._seen_document_ids)
+
+    @property
+    def is_loaded(self) -> bool:
+        """Whether the last ``load_index`` prewarm completed successfully."""
+        return self._loaded
+
+    @property
+    def last_prewarm_error(self) -> Exception | None:
+        """The last ``load_index`` failure captured during prewarm, if any."""
+        return self._last_prewarm_error
 
     def _record_document_ids(self, citations: Sequence[Citation]) -> None:
         """Add each citation's documentId to the observed-id set (best-effort)."""
@@ -557,7 +569,11 @@ class MossIndex(RetrievalIndex):
                 self._index_name,
                 result,
             )
-        except Exception:  # noqa: BLE001 - prewarm must never crash worker
+            self._loaded = True
+            self._last_prewarm_error = None
+        except Exception as exc:  # noqa: BLE001 - prewarm must never crash worker
+            self._loaded = False
+            self._last_prewarm_error = exc
             logger.exception(
                 "moss_index.prewarm load_index failed index=%s; continuing cold",
                 self._index_name,
