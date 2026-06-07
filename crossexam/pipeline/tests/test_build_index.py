@@ -10,7 +10,7 @@ Structure
   timeout, existing-index (add_docs upsert), new-index (create_index).
 * Fix-1/2 regression tests — arity detection and TypeError propagation;
   client construction thread.
-* Real-SDK contract test — guarded by pytest.importorskip("inferedge_moss");
+* Real-SDK contract test — guarded by pytest.importorskip("moss");
   builds real DocumentInfo objects from sample chunks and checks the metadata
   contract without making any network calls.
 """
@@ -755,15 +755,15 @@ def test_poll_job_timeout() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# Real-SDK contract test (requires inferedge_moss; skipped otherwise)        #
+# Real-SDK contract test (requires moss; skipped otherwise)        #
 # --------------------------------------------------------------------------- #
 def test_real_document_info_metadata_contract() -> None:
     """Real DocumentInfo objects carry str-only metadata and parseable JSON fields.
 
-    Uses the actual inferedge_moss.DocumentInfo from the installed SDK to
+    Uses the actual moss.DocumentInfo from the installed SDK to
     confirm our _chunk_metadata output is accepted as-is.  No network calls.
     """
-    inferedge_moss = pytest.importorskip("inferedge_moss")
+    moss = pytest.importorskip("moss")
 
     chunks = DeterministicParser().parse()
     for c in chunks[:5]:  # spot-check the first five
@@ -774,7 +774,7 @@ def test_real_document_info_metadata_contract() -> None:
         assert not bad, f"Non-str metadata for chunk {c.id}: {bad}"
 
         # The real SDK must accept the metadata dict without raising.
-        doc = inferedge_moss.DocumentInfo(id=str(c.id), text=str(c.text), metadata=meta)
+        doc = moss.DocumentInfo(id=str(c.id), text=str(c.text), metadata=meta)
         assert doc.id == str(c.id)
         assert doc.text == str(c.text)
         assert doc.metadata == meta

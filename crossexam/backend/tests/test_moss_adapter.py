@@ -833,17 +833,17 @@ async def test_query_multi_falls_back_to_overfetch_when_server_filter_raises() -
 
 
 # --------------------------------------------------------------------------- #
-# Real SDK tests (skipped automatically when inferedge_moss is not installed) #
+# Real SDK tests (skipped automatically when moss is not installed) #
 # --------------------------------------------------------------------------- #
 def test_real_sdk_query_result_document_info_to_citation() -> None:
-    """_to_citation works against REAL inferedge_moss.QueryResultDocumentInfo.
+    """_to_citation works against REAL moss.QueryResultDocumentInfo.
 
-    Skipped when inferedge_moss is not installed so the no-SDK CI path is
+    Skipped when moss is not installed so the no-SDK CI path is
     unaffected.  When the SDK IS present this test exercises the live type:
     confirms that the coercion chain handles real string-typed metadata and
     produces a correctly-typed Citation/BBox.
     """
-    im = pytest.importorskip("inferedge_moss")
+    im = pytest.importorskip("moss")
 
     # Build a real QueryResultDocumentInfo from the pipeline's string contract.
     bbox_dict = {
@@ -900,7 +900,7 @@ def test_real_sdk_query_result_document_info_to_citation() -> None:
 
 def test_real_sdk_query_result_document_info_missing_bbox() -> None:
     """_to_citation against a real SDK doc with no bbox never crashes."""
-    im = pytest.importorskip("inferedge_moss")
+    im = pytest.importorskip("moss")
 
     qrdi = im.QueryResultDocumentInfo(
         id="no-bbox",
@@ -921,7 +921,7 @@ def test_real_sdk_document_info_id_accessible() -> None:
     Verifies that the attribute read in _seed_document_ids_from_get_docs
     (``self._get(d, "id", None)``) works against the real SDK type.
     """
-    im = pytest.importorskip("inferedge_moss")
+    im = pytest.importorskip("moss")
 
     di = im.DocumentInfo(
         id="di-001",

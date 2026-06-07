@@ -91,7 +91,7 @@ setup-frontend:
 # moss (real in-process retrieval SDK — OPTIONAL; mock path needs none of this)
 # =============================================================================
 ## install-moss: install backend + pipeline WITH the real Moss SDK ([dev,moss]).
-## Resolves inferedge-moss + its prebuilt native core. The app still runs without
+## Resolves the moss SDK + its prebuilt native core. The app still runs without
 ## it (MockIndex fallback); install only for the LIVE retrieval path.
 install-moss:
 	$(call need_py)
@@ -99,13 +99,13 @@ install-moss:
 	$(PY) -m pip install -e "$(BACKEND)[dev,moss]" -e "$(PIPELINE)[dev,moss]"
 
 ## test-moss: run BOTH pytest suites with the real Moss SDK present.
-## Exercises the real-SDK tests gated by pytest.importorskip("inferedge_moss").
+## Exercises the real-SDK tests gated by pytest.importorskip("moss").
 ## Needs NO API keys (those tests make no network calls). Run `make install-moss`
 ## first (or use the project venv at .venv where moss is already installed).
 test-moss:
 	$(call need_py)
-	@if ! $(PY) -c "import inferedge_moss" >/dev/null 2>&1; then \
-		echo ">> inferedge_moss not importable. Run 'make install-moss' first"; \
+	@if ! $(PY) -c "import moss" >/dev/null 2>&1; then \
+		echo ">> moss not importable. Run 'make install-moss' first"; \
 		echo "   (or activate the project venv: source .venv/bin/activate)."; \
 		exit 1; \
 	fi

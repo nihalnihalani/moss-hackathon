@@ -26,7 +26,7 @@ pdf = [
 ]
 # Real Moss index build. The in-process SDK (no REST surface). Kept optional so
 # the offline disk/mock path and CI run without it. See build_index._create_moss_index.
-moss = ["inferedge-moss>=1.0.0b19"]
+moss = ["moss>=1.4.0"]
 dev = [
     "pytest>=8.0,<10.0",
     "ruff==0.15.0",

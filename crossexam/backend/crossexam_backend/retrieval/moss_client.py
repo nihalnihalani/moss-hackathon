@@ -7,7 +7,7 @@ SDK is guarded so this module is always importable (e.g. in tests) even without
 the dependency.
 
 ============================================================================
-VERIFIED MOSS SDK SURFACE (introspected 2026-06-07, inferedge_moss 1.0.0b19)
+VERIFIED MOSS SDK SURFACE (moss 1.4.0; API-compatible with legacy inferedge_moss 1.0.0b19)
 ============================================================================
 Sources:
   - PyPI:    https://pypi.org/project/inferedge-moss/
@@ -16,9 +16,9 @@ Sources:
   - Web:     https://www.moss.dev/
 
 PACKAGE NAME (verified by import introspection):
-  - ONLY ``inferedge_moss`` works. ``from moss import ...`` raises
-    ``ModuleNotFoundError``. The import candidates list retains ``moss`` as a
-    last-resort fallback in case a future distribution adds it.
+  - The current PyPI SDK is ``moss`` (>=1.4.0), import name ``moss``. The legacy
+    ``inferedge_moss`` (1.0.0b19) distribution is gone from PyPI and is retained
+    only as an import fallback. The candidates order now prefers ``moss``.
 
 VERIFIED API SHAPE (introspected from inferedge_moss 1.0.0b19):
 
@@ -110,10 +110,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Import-package names to try, in priority order. See the module docstring for
-# why there are two: "moss" is a last-resort fallback; only "inferedge_moss"
-# is confirmed to exist as of 1.0.0b19.
-_MOSS_IMPORT_CANDIDATES: tuple[str, ...] = ("inferedge_moss", "moss")
+# Import-package names to try, in priority order. The current PyPI distribution
+# is "moss" (>=1.4.0); "inferedge_moss" is the legacy 1.0.0b19 distribution (now
+# gone from PyPI), kept only as a fallback.
+_MOSS_IMPORT_CANDIDATES: tuple[str, ...] = ("moss", "inferedge_moss")
 
 
 class MossClientUnavailableError(RuntimeError):
@@ -132,8 +132,8 @@ class MossQueryError(RuntimeError):
 def _load_moss_module() -> ModuleType | None:
     """Import the Moss SDK if available, else return ``None``.
 
-    Tries each name in :data:`_MOSS_IMPORT_CANDIDATES`. Only ``inferedge_moss``
-    is confirmed to exist as of 1.0.0b19; ``moss`` is retained as a fallback.
+    Tries each name in :data:`_MOSS_IMPORT_CANDIDATES`. The current SDK is
+    ``moss`` (>=1.4.0); legacy ``inferedge_moss`` (1.0.0b19) is the fallback.
 
     Returns:
         The imported module, or ``None`` when no candidate is installed.

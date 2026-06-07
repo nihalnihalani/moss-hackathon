@@ -65,14 +65,20 @@ DEFAULT_MODEL_ID = "moss-minilm"
 # Job-polling configuration — override via environment variables.
 ENV_JOB_TIMEOUT_S = "MOSS_JOB_TIMEOUT_S"
 ENV_JOB_POLL_INTERVAL_S = "MOSS_JOB_POLL_INTERVAL_S"
-DEFAULT_JOB_TIMEOUT_S = 120.0
+DEFAULT_JOB_TIMEOUT_S = 300.0
 DEFAULT_JOB_POLL_INTERVAL_S = 1.0
 
-# Import-package names to try, in priority order. The PyPI *distribution* is
-# ``inferedge-moss``; the *import* name is ``inferedge_moss`` (the GitHub README
-# also showed ``moss`` but that does NOT exist on PyPI 1.0.0b19 — verified by
-# introspection). Mirrors the backend's _MOSS_IMPORT_CANDIDATES order.
-_MOSS_IMPORT_CANDIDATES: tuple[str, ...] = ("inferedge_moss", "moss")
+# Job phases at/after which the index artifact is built and cloud-queryable.
+# Reaching any of these is treated as build success: the remaining phases only
+# finalize the downloadable copy used by local load_index, not cloud queryability,
+# so a long server-side finalize must not raise a false timeout.
+_READY_PHASES: frozenset[str] = frozenset({"building_index", "uploading", "cleanup"})
+
+# Import-package names to try, in priority order. The current PyPI distribution
+# is ``moss`` (import name ``moss``, >=1.4.0); ``inferedge_moss`` is the legacy
+# 1.0.0b19 distribution (now gone from PyPI), kept only as a fallback. Mirrors
+# the backend's _MOSS_IMPORT_CANDIDATES order.
+_MOSS_IMPORT_CANDIDATES: tuple[str, ...] = ("moss", "inferedge_moss")
 
 # Default location the backend mock index reads from.
 _PIPELINE_ROOT = Path(__file__).resolve().parent.parent
@@ -369,6 +375,18 @@ async def _poll_job(
         status = resp.status
         if _is_completed(status, completed_value):
             logger.debug("Job %s completed.", job_id)
+            return
+        # Once the build reaches an index-ready phase the artifact is already
+        # cloud-queryable; only upload/cleanup finalization remains (which does
+        # not affect queryability). Treat that as success to avoid a false
+        # timeout while the server finishes finalizing a large corpus.
+        phase = getattr(resp, "current_phase", None)
+        if phase is not None and str(phase) in _READY_PHASES:
+            logger.info(
+                "Job %s reached phase %r; index is queryable, treating as done.",
+                job_id,
+                phase,
+            )
             return
         if _is_failed(status, failed_value):
             error_detail = getattr(resp, "error", None) or "no error detail"

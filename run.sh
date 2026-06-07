@@ -100,7 +100,7 @@ else
 fi
 
 # Decide which extras to install. With Moss creds present we add the [moss] extra
-# so the LIVE retrieval path actually has the in-process SDK (inferedge-moss); with
+# so the LIVE retrieval path actually has the in-process SDK (moss); with
 # no creds we stay on [api,voice] and the app falls back to the mock index.
 BACKEND_EXTRAS="api,voice"
 MOSS_READY=0
@@ -120,10 +120,10 @@ fi
 # Moss creds present but the SDK isn't installed? Pull in the [moss] extra so the
 # live retrieval path is real (not silently mock). Skipped entirely in mock mode.
 if [ "$MOSS_READY" = "1" ]; then
-  if "$PY" -c "import inferedge_moss" >/dev/null 2>&1; then
+  if "$PY" -c "import moss" >/dev/null 2>&1; then
     ok "Moss SDK present — LIVE retrieval path available"
   else
-    warn "Moss creds set but inferedge_moss missing — installing backend[moss]"
+    warn "Moss creds set but moss SDK missing — installing backend[moss]"
     "$PY" -m pip install -e "$BACKEND[moss]" \
       && ok "Moss SDK installed" \
       || warn "Moss SDK install failed — backend will fall back to the mock index"

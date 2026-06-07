@@ -80,7 +80,7 @@ def _module_available(module_name: str) -> bool:
 def _moss_import_available() -> str | None:
     """Return the first importable Moss module name, or ``None``."""
     # Mirror moss_client._MOSS_IMPORT_CANDIDATES without importing the SDK.
-    for name in ("inferedge_moss", "moss"):
+    for name in ("moss", "inferedge_moss"):
         if _module_available(name):
             return name
     return None
