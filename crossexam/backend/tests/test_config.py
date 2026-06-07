@@ -108,3 +108,40 @@ def test_faithfulness_threshold_out_of_range_rejected() -> None:
     """The faithfulness threshold must be within [0, 1]."""
     with pytest.raises(ValueError):
         Settings(faithfulness_threshold=2.0, _env_file=None)  # type: ignore[call-arg]
+
+
+def test_voice_model_pins_have_expected_defaults() -> None:
+    """The live voice stack pins models explicitly (no silent plugin drift).
+
+    Verified against livekit-plugins-* 1.5.x: deepgram nova-3, openai gpt-4.1,
+    cartesia sonic-3. These are pinned in settings so a dependency bump cannot
+    silently change the deployed model/voice.
+    """
+    settings = Settings(_env_file=None)  # type: ignore[call-arg]
+    assert settings.deepgram_model == "nova-3"
+    assert settings.deepgram_language == "en-US"
+    assert settings.openai_model == "gpt-4.1"
+    assert settings.cartesia_model == "sonic-3"
+    assert settings.cartesia_language == "en"
+    # The Cartesia voice is a non-empty UUID-ish identifier.
+    assert settings.cartesia_voice
+    assert isinstance(settings.cartesia_voice, str)
+
+
+def test_voice_model_pins_overridable_via_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Each voice model/voice/language pin is overridable via its env var."""
+    monkeypatch.setenv("DEEPGRAM_MODEL", "nova-2")
+    monkeypatch.setenv("DEEPGRAM_LANGUAGE", "fr")
+    monkeypatch.setenv("OPENAI_MODEL", "gpt-4o")
+    monkeypatch.setenv("CARTESIA_MODEL", "sonic-2")
+    monkeypatch.setenv("CARTESIA_VOICE", "custom-voice-id")
+    monkeypatch.setenv("CARTESIA_LANGUAGE", "es")
+    settings = Settings(_env_file=None)  # type: ignore[call-arg]
+    assert settings.deepgram_model == "nova-2"
+    assert settings.deepgram_language == "fr"
+    assert settings.openai_model == "gpt-4o"
+    assert settings.cartesia_model == "sonic-2"
+    assert settings.cartesia_voice == "custom-voice-id"
+    assert settings.cartesia_language == "es"

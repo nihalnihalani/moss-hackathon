@@ -88,6 +88,18 @@ class Settings(BaseSettings):
     openai_api_key: str | None = Field(default=None)
     cartesia_api_key: str | None = Field(default=None)
 
+    # Explicit model/voice pins for the live voice stack. Pinned (not left to
+    # plugin defaults) so a dependency bump can't silently change the model:
+    # the openai plugin default already moved gpt-4o -> gpt-4.1 across a minor
+    # release. Values verified against livekit-plugins-* 1.5.x (2026-06).
+    deepgram_model: str = Field(default="nova-3")
+    deepgram_language: str = Field(default="en-US")
+    openai_model: str = Field(default="gpt-4.1")
+    cartesia_model: str = Field(default="sonic-3")
+    # Cartesia "Katie" — a voice Cartesia documents as tuned for voice agents.
+    cartesia_voice: str = Field(default="f786b574-daa5-4673-aa0c-cbe3e8534c02")
+    cartesia_language: str = Field(default="en")
+
     # --- Retrieval tuning ---------------------------------------------------
     top_k: int = Field(default=5, ge=1, le=50)
     alpha: float = Field(default=0.8, ge=0.0, le=1.0)

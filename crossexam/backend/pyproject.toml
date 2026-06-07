@@ -35,11 +35,11 @@ dev = [
 # turn-detector model (livekit.plugins.turn_detector.multilingual) ships in the
 # livekit-plugins-turn-detector package (1.5.x) used by server.py.
 voice = [
-    "livekit-plugins-deepgram>=1.0,<2.0",
-    "livekit-plugins-openai>=1.0,<2.0",
-    "livekit-plugins-cartesia>=1.0,<2.0",
-    "livekit-plugins-silero>=1.0,<2.0",
-    "livekit-plugins-turn-detector>=1.0,<2.0",
+    "livekit-plugins-deepgram>=1.5,<2.0",
+    "livekit-plugins-openai>=1.5,<2.0",
+    "livekit-plugins-cartesia>=1.5,<2.0",
+    "livekit-plugins-silero>=1.5,<2.0",
+    "livekit-plugins-turn-detector>=1.5,<2.0",
 ]
 # HTTP API service (token minting + document upload). Optional so the worker /
 # test path installs without web deps; required to run `crossexam-api`. The

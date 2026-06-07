@@ -13,6 +13,7 @@ development and testing without the full real-time stack.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import sys
 
@@ -114,7 +115,11 @@ def _build_stt(settings: Settings) -> object:
                 "STT_PROVIDER=deepgram requires the 'livekit-plugins-deepgram' "
                 "package. Install it with: pip install 'crossexam-backend[voice]'."
             ) from exc
-        return deepgram.STT(api_key=settings.deepgram_api_key)
+        return deepgram.STT(
+            api_key=settings.deepgram_api_key,
+            model=settings.deepgram_model,
+            language=settings.deepgram_language,
+        )
 
     raise ProviderConfigError(
         f"Unsupported STT_PROVIDER={settings.stt_provider!r}. Supported: deepgram."
@@ -136,7 +141,7 @@ def _build_llm(settings: Settings) -> object:
                 "LLM_PROVIDER=openai requires the 'livekit-plugins-openai' "
                 "package. Install it with: pip install 'crossexam-backend[voice]'."
             ) from exc
-        return openai.LLM(api_key=settings.openai_api_key)
+        return openai.LLM(api_key=settings.openai_api_key, model=settings.openai_model)
 
     raise ProviderConfigError(
         f"Unsupported LLM_PROVIDER={settings.llm_provider!r}. Supported: openai."
@@ -158,7 +163,12 @@ def _build_tts(settings: Settings) -> object:
                 "TTS_PROVIDER=cartesia requires the 'livekit-plugins-cartesia' "
                 "package. Install it with: pip install 'crossexam-backend[voice]'."
             ) from exc
-        return cartesia.TTS(api_key=settings.cartesia_api_key)
+        return cartesia.TTS(
+            api_key=settings.cartesia_api_key,
+            model=settings.cartesia_model,
+            voice=settings.cartesia_voice,
+            language=settings.cartesia_language,
+        )
 
     raise ProviderConfigError(
         f"Unsupported TTS_PROVIDER={settings.tts_provider!r}. Supported: cartesia."
@@ -220,6 +230,7 @@ def _run_livekit_worker(settings: Settings, index: RetrievalIndex) -> int:
     from livekit.agents import (
         AgentSession,
         JobContext,
+        TurnHandlingOptions,
         WorkerOptions,
         cli,
     )
@@ -251,17 +262,16 @@ def _run_livekit_worker(settings: Settings, index: RetrievalIndex) -> int:
 
         # TURN DETECTION + BARGE-IN. The session uses LiveKit's model-based
         # multilingual turn detector to decide when the user has truly finished
-        # speaking (beats raw VAD silence on conversational pauses), and enables
-        # interruptions so the user can barge in over the agent's TTS. These
-        # kwargs are assembled into a dict and only attached when the plugin /
-        # support is present — they ONLY activate in a real LiveKit session
-        # (never in mock/test, where this whole function is not reached).
+        # speaking (beats raw VAD silence on conversational pauses). Barge-in
+        # (interruptions) is on by DEFAULT in livekit-agents 1.5.x, so we no
+        # longer pass the deprecated ``allow_interruptions=`` kwarg. These kwargs
+        # are assembled into a dict and only attached when the plugin / support
+        # is present — they ONLY activate in a real LiveKit session (never in
+        # mock/test, where this whole function is not reached).
         session_kwargs: dict[str, object] = {
             "stt": stt,
             "llm": llm,
             "tts": tts,
-            # Barge-in: allow the user to interrupt the agent mid-utterance.
-            "allow_interruptions": True,
         }
         # VAD: required for end-of-turn detection + interruptions. Prefer a VAD
         # warmed in prewarm (stashed on proc.userdata); fall back to loading it
@@ -272,12 +282,39 @@ def _run_livekit_worker(settings: Settings, index: RetrievalIndex) -> int:
             vad = _build_vad()
         if vad is not None:
             session_kwargs["vad"] = vad
+        # Turn detection is configured via the non-deprecated TurnHandlingOptions
+        # (livekit-agents 1.5.x): the bare ``turn_detection=`` kwarg is deprecated
+        # in favour of ``turn_handling=TurnHandlingOptions(turn_detection=...)``.
         turn_detection = _build_turn_detection()
         if turn_detection is not None:
-            session_kwargs["turn_detection"] = turn_detection
+            session_kwargs["turn_handling"] = TurnHandlingOptions(
+                turn_detection=turn_detection
+            )
 
         session = AgentSession(**session_kwargs)
         await session.start(agent=agent, room=ctx.room)
+
+        # SPECULATIVE PREFETCH WIRING. Feed ASR interim (non-final) transcripts
+        # into the agent's SpeculativeRetriever so the citation for the final
+        # transcript is frequently already cached by the time the user's turn
+        # ends. AgentSession emits "user_input_transcribed" with an event object
+        # carrying ``transcript`` and ``is_final`` (livekit-agents 1.5.x). This
+        # is the LiveKit-side interim hook — there is no agent-level one — and it
+        # ONLY runs in a live session. Defensive throughout (getattr, guarded).
+        def _on_transcript(ev: object) -> None:
+            if getattr(ev, "is_final", True):
+                return
+            text = getattr(ev, "transcript", "") or ""
+            if not text:
+                return
+            try:
+                asyncio.get_running_loop().create_task(agent.prefetch_partial(text))
+            except RuntimeError:
+                pass
+
+        # Register via a plain call (not the @session.on decorator) so mypy does
+        # not flag an untyped decorator on _on_transcript; behaviour is identical.
+        session.on("user_input_transcribed", _on_transcript)
 
     async def prewarm(proc: object) -> None:
         """Worker prewarm: eagerly load the index + Silero VAD before serving jobs.
