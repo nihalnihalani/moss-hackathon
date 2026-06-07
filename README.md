@@ -228,19 +228,6 @@ cd crossexam && docker compose up --build   # backend worker + frontend on :5173
 
 ---
 
-## 🎬 The demo storyboard
-
-| Time | On screen | The shot |
-|---|---|---|
-| 0–10s | Split: LiveKit orb · PDF scrolling **"p.1 of 912"** | Establish the haystack |
-| 10–25s | Orb `LISTENING` — *"Did the witness admit they were at the warehouse on the 14th?"* | State badge flips |
-| 25–40s | Orb `THINKING`; right pane blurs through 900 pages | The Moss-is-working shot |
-| **40–60s** | **THE SNAP** — glowing box draws onto the exact line; caption streams the answer; chip reads **`found in 912 pages · 7ms`** | 🏆 The winning screenshot |
-| 60–78s | Follow-up surfaces a **second box on p.203** → *"it found a contradiction hundreds of pages apart"* | ⚔️ The climax |
-| 78–90s | Freeze on dual citations — *"Verifiable co-presence: every claim provable the moment it's made."* | Deck cover frame |
-
----
-
 ## 📂 Repository layout
 
 ```
@@ -256,8 +243,7 @@ moss-hackathon/
 └── docs/
     ├── pitch-crossexam.md         ← the Problem→Team pitch
     ├── co-pilot-positioning.md    ← competitive whitespace
-    ├── v3-features-spec.md        ← memo export + multi-doc cross-examination
-    └── demo-storyboard.md         ← the 90-second shot list
+    └── v3-features-spec.md        ← memo export + multi-doc cross-examination
 ```
 
 ---
