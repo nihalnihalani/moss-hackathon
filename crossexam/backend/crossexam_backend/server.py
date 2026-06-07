@@ -270,10 +270,52 @@ async def _livekit_entrypoint(ctx: Any) -> None:  # noqa: ANN401
     if index is None:
         index = build_index(settings)
 
-    # Warm retrieval before joining the room. Doing this after ctx.connect()
-    # blocks LiveKit room event handling and can surface FFI "signal_event taking
-    # too much time" errors while the agent is already visible in the room.
+    # PREWARM GATE: warm retrieval BEFORE joining the room. Doing this after
+    # ctx.connect() blocks LiveKit room event handling and can surface FFI
+    # "signal_event taking too much time" errors. The retry loop keeps calling
+    # prewarm() until is_loaded=True or a wall-clock deadline passes, avoiding
+    # the first-question 503 when a transient load_index failure leaves the index
+    # cold. On timeout the session still starts (degraded cold-path fallback) —
+    # this gate must never be a hard crash path.
+    #
+    # getattr defaults handle MockIndex (no is_loaded attribute — always True).
+    index_name = getattr(settings, "moss_index_name", "unknown")
+    prewarm_timeout_s = getattr(settings, "moss_load_timeout_s", 30.0)
+
     await index.prewarm()
+    prewarm_deadline = asyncio.get_event_loop().time() + prewarm_timeout_s
+    retry_interval_s = 3.0
+    attempt = 1
+    while not getattr(index, "is_loaded", True):
+        remaining = prewarm_deadline - asyncio.get_event_loop().time()
+        if remaining <= 0:
+            break
+        wait = min(retry_interval_s, remaining)
+        logger.warning(
+            "crossexam.prewarm_retry attempt=%d index=%s; retrying in %.0fs",
+            attempt,
+            index_name,
+            wait,
+        )
+        await asyncio.sleep(wait)
+        await index.prewarm()
+        attempt += 1
+
+    if getattr(index, "is_loaded", True):
+        logger.info(
+            "crossexam.prewarm_complete is_loaded=True index=%s",
+            index_name,
+        )
+    else:
+        prewarm_err = getattr(index, "last_prewarm_error", None)
+        logger.warning(
+            "crossexam.prewarm_failed is_loaded=False index=%s; "
+            "proceeding degraded — first turn will use cold cloud path "
+            "(may be slow / 503). error=%s",
+            index_name,
+            prewarm_err,
+        )
+
     await ctx.connect()
     # Scope conversation memory to the room so repeated citations within the
     # same session are recalled (feat 5) rather than re-snapped.

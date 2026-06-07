@@ -51,6 +51,10 @@ _CHROME_PREFIXES = (
     # Email thread (email-thread) running header + caption.
     "EMAIL THREAD - CONTRACTOR CORRESPONDENCE",
     "Meridian Logistics, Inc. and Vance Integration Partners",
+    # Gates deposition (crossexam-gates) running headers.
+    "Gates Deposition Aug 27",
+    "Gates Deposition Aug 28",
+    "Internet Tidal Wave Memo",
 )
 
 

@@ -80,11 +80,20 @@ export function App(): JSX.Element {
     }
   }, [session.reason, toast]);
 
+  // Auto-fallback: if the LiveKit connect attempt times out or is rejected (e.g.
+  // congested venue Wi-Fi), flip forceMock to true immediately. The MOCK/OFFLINE
+  // badge makes the mode visible; the presenter can run the scripted demo at once.
+  const onConnectFailed = useCallback((): void => {
+    setForceMock(true);
+    toast.error('LiveKit connect failed — switched to mock mode (press M to re-try live)', 6000);
+  }, [toast]);
+
   // The hook only enters its LIVE branch when both URL + token are present.
   const cx = useCrossExam({
     livekitUrl: session.livekitUrl,
     livekitToken: session.livekitToken,
     forceMock,
+    onConnectFailed,
   });
 
   // After an upload, render the freshly-ingested PDF and update corpus info.
@@ -356,6 +365,17 @@ export function App(): JSX.Element {
     [cx],
   );
 
+  // M key — on-stage emergency bail-out. Toggles mock mode in ~1 second so the
+  // presenter can drop to the scripted demo if live breaks at the worst moment.
+  // Re-toggling M a second time clears forceMock and re-attempts the live path.
+  const onToggleMock = useCallback((): void => {
+    setForceMock((v) => {
+      const next = !v;
+      toast.info(next ? 'Switched to mock mode (press M to go live)' : 'Switched to live mode');
+      return next;
+    });
+  }, [toast]);
+
   const { isMac } = useShortcuts({
     onTalkStart,
     onTalkEnd,
@@ -363,6 +383,7 @@ export function App(): JSX.Element {
     onPrevDoc: useCallback(() => cycleDoc(-1), [cycleDoc]),
     onNextDoc: useCallback(() => cycleDoc(1), [cycleDoc]),
     onToggleHelp: useCallback(() => setHelpOpen((v) => !v), []),
+    onToggleMock,
   });
 
   // The mic affordance is a real button (pointer push-to-talk mirrors Space).

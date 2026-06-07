@@ -58,6 +58,17 @@ export interface CrossExamConfig {
   livekitToken?: string | undefined;
   /** Force mock regardless of URL/token. */
   forceMock?: boolean;
+  /**
+   * How long (ms) to wait for room.connect() before giving up and calling
+   * onConnectFailed. Defaults to 5000 ms. Does not affect the mock path.
+   */
+  connectTimeoutMs?: number;
+  /**
+   * Called when the LiveKit connect attempt times out or is rejected. The app
+   * can use this to flip forceMock=true so the presenter never sees a dead UI.
+   * The hook itself falls to connected=false; the callback drives the UI upgrade.
+   */
+  onConnectFailed?: () => void;
 }
 
 export interface CrossExamState {
@@ -470,7 +481,41 @@ export function useCrossExam(config: CrossExamConfig): CrossExamState {
       try {
         const { Room, RoomEvent, Track } = await import('livekit-client');
         const room = new Room();
-        await room.connect(config.livekitUrl as string, config.livekitToken as string);
+
+        // Race the connect against a timeout so a congested venue Wi-Fi hang never
+        // leaves the presenter staring at a blank screen. Default: 5 s. The timeout
+        // rejects with a recognisable sentinel so we can distinguish it from other
+        // failures and call onConnectFailed to let the app auto-flip to mock mode.
+        const timeoutMs = config.connectTimeoutMs ?? 5000;
+        let timeoutId: ReturnType<typeof setTimeout> | undefined;
+        const timeoutPromise = new Promise<never>((_, reject) => {
+          timeoutId = setTimeout(
+            () => reject(new Error('livekit-connect-timeout')),
+            timeoutMs,
+          );
+        });
+
+        try {
+          await Promise.race([
+            room.connect(config.livekitUrl as string, config.livekitToken as string),
+            timeoutPromise,
+          ]);
+          // Connect won — cancel the pending timeout so it never fires late.
+          clearTimeout(timeoutId);
+        } catch (connectErr) {
+          clearTimeout(timeoutId);
+          if (!disposed) {
+            setIsConnected(false);
+            setMicStatus('off');
+            setOutputStream(null);
+            // Notify the app so it can auto-flip to mock mode.
+            config.onConnectFailed?.();
+          }
+          // Disconnect the partially-opened room (best-effort).
+          void room.disconnect();
+          return;
+        }
+
         if (disposed) {
           await room.disconnect();
           return;
@@ -578,11 +623,14 @@ export function useCrossExam(config: CrossExamConfig): CrossExamState {
           void room.disconnect();
         };
       } catch {
-        // Fall back gracefully: stay in a connected=false state, UI still renders.
+        // An unexpected error during the import or Room construction (not the
+        // connect path — connect errors are handled above). Fall back gracefully
+        // and notify the app so it can upgrade to mock mode.
         if (!disposed) {
           setIsConnected(false);
           setMicStatus('off');
           setOutputStream(null);
+          config.onConnectFailed?.();
         }
       }
     })();
