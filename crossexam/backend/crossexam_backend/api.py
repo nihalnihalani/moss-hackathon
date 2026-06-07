@@ -122,6 +122,127 @@ def _moss_configured(settings: Settings) -> bool:
     return settings.has_moss_credentials and _moss_import_available() is not None
 
 
+def _livekit_http_url(livekit_url: str | None) -> str | None:
+    """Convert a LiveKit websocket URL into the HTTP API URL."""
+    if livekit_url is None:
+        return None
+    if livekit_url.startswith("wss://"):
+        return "https://" + livekit_url[len("wss://") :]
+    if livekit_url.startswith("ws://"):
+        return "http://" + livekit_url[len("ws://") :]
+    return livekit_url
+
+
+def _enum_value(enum: object, name: str) -> int | None:
+    """Return a protobuf enum value by name, tolerating SDK/test fakes."""
+    value = getattr(enum, "Value", None)
+    if not callable(value):
+        return None
+    try:
+        return int(value(name))
+    except Exception:  # noqa: BLE001 - enum wrappers/fakes vary by SDK version
+        return None
+
+
+def _dispatch_is_active(dispatch: object, lk_api: object) -> bool:
+    """Return ``True`` when an existing LiveKit agent dispatch can be reused."""
+    state = getattr(dispatch, "state", None)
+    if state is None:
+        return True
+    deleted_at = int(getattr(state, "deleted_at", 0) or 0)
+    if deleted_at > 0:
+        return False
+
+    jobs = list(getattr(state, "jobs", []) or [])
+    if not jobs:
+        # Newly-created dispatches can exist before a job is attached.
+        return True
+
+    job_status = getattr(lk_api, "JobStatus", None)
+    pending = _enum_value(job_status, "JS_PENDING")
+    running = _enum_value(job_status, "JS_RUNNING")
+    success = _enum_value(job_status, "JS_SUCCESS")
+    failed = _enum_value(job_status, "JS_FAILED")
+    active_statuses = {s for s in (pending, running) if s is not None}
+    terminal_statuses = {s for s in (success, failed) if s is not None}
+
+    for job in jobs:
+        job_state = getattr(job, "state", None)
+        if job_state is None:
+            return True
+        status = getattr(job_state, "status", None)
+        if status in active_statuses:
+            return True
+        ended_at = int(getattr(job_state, "ended_at", 0) or 0)
+        if ended_at <= 0 and status not in terminal_statuses:
+            return True
+    return False
+
+
+async def _ensure_agent_dispatch(
+    settings: Settings, lk_api: object, room: str
+) -> str | None:
+    """Create or reuse the named LiveKit agent dispatch for ``room``.
+
+    LiveKit's current guidance favors explicit dispatch for production control.
+    The browser joins with a participant token, then this backend makes sure the
+    named worker has a job for that room. Older/minimal test fakes may not expose
+    the management client; in that case token minting still works.
+    """
+    agent_name = settings.livekit_agent_name.strip()
+    if not agent_name:
+        return None
+
+    livekit_api_cls = getattr(lk_api, "LiveKitAPI", None)
+    create_request_cls = getattr(lk_api, "CreateAgentDispatchRequest", None)
+    if not callable(livekit_api_cls) or create_request_cls is None:
+        return None
+
+    client = livekit_api_cls(
+        _livekit_http_url(settings.livekit_url),
+        settings.livekit_api_key,
+        settings.livekit_api_secret,
+    )
+    try:
+        agent_dispatch = getattr(client, "agent_dispatch", None)
+        if agent_dispatch is None:
+            return None
+
+        list_dispatch = getattr(agent_dispatch, "list_dispatch", None)
+        if callable(list_dispatch):
+            for dispatch in await list_dispatch(room):
+                if getattr(dispatch, "agent_name", None) == agent_name and _dispatch_is_active(
+                    dispatch, lk_api
+                ):
+                    dispatch_id = str(getattr(dispatch, "id", "") or "")
+                    logger.info(
+                        "token.agent_dispatch_reused room=%s agent=%s dispatch=%s",
+                        room,
+                        agent_name,
+                        dispatch_id,
+                    )
+                    return dispatch_id
+
+        create_dispatch = getattr(agent_dispatch, "create_dispatch", None)
+        if not callable(create_dispatch):
+            return None
+        dispatch = await create_dispatch(
+            create_request_cls(room=room, agent_name=agent_name)
+        )
+        dispatch_id = str(getattr(dispatch, "id", "") or "")
+        logger.info(
+            "token.agent_dispatch_created room=%s agent=%s dispatch=%s",
+            room,
+            agent_name,
+            dispatch_id,
+        )
+        return dispatch_id
+    finally:
+        close = getattr(client, "aclose", None)
+        if callable(close):
+            await close()
+
+
 def _initial_index(settings: Settings) -> RetrievalIndex:
     """Build the startup retrieval index, tolerating a missing fixture.
 
@@ -372,6 +493,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(
                 status_code=500, detail="Failed to mint LiveKit token."
             ) from exc
+        try:
+            await _ensure_agent_dispatch(settings, lk_api, room)
+        except Exception:  # noqa: BLE001 - dispatch must not block token minting
+            logger.exception(
+                "token.agent_dispatch_failed room=%s agent=%s",
+                room,
+                settings.livekit_agent_name,
+            )
         logger.info("token.minted room=%s identity=%s", room, identity)
         return TokenResponse(
             token=jwt,

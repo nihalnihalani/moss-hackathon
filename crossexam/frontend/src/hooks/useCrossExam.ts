@@ -418,6 +418,7 @@ export function useCrossExam(config: CrossExamConfig): CrossExamState {
   // Best-effort publisher for the live data channel, set once a room connects.
   // Used to forward typed questions / push-to-talk signals to the agent.
   const publishRef = useRef<((payload: Record<string, unknown>) => void) | null>(null);
+  const remoteAudioElementsRef = useRef<HTMLMediaElement[]>([]);
 
   const clearTimers = useCallback(() => {
     timers.current.forEach((t) => clearTimeout(t));
@@ -456,6 +457,10 @@ export function useCrossExam(config: CrossExamConfig): CrossExamState {
       setMicStatus('off');
       setOutputStream(null);
       publishRef.current = null;
+      for (const el of remoteAudioElementsRef.current) {
+        el.remove();
+      }
+      remoteAudioElementsRef.current = [];
       return;
     }
     let disposed = false;
@@ -471,18 +476,6 @@ export function useCrossExam(config: CrossExamConfig): CrossExamState {
           return;
         }
         setIsConnected(true);
-
-        // PUBLISH THE MIC: enable the local microphone so a spoken turn actually
-        // reaches the agent in live mode. Guarded — a permission denial (or any
-        // device error) must NOT crash the session: we stay connected and flag
-        // micStatus='denied' so the UI can prompt the user. On success the agent
-        // can hear input. (Mock mode never reaches here.)
-        try {
-          await room.localParticipant.setMicrophoneEnabled(true);
-          if (!disposed) setMicStatus('on');
-        } catch {
-          if (!disposed) setMicStatus('denied');
-        }
 
         // Expose a best-effort publisher so the UI can forward typed questions
         // and push-to-talk signals to the agent over the data channel.
@@ -509,18 +502,67 @@ export function useCrossExam(config: CrossExamConfig): CrossExamState {
         room.on(RoomEvent.DataReceived, onData);
 
         // Surface the agent's remote audio (TTS) track to the orb. A remote
-        // MICROPHONE/audio track maps to a one-track MediaStream for metering.
-        const onTrackSubscribed = (track: { kind: string; mediaStreamTrack?: MediaStreamTrack }): void => {
+        // audio track maps to a one-track MediaStream for metering AND is
+        // attached to a hidden autoplaying element so it actually plays.
+        const onTrackSubscribed = (
+          track: {
+            kind: string;
+            mediaStreamTrack?: MediaStreamTrack;
+            attach?: () => HTMLMediaElement;
+          },
+        ): void => {
           if (disposed) return;
-          if (track.kind === Track.Kind.Audio && track.mediaStreamTrack) {
+          if (track.kind !== Track.Kind.Audio) return;
+
+          if (track.mediaStreamTrack && typeof MediaStream !== 'undefined') {
             setOutputStream(new MediaStream([track.mediaStreamTrack]));
           }
+
+          let el: HTMLMediaElement | null = null;
+          if (typeof track.attach === 'function') {
+            el = track.attach();
+          } else if (
+            typeof document !== 'undefined' &&
+            track.mediaStreamTrack &&
+            typeof MediaStream !== 'undefined'
+          ) {
+            el = document.createElement('audio');
+            el.srcObject = new MediaStream([track.mediaStreamTrack]);
+          }
+          if (!el) return;
+          el.autoplay = true;
+          el.setAttribute('playsinline', 'true');
+          el.setAttribute('data-crossexam-agent-audio', 'true');
+          el.style.display = 'none';
+          document.body.appendChild(el);
+          remoteAudioElementsRef.current.push(el);
+          void el.play?.().catch(() => {
+            /* Browser autoplay policy can still require a user gesture. */
+          });
         };
-        const onTrackUnsubscribed = (track: { kind: string }): void => {
-          if (track.kind === Track.Kind.Audio) setOutputStream(null);
+        const onTrackUnsubscribed = (track: { kind: string; detach?: () => HTMLMediaElement[] }): void => {
+          if (track.kind !== Track.Kind.Audio) return;
+          setOutputStream(null);
+          const detached = typeof track.detach === 'function' ? track.detach() : [];
+          const toRemove = detached.length > 0 ? detached : remoteAudioElementsRef.current;
+          for (const el of toRemove) {
+            el.remove();
+          }
+          remoteAudioElementsRef.current = remoteAudioElementsRef.current.filter(
+            (el) => !toRemove.includes(el),
+          );
         };
         room.on(RoomEvent.TrackSubscribed, onTrackSubscribed);
         room.on(RoomEvent.TrackUnsubscribed, onTrackUnsubscribed);
+
+        // PUBLISH THE MIC: enable the local microphone after handlers are wired
+        // so we cannot miss the agent's first subscribed audio track.
+        try {
+          await room.localParticipant.setMicrophoneEnabled(true);
+          if (!disposed) setMicStatus('on');
+        } catch {
+          if (!disposed) setMicStatus('denied');
+        }
 
         cleanup = () => {
           room.off(RoomEvent.DataReceived, onData);
@@ -529,6 +571,10 @@ export function useCrossExam(config: CrossExamConfig): CrossExamState {
           publishRef.current = null;
           setOutputStream(null);
           setMicStatus('off');
+          for (const el of remoteAudioElementsRef.current) {
+            el.remove();
+          }
+          remoteAudioElementsRef.current = [];
           void room.disconnect();
         };
       } catch {

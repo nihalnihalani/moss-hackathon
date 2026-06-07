@@ -19,6 +19,7 @@ from crossexam_backend.server import (
     _build_llm,
     _build_stt,
     _build_tts,
+    _build_turn_detection,
 )
 
 
@@ -124,3 +125,44 @@ def test_build_llm_falls_back_to_chat_completions_constructor(
 
     assert isinstance(llm, _ChatLLM)
     assert llm.kwargs == {"api_key": "sk-test", "model": "gpt-4.1"}
+
+
+def test_build_turn_detection_disabled_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The local turn detector stays off unless explicitly enabled."""
+
+    class _Model:
+        pass
+
+    fake_multilingual = types.ModuleType("livekit.plugins.turn_detector.multilingual")
+    fake_multilingual.MultilingualModel = _Model  # type: ignore[attr-defined]
+    monkeypatch.setitem(
+        sys.modules,
+        "livekit.plugins.turn_detector.multilingual",
+        fake_multilingual,
+    )
+
+    assert _build_turn_detection(_settings()) is None
+
+
+def test_build_turn_detection_enabled_uses_plugin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The turn detector is constructed only when explicitly enabled."""
+
+    class _Model:
+        pass
+
+    fake_multilingual = types.ModuleType("livekit.plugins.turn_detector.multilingual")
+    fake_multilingual.MultilingualModel = _Model  # type: ignore[attr-defined]
+    monkeypatch.setitem(
+        sys.modules,
+        "livekit.plugins.turn_detector.multilingual",
+        fake_multilingual,
+    )
+
+    assert isinstance(
+        _build_turn_detection(_settings(turn_detector_enabled=True)),
+        _Model,
+    )

@@ -244,6 +244,180 @@ def test_token_200_with_fake_signer(
     assert "secret" not in resp.text
 
 
+def test_token_creates_named_agent_dispatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """/token should explicitly dispatch the configured LiveKit agent."""
+
+    class _FakeGrants:
+        def __init__(self, **kwargs: object) -> None:
+            self.kwargs = kwargs
+
+    class _FakeAccessToken:
+        def __init__(self, key: str, secret: str) -> None:
+            self.key = key
+            self.secret = secret
+
+        def with_identity(self, identity: str) -> _FakeAccessToken:
+            self.identity = identity
+            return self
+
+        def with_grants(self, grants: object) -> _FakeAccessToken:
+            self.grants = grants
+            return self
+
+        def to_jwt(self) -> str:
+            return f"fake.jwt.for.{self.identity}"
+
+    class _FakeCreateAgentDispatchRequest:
+        def __init__(self, *, room: str, agent_name: str) -> None:
+            self.room = room
+            self.agent_name = agent_name
+
+    calls: dict[str, object] = {}
+
+    class _FakeAgentDispatchService:
+        async def list_dispatch(self, room_name: str) -> list[object]:
+            calls["listed_room"] = room_name
+            return []
+
+        async def create_dispatch(
+            self, req: _FakeCreateAgentDispatchRequest
+        ) -> object:
+            calls["created_room"] = req.room
+            calls["created_agent"] = req.agent_name
+            return types.SimpleNamespace(id="AD_created")
+
+    class _FakeLiveKitAPI:
+        def __init__(self, url: str | None, key: str, secret: str) -> None:
+            calls["url"] = url
+            calls["key"] = key
+            calls["secret"] = secret
+            self.agent_dispatch = _FakeAgentDispatchService()
+
+        async def aclose(self) -> None:
+            calls["closed"] = True
+
+    fake_livekit = types.ModuleType("livekit")
+    fake_api = types.ModuleType("livekit.api")
+    fake_api.AccessToken = _FakeAccessToken  # type: ignore[attr-defined]
+    fake_api.VideoGrants = _FakeGrants  # type: ignore[attr-defined]
+    fake_api.LiveKitAPI = _FakeLiveKitAPI  # type: ignore[attr-defined]
+    fake_api.CreateAgentDispatchRequest = _FakeCreateAgentDispatchRequest  # type: ignore[attr-defined]
+    fake_livekit.api = fake_api  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "livekit", fake_livekit)
+    monkeypatch.setitem(sys.modules, "livekit.api", fake_api)
+
+    settings = Settings(
+        livekit_url="wss://x.livekit.cloud",
+        livekit_api_key="key",
+        livekit_api_secret="secret",
+        livekit_agent_name="crossexam-agent",
+        mock_fixture_path=str(tmp_path / "chunks.json"),
+        _env_file=None,  # type: ignore[call-arg]
+    )
+    with TestClient(create_app(settings)) as client:
+        resp = client.post("/token", json={"room": "room-1", "identity": "alice"})
+    assert resp.status_code == 200
+    assert calls == {
+        "url": "https://x.livekit.cloud",
+        "key": "key",
+        "secret": "secret",
+        "listed_room": "room-1",
+        "created_room": "room-1",
+        "created_agent": "crossexam-agent",
+        "closed": True,
+    }
+
+
+def test_token_reuses_active_named_agent_dispatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """/token should not create duplicate dispatches for an active agent job."""
+
+    class _FakeAccessToken:
+        def __init__(self, key: str, secret: str) -> None:
+            pass
+
+        def with_identity(self, identity: str) -> _FakeAccessToken:
+            return self
+
+        def with_grants(self, grants: object) -> _FakeAccessToken:
+            return self
+
+        def to_jwt(self) -> str:
+            return "fake.jwt"
+
+    class _FakeJobStatus:
+        @staticmethod
+        def Value(name: str) -> int:  # noqa: N802 - mimics protobuf enum API
+            return {
+                "JS_PENDING": 0,
+                "JS_RUNNING": 1,
+                "JS_SUCCESS": 2,
+                "JS_FAILED": 3,
+            }[name]
+
+    calls: dict[str, object] = {"created": False}
+
+    class _FakeAgentDispatchService:
+        async def list_dispatch(self, room_name: str) -> list[object]:
+            calls["listed_room"] = room_name
+            return [
+                types.SimpleNamespace(
+                    id="AD_existing",
+                    agent_name="crossexam-agent",
+                    state=types.SimpleNamespace(
+                        deleted_at=0,
+                        jobs=[
+                            types.SimpleNamespace(
+                                state=types.SimpleNamespace(status=1, ended_at=0)
+                            )
+                        ],
+                    ),
+                )
+            ]
+
+        async def create_dispatch(self, req: object) -> object:
+            calls["created"] = True
+            return types.SimpleNamespace(id="AD_created")
+
+    class _FakeLiveKitAPI:
+        def __init__(self, url: str | None, key: str, secret: str) -> None:
+            self.agent_dispatch = _FakeAgentDispatchService()
+
+        async def aclose(self) -> None:
+            calls["closed"] = True
+
+    fake_livekit = types.ModuleType("livekit")
+    fake_api = types.ModuleType("livekit.api")
+    fake_api.AccessToken = _FakeAccessToken  # type: ignore[attr-defined]
+    fake_api.VideoGrants = lambda **_: object()  # type: ignore[attr-defined]
+    fake_api.LiveKitAPI = _FakeLiveKitAPI  # type: ignore[attr-defined]
+    fake_api.CreateAgentDispatchRequest = lambda **_: object()  # type: ignore[attr-defined]
+    fake_api.JobStatus = _FakeJobStatus  # type: ignore[attr-defined]
+    fake_livekit.api = fake_api  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "livekit", fake_livekit)
+    monkeypatch.setitem(sys.modules, "livekit.api", fake_api)
+
+    settings = Settings(
+        livekit_url="wss://x.livekit.cloud",
+        livekit_api_key="key",
+        livekit_api_secret="secret",
+        livekit_agent_name="crossexam-agent",
+        mock_fixture_path=str(tmp_path / "chunks.json"),
+        _env_file=None,  # type: ignore[call-arg]
+    )
+    with TestClient(create_app(settings)) as client:
+        resp = client.post("/token", json={"room": "room-1"})
+    assert resp.status_code == 200
+    assert calls == {
+        "created": False,
+        "listed_room": "room-1",
+        "closed": True,
+    }
+
+
 def test_token_response_includes_url_field(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

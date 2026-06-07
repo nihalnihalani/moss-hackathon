@@ -36,21 +36,41 @@ const Track = { Kind: { Audio: 'audio', Video: 'video', Unknown: 'unknown' } } a
 
 /** Captures the data handler the hook registers so the test can emit frames. */
 let capturedOnData: ((payload: Uint8Array) => void) | undefined;
+let capturedOnTrackSubscribed:
+  | ((track: { kind: string; attach?: () => HTMLMediaElement }) => void)
+  | undefined;
+let capturedOnTrackUnsubscribed:
+  | ((track: { kind: string; detach?: () => HTMLMediaElement[] }) => void)
+  | undefined;
 
 /** Captures the most recent setMicrophoneEnabled call so the test can assert it. */
 const setMicrophoneEnabled = vi.fn(async (_enabled: boolean): Promise<void> => undefined);
 
 class FakeRoom {
-  private handlers = new Map<string, (payload: Uint8Array) => void>();
+  private handlers = new Map<string, (...args: unknown[]) => void>();
   localParticipant = {
     setMicrophoneEnabled,
     publishData: vi.fn(async (): Promise<void> => undefined),
   };
   connect = vi.fn(async (): Promise<void> => undefined);
   disconnect = vi.fn(async (): Promise<void> => undefined);
-  on(event: string, cb: (payload: Uint8Array) => void): this {
+  on(event: string, cb: (...args: unknown[]) => void): this {
     this.handlers.set(event, cb);
-    if (event === RoomEvent.DataReceived) capturedOnData = cb;
+    if (event === RoomEvent.DataReceived) {
+      capturedOnData = cb as (payload: Uint8Array) => void;
+    }
+    if (event === RoomEvent.TrackSubscribed) {
+      capturedOnTrackSubscribed = cb as (track: {
+        kind: string;
+        attach?: () => HTMLMediaElement;
+      }) => void;
+    }
+    if (event === RoomEvent.TrackUnsubscribed) {
+      capturedOnTrackUnsubscribed = cb as (track: {
+        kind: string;
+        detach?: () => HTMLMediaElement[];
+      }) => void;
+    }
     return this;
   }
   off(event: string): this {
@@ -125,7 +145,10 @@ function encodeFrame(obj: unknown): Uint8Array {
 describe('live citation path (LiveKit DataReceived -> PdfCanvas)', () => {
   beforeEach(() => {
     capturedOnData = undefined;
+    capturedOnTrackSubscribed = undefined;
+    capturedOnTrackUnsubscribed = undefined;
     setMicrophoneEnabled.mockClear();
+    document.querySelectorAll('[data-crossexam-agent-audio]').forEach((el) => el.remove());
   });
 
   it('runs in live mode (not mock) when URL + token are present', async () => {
@@ -139,6 +162,34 @@ describe('live citation path (LiveKit DataReceived -> PdfCanvas)', () => {
     await waitFor(() => expect(screen.getByTestId('connected').textContent).toBe('true'));
     await waitFor(() => expect(setMicrophoneEnabled).toHaveBeenCalledWith(true));
     expect(screen.getByTestId('mic-status').textContent).toBe('on');
+  });
+
+  it('attaches and plays subscribed agent audio', async () => {
+    render(<Harness />);
+    await waitFor(() => expect(capturedOnTrackSubscribed).toBeDefined());
+
+    const play = vi.fn(async (): Promise<void> => undefined);
+    const el = document.createElement('audio');
+    Object.defineProperty(el, 'play', { value: play, configurable: true });
+
+    act(() => {
+      capturedOnTrackSubscribed?.({
+        kind: Track.Kind.Audio,
+        attach: () => el,
+      });
+    });
+
+    await waitFor(() => expect(play).toHaveBeenCalled());
+    expect(document.querySelector('[data-crossexam-agent-audio]')).toBe(el);
+
+    act(() => {
+      capturedOnTrackUnsubscribed?.({
+        kind: Track.Kind.Audio,
+        detach: () => [el],
+      });
+    });
+
+    expect(document.querySelector('[data-crossexam-agent-audio]')).toBeNull();
   });
 
   it('flags mic denial gracefully without dropping the session', async () => {

@@ -78,6 +78,10 @@ class Settings(BaseSettings):
     livekit_url: str | None = Field(default=None)
     livekit_api_key: str | None = Field(default=None)
     livekit_api_secret: str | None = Field(default=None)
+    # Dispatch name for the LiveKit worker. A named worker is explicitly
+    # dispatched from /token, which is more reliable than automatic room dispatch
+    # during local restarts and reconnects.
+    livekit_agent_name: str = Field(default="crossexam-agent")
 
     # --- Voice pipeline providers (STT / LLM / TTS) -------------------------
     # Which plugin to use for each leg of the real-time voice loop. The defaults
@@ -105,6 +109,10 @@ class Settings(BaseSettings):
     # Cartesia "Katie" — a voice Cartesia documents as tuned for voice agents.
     cartesia_voice: str = Field(default="f786b574-daa5-4673-aa0c-cbe3e8534c02")
     cartesia_language: str = Field(default="en")
+    # Optional local LiveKit turn-detector model. Disabled by default because
+    # it requires downloaded model weights / inference setup; Silero VAD remains
+    # the reliable local end-of-turn path.
+    turn_detector_enabled: bool = Field(default=False)
 
     # --- Retrieval tuning ---------------------------------------------------
     top_k: int = Field(default=5, ge=1, le=50)

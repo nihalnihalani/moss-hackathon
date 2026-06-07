@@ -133,13 +133,6 @@ else
   say "--no-worker: skipping the voice worker"
 fi
 
-if [ -d frontend/node_modules ]; then
-  say "starting frontend (Vite)..."
-  launch frontend "$C_FE" logs/frontend.log bash -c 'cd frontend && exec npm run dev'
-else
-  say "frontend/node_modules missing — run 'npm install' in frontend/; skipping UI"
-fi
-
 # ---- readiness banner -------------------------------------------------------
 say "waiting for the API..."
 API_READY_HEALTH=""
@@ -185,6 +178,12 @@ if [ "$NO_WORKER" -eq 0 ]; then
     pkill -f "node .*vite" 2>/dev/null || true
     exit 1
   fi
+fi
+if [ -d frontend/node_modules ]; then
+  say "starting frontend (Vite)..."
+  launch frontend "$C_FE" logs/frontend.log bash -c 'cd frontend && exec npm run dev'
+else
+  say "frontend/node_modules missing — run 'npm install' in frontend/; skipping UI"
 fi
 HEALTH="$(curl -s -m10 "http://localhost:${API_PORT}/healthz" 2>/dev/null || true)"
 HEALTH="${HEALTH:-${API_READY_HEALTH:-'{unreachable}'}}"

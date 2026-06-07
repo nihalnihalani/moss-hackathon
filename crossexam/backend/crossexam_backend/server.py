@@ -214,7 +214,7 @@ def _build_vad() -> object | None:
         return None
 
 
-def _build_turn_detection() -> object | None:
+def _build_turn_detection(settings: Settings) -> object | None:
     """Construct LiveKit's model-based turn detector, or ``None`` if absent.
 
     Uses the ``livekit-plugins-turn-detector`` multilingual model to decide
@@ -223,6 +223,13 @@ def _build_turn_detection() -> object | None:
     and the session falls back to VAD-based turn detection. This ONLY runs
     inside a live LiveKit worker session.
     """
+    if not settings.turn_detector_enabled:
+        logger.info(
+            "turn-detector disabled; session uses VAD/STT endpointing. "
+            "Set TURN_DETECTOR_ENABLED=true after installing/downloading the "
+            "LiveKit turn-detector model."
+        )
+        return None
     try:  # pragma: no cover - needs the turn-detector plugin installed
         from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
@@ -255,7 +262,7 @@ async def _livekit_entrypoint(ctx: Any) -> None:  # noqa: ANN401
     # Imports are local on purpose: they only exist when livekit is installed.
     # mypy: ignore_missing_imports handles the optional ``livekit-agents`` dep,
     # so no per-import ignore is needed here.
-    from livekit.agents import AgentSession, TurnHandlingOptions
+    from livekit.agents import AgentSession, TurnHandlingOptions, room_io
 
     settings = get_settings()
     userdata = getattr(getattr(ctx, "proc", None), "userdata", {})
@@ -263,8 +270,11 @@ async def _livekit_entrypoint(ctx: Any) -> None:  # noqa: ANN401
     if index is None:
         index = build_index(settings)
 
-    await ctx.connect()
+    # Warm retrieval before joining the room. Doing this after ctx.connect()
+    # blocks LiveKit room event handling and can surface FFI "signal_event taking
+    # too much time" errors while the agent is already visible in the room.
     await index.prewarm()
+    await ctx.connect()
     # Scope conversation memory to the room so repeated citations within the
     # same session are recalled (feat 5) rather than re-snapped.
     room_name = getattr(ctx.room, "name", None) or settings.livekit_default_room
@@ -311,14 +321,18 @@ async def _livekit_entrypoint(ctx: Any) -> None:  # noqa: ANN401
     # Turn detection is configured via the non-deprecated TurnHandlingOptions
     # (livekit-agents 1.5.x): the bare ``turn_detection=`` kwarg is deprecated
     # in favour of ``turn_handling=TurnHandlingOptions(turn_detection=...)``.
-    turn_detection = _build_turn_detection()
+    turn_detection = _build_turn_detection(settings)
     if turn_detection is not None:
         session_kwargs["turn_handling"] = TurnHandlingOptions(
             turn_detection=cast(Any, turn_detection)
         )
 
     session = AgentSession(**cast(Any, session_kwargs))
-    await session.start(agent=agent, room=ctx.room)
+    await session.start(
+        agent=agent,
+        room=ctx.room,
+        room_options=room_io.RoomOptions(close_on_disconnect=False),
+    )
 
     # SPECULATIVE PREFETCH WIRING. Feed ASR interim (non-final) transcripts
     # into the agent's SpeculativeRetriever so the citation for the final
@@ -395,6 +409,7 @@ def _run_livekit_worker(settings: Settings, index: RetrievalIndex) -> int:
             num_idle_processes=worker_idle_processes,
             job_memory_warn_mb=worker_memory_warn_mb,
             job_memory_limit_mb=worker_memory_limit_mb,
+            agent_name=settings.livekit_agent_name,
         )
     )
     return 0
