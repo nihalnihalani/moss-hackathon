@@ -264,7 +264,55 @@ async def _livekit_entrypoint(ctx: Any) -> None:  # noqa: ANN401
         index = build_index(settings)
 
     await ctx.connect()
+
+    # PREWARM GATE: keep retrying load_index until the Moss index is loaded or a
+    # wall-clock deadline passes. Goal: avoid the first-question 503 that hits
+    # when prewarm() catches an exception and leaves is_loaded=False, NOT to add
+    # a hard crash path. On timeout we log a LOUD warning and proceed degraded
+    # (cold-path fallback) so the session always starts.
+    #
+    # getattr defaults handle MockIndex (no is_loaded attribute) — always True.
+    index_name = getattr(settings, "moss_index_name", "unknown")
+    prewarm_timeout_s = getattr(settings, "moss_load_timeout_s", 30.0)
+
     await index.prewarm()
+    prewarm_deadline = asyncio.get_event_loop().time() + prewarm_timeout_s
+    retry_interval_s = 3.0
+    attempt = 1
+    while not getattr(index, "is_loaded", True):
+        remaining = prewarm_deadline - asyncio.get_event_loop().time()
+        if remaining <= 0:
+            break
+        wait = min(retry_interval_s, remaining)
+        logger.warning(
+            "crossexam.prewarm_retry attempt=%d index=%s; retrying in %.0fs",
+            attempt,
+            index_name,
+            wait,
+        )
+        await asyncio.sleep(wait)
+        await index.prewarm()
+        attempt += 1
+
+    is_loaded = getattr(index, "is_loaded", True)
+    room_label = getattr(ctx.room, "name", "?")
+    if is_loaded:
+        logger.info(
+            "crossexam.prewarm_complete is_loaded=True index=%s room=%s",
+            index_name,
+            room_label,
+        )
+    else:
+        prewarm_err = getattr(index, "last_prewarm_error", None)
+        logger.warning(
+            "crossexam.prewarm_failed is_loaded=False index=%s room=%s; "
+            "proceeding degraded — first turn will use cold cloud path "
+            "(may be slow / 503). error=%s",
+            index_name,
+            room_label,
+            prewarm_err,
+        )
+
     # Scope conversation memory to the room so repeated citations within the
     # same session are recalled (feat 5) rather than re-snapped.
     room_name = getattr(ctx.room, "name", None) or settings.livekit_default_room

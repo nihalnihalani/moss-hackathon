@@ -42,6 +42,26 @@ export const DOC_FIELD_NOTES = 'exhibit-field-notes';
 /** KILLER FEATURE B: the contract-vs-email cross-doc pair. */
 export const DOC_CONTRACT = 'contract-msa';
 export const DOC_EMAIL = 'email-thread';
+/**
+ * LIVE real-doc kit (crossexam-live Moss index). Real, public, born-digital NTSB
+ * accident report. The slug is the single documentId used everywhere: the chunk
+ * id_prefix (ntsb-asiana-214-pN-lM), the /public/<slug>.pdf served below, the
+ * --document-id stamped at parse time, and this DOC_URLS/DOC_TITLES key.
+ */
+export const DOC_NTSB_ASIANA = 'ntsb-asiana-214';
+
+/**
+ * Gates deposition kit (crossexam-gates Moss index). Three documents built from
+ * the 1998 US v. Microsoft deposition transcripts (Techrights born-digital
+ * reproductions) and the 1995 Internet Tidal Wave memo (Gov. Exhibit 345).
+ * Hero contradiction: Gates says "No" to being worried about Netscape in April
+ * 1995 (gates-depo-aug27 p.47-48), while the memo (exhibit-internet-tidal-wave
+ * p.2) shows "I too am very worried" and "70% usage share / commoditize the
+ * underlying operating system".
+ */
+export const DOC_GATES_AUG27 = 'gates-depo-aug27';
+export const DOC_GATES_AUG28 = 'gates-depo-aug28';
+export const DOC_INTERNET_TIDAL_WAVE = 'exhibit-internet-tidal-wave';
 
 /** Titles mirror the fixture's `documentTitle` for each chunk's documentId. */
 export const DOC_TITLES: Readonly<Record<string, string>> = {
@@ -50,6 +70,10 @@ export const DOC_TITLES: Readonly<Record<string, string>> = {
   [DOC_FIELD_NOTES]: 'Exhibit 22: Handwritten Field Notes (scanned)',
   [DOC_CONTRACT]: 'Master Services Agreement',
   [DOC_EMAIL]: 'Email Thread — Contractor Correspondence',
+  [DOC_NTSB_ASIANA]: 'Asiana Airlines Flight 214 Accident Report (NTSB/AAR-14/01)',
+  [DOC_GATES_AUG27]: 'Gates Deposition — Aug 27, 1998 (US v. Microsoft)',
+  [DOC_GATES_AUG28]: 'Gates Deposition — Aug 28, 1998 (US v. Microsoft)',
+  [DOC_INTERNET_TIDAL_WAVE]: 'Internet Tidal Wave — Bill Gates Memo, May 26, 1995',
 };
 
 /**
@@ -63,6 +87,10 @@ export const DOC_URLS: Readonly<Record<string, string>> = {
   [DOC_EXHIBIT]: '/exhibit-visitor-log.pdf',
   [DOC_CONTRACT]: '/contract-msa.pdf',
   [DOC_EMAIL]: '/email-thread.pdf',
+  [DOC_NTSB_ASIANA]: '/ntsb-asiana-214.pdf',
+  [DOC_GATES_AUG27]: '/gates-depo-aug27.pdf',
+  [DOC_GATES_AUG28]: '/gates-depo-aug28.pdf',
+  [DOC_INTERNET_TIDAL_WAVE]: '/exhibit-internet-tidal-wave.pdf',
 };
 
 /**

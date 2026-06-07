@@ -52,6 +52,7 @@ export function ShortcutsCheatSheet({ open, onClose, isMac }: ShortcutsCheatShee
     { keys: [mod, '['], label: 'Previous document' },
     { keys: [mod, ']'], label: 'Next document' },
     { keys: ['?'], label: 'Toggle this cheat sheet' },
+    { keys: ['M'], label: 'Toggle mock / live mode (on-stage bail-out)' },
   ];
 
   return (

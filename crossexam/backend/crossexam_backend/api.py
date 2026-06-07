@@ -372,6 +372,59 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(
                 status_code=500, detail="Failed to mint LiveKit token."
             ) from exc
+
+        # AGENT AUTO-DISPATCH FIX: create (or ensure) the room via the server API
+        # with agents=[RoomAgentDispatch(agent_name="")] so that any worker
+        # registered with agent_name="" (auto-dispatch) is dispatched when the
+        # first participant joins.
+        #
+        # Without this call the room is created LAZILY when the browser
+        # connects — with no agents list — so LiveKit never sends an availability
+        # request to the registered worker. The worker logs show "registered
+        # worker" but never "received job request" for exactly this reason.
+        #
+        # LiveKit's CreateRoomRequest is idempotent (returns the existing room if
+        # it already exists), so calling it on every /token is safe.  We do it
+        # best-effort: a failure here must NOT 503 the token endpoint — the
+        # participant can still join, and the next /token call will retry.
+        try:
+            # RoomAgentDispatch and CreateRoomRequest are re-exported from
+            # livekit.protocol.room via `from livekit.protocol.room import *`
+            # inside livekit.api, so they're reachable as lk_api.RoomAgentDispatch
+            # and lk_api.CreateRoomRequest when the SDK is properly installed.
+            room_agent_dispatch = getattr(lk_api, "RoomAgentDispatch", None)
+            create_room_request = getattr(lk_api, "CreateRoomRequest", None)
+            live_kit_api_cls = getattr(lk_api, "LiveKitAPI", None)
+            if room_agent_dispatch and create_room_request and live_kit_api_cls:
+                async with live_kit_api_cls(
+                    url=settings.livekit_url,
+                    api_key=settings.livekit_api_key,
+                    api_secret=settings.livekit_api_secret,
+                ) as lk:
+                    await lk.room.create_room(
+                        create_room_request(
+                            name=room,
+                            agents=[room_agent_dispatch(agent_name="")],
+                        )
+                    )
+                logger.info(
+                    "token.room_ensured room=%s agent_name='' (auto-dispatch attached)",
+                    room,
+                )
+            else:
+                logger.warning(
+                    "token.room_ensure_skipped room=%s: RoomAgentDispatch/CreateRoomRequest "
+                    "not available in livekit.api (old SDK?); agent may not auto-dispatch",
+                    room,
+                )
+        except Exception:  # noqa: BLE001 - room-ensure failure must NOT 500 the token mint
+            logger.warning(
+                "token.room_ensure_failed room=%s; agent auto-dispatch may not fire "
+                "(participant can still join; next /token call will retry)",
+                room,
+                exc_info=True,
+            )
+
         logger.info("token.minted room=%s identity=%s", room, identity)
         return TokenResponse(
             token=jwt,
