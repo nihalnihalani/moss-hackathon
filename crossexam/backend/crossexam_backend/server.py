@@ -282,12 +282,31 @@ async def _livekit_entrypoint(ctx: Any) -> None:  # noqa: ANN401
     index_name = getattr(settings, "moss_index_name", "unknown")
     prewarm_timeout_s = getattr(settings, "moss_load_timeout_s", 30.0)
 
-    await index.prewarm()
-    prewarm_deadline = asyncio.get_event_loop().time() + prewarm_timeout_s
+    loop = asyncio.get_running_loop()
+    prewarm_deadline = loop.time() + prewarm_timeout_s
     retry_interval_s = 3.0
     attempt = 1
+    last_err: Exception | None = None
+
+    async def _prewarm_once(budget_s: float) -> None:
+        # Per-call timeout so a hung load_index can never block ctx.connect().
+        await asyncio.wait_for(index.prewarm(), timeout=max(0.1, budget_s))
+
+    # Each prewarm attempt is wrapped: a throw or a hang degrades to the retry
+    # loop (and ultimately the cold-path fallback) instead of blocking startup.
+    try:
+        await _prewarm_once(prewarm_deadline - loop.time())
+    except Exception as exc:  # noqa: BLE001 - degrade, never crash the worker
+        last_err = exc
+        logger.warning(
+            "crossexam.prewarm_attempt_failed attempt=%d index=%s error=%r",
+            attempt,
+            index_name,
+            exc,
+        )
+
     while not getattr(index, "is_loaded", True):
-        remaining = prewarm_deadline - asyncio.get_event_loop().time()
+        remaining = prewarm_deadline - loop.time()
         if remaining <= 0:
             break
         wait = min(retry_interval_s, remaining)
@@ -298,8 +317,20 @@ async def _livekit_entrypoint(ctx: Any) -> None:  # noqa: ANN401
             wait,
         )
         await asyncio.sleep(wait)
-        await index.prewarm()
         attempt += 1
+        remaining = prewarm_deadline - loop.time()
+        if remaining <= 0:
+            break
+        try:
+            await _prewarm_once(remaining)
+        except Exception as exc:  # noqa: BLE001 - degrade, never crash the worker
+            last_err = exc
+            logger.warning(
+                "crossexam.prewarm_attempt_failed attempt=%d index=%s error=%r",
+                attempt,
+                index_name,
+                exc,
+            )
 
     if getattr(index, "is_loaded", True):
         logger.info(
@@ -307,7 +338,7 @@ async def _livekit_entrypoint(ctx: Any) -> None:  # noqa: ANN401
             index_name,
         )
     else:
-        prewarm_err = getattr(index, "last_prewarm_error", None)
+        prewarm_err = getattr(index, "last_prewarm_error", None) or repr(last_err)
         logger.warning(
             "crossexam.prewarm_failed is_loaded=False index=%s; "
             "proceeding degraded — first turn will use cold cloud path "

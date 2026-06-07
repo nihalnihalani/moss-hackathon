@@ -639,7 +639,13 @@ export function useCrossExam(config: CrossExamConfig): CrossExamState {
       disposed = true;
       cleanup?.();
     };
-  }, [isMock, config.livekitUrl, config.livekitToken]);
+  }, [
+    isMock,
+    config.livekitUrl,
+    config.livekitToken,
+    config.connectTimeoutMs,
+    config.onConnectFailed,
+  ]);
 
   useEffect(() => () => clearTimers(), [clearTimers]);
 

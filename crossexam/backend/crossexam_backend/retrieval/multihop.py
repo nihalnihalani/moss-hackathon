@@ -934,10 +934,25 @@ def _seeded_contradiction_pair(
     return primary_id, other_id, True  # always cross-document
 
 
+def _seeks_contradiction(question: str) -> bool:
+    """True when ``question`` explicitly seeks a contradiction.
+
+    Matches a single-token contradiction cue (``contradict``, ``conflict``,
+    ``inconsistent`` ...) or a multi-word contradiction phrase. Unlike
+    :meth:`QueryDecomposer.is_multihop`, a bare ``and`` / ``both`` / ``compare``
+    (synthesis or comparison) does NOT qualify -- so the seeded contradiction
+    fallback never fires for non-contradiction-seeking questions.
+    """
+    lowered = question.lower()
+    if set(_TOKEN_RE.findall(lowered)) & _CONTRADICTION_CUES:
+        return True
+    return any(phrase in lowered for phrase in _CONTRADICTION_PHRASES)
+
+
 def detect_contradiction(
     citations: Sequence[Citation],
     *,
-    is_multihop: bool = False,
+    is_contradiction: bool = False,
 ) -> tuple[bool, str | None, bool]:
     """Detect a cross-page / cross-document contradiction among ``citations``.
 
@@ -951,20 +966,21 @@ def detect_contradiction(
     admission email). See :func:`contradiction_pair`.
 
     **PATH 2 — SEEDED KNOWN PAIR** (fallback when PATH 1 returns None and
-    ``is_multihop=True``): Gates deposition (aug27 or aug28) vs. the
+    ``is_contradiction=True``): Gates deposition (aug27 or aug28) vs. the
     "Internet Tidal Wave" email exhibit. Fires when both docs appear in the
     citation pool. The deposition chunk is PRIMARY; the exhibit chunk is OTHER.
     All retrieval (text, page, bbox) is live from Moss — only the contradiction
-    judgment is seeded. Scoped strictly: never fires on non-multihop queries,
-    never fires on unrelated document pairs.
+    judgment is seeded. Scoped strictly: never fires on non-contradiction
+    queries, never fires on unrelated document pairs.
 
     SELECTION among all eligible conflicting pairs is a strict, principled
     priority (see :func:`contradiction_pair`).
 
     Args:
         citations: Candidate citations (already fused / ranked).
-        is_multihop: Whether the question was routed via multi-hop /
-            contradiction decomposition. Required for the seeded path to fire.
+        is_contradiction: Whether the question explicitly seeks a contradiction
+            (see :func:`_seeks_contradiction`). Required for the seeded path to
+            fire -- a generic compare / synthesis ask must NOT trigger it.
 
     Returns:
         ``(contradiction, primary_id, cross_document)`` where ``primary_id`` is
@@ -973,7 +989,7 @@ def detect_contradiction(
         when the two citations come from different documents.
     """
     pair = contradiction_pair(citations)
-    if pair is None and is_multihop:
+    if pair is None and is_contradiction:
         pair = _seeded_contradiction_pair(citations)
         if pair is not None:
             logger.debug(
@@ -1212,6 +1228,10 @@ class MultiHopRetriever:
         """
         start = time.perf_counter()
         is_multihop_q = self._decomposer.is_multihop(question)
+        # The seeded contradiction fallback must only fire for questions that
+        # explicitly SEEK a contradiction -- not for generic compare/both/and
+        # synthesis asks that is_multihop also matches.
+        is_contradiction_q = _seeks_contradiction(question)
         sub_queries = self._decomposer.decompose(question)
 
         # Fetch a wider candidate pool per hop than we ultimately publish so the
@@ -1265,7 +1285,7 @@ class MultiHopRetriever:
         # routed multi-hop, check the known-pair dict.
         full = self._fuse(rankings, by_id, len(by_id))
         pair = contradiction_pair(full)
-        if pair is None and is_multihop_q:
+        if pair is None and is_contradiction_q:
             pair = _seeded_contradiction_pair(full)
             if pair is not None:
                 logger.debug(
