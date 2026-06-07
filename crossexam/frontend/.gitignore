@@ -3,3 +3,6 @@ dist/
 *.local
 .vite/
 coverage/
+
+# TypeScript incremental build cache (regenerated; not for VCS)
+*.tsbuildinfo

@@ -308,8 +308,10 @@ def _is_completed(status: object, completed_value: str) -> bool:
     """Return True if *status* equals the COMPLETED sentinel.
 
     Tolerates the status being the enum-like class-attribute string, a plain
-    string, or any object whose ``str()`` matches (defensive for SDK versions
-    that change the representation).
+    string, or any object whose ``str()`` or ``.value`` attribute matches
+    (defensive for SDK versions that change the representation -- moss 1.4.0
+    returns a ``JobStatus`` object whose ``str()`` is its repr but whose
+    ``.value`` is ``"completed"``).
 
     Args:
         status: The ``.status`` field of a ``JobStatusResponse``.
@@ -318,7 +320,12 @@ def _is_completed(status: object, completed_value: str) -> bool:
     Returns:
         ``True`` when the job is complete.
     """
-    return status == completed_value or str(status) == completed_value
+    value_attr = getattr(status, "value", None)
+    return (
+        status == completed_value
+        or str(status) == completed_value
+        or (value_attr is not None and value_attr == completed_value)
+    )
 
 
 def _is_failed(status: object, failed_value: str) -> bool:
@@ -331,7 +338,12 @@ def _is_failed(status: object, failed_value: str) -> bool:
     Returns:
         ``True`` when the job has failed.
     """
-    return status == failed_value or str(status) == failed_value
+    value_attr = getattr(status, "value", None)
+    return (
+        status == failed_value
+        or str(status) == failed_value
+        or (value_attr is not None and value_attr == failed_value)
+    )
 
 
 async def _poll_job(

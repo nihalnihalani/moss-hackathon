@@ -30,6 +30,12 @@ export interface UseShortcutsHandlers {
   onNextDoc: () => void;
   /** Toggle the shortcuts cheat-sheet (Shift+/). */
   onToggleHelp: () => void;
+  /**
+   * Toggle mock mode on/off (M key). The on-stage emergency bail-out: one key
+   * drops the demo to the scripted mock path in ~1 second even mid-session.
+   * Disabled on form tags so typing "m" in a text field is never intercepted.
+   */
+  onToggleMock: () => void;
 }
 
 export interface UseShortcutsResult {
@@ -48,7 +54,7 @@ export function detectMac(): boolean {
 }
 
 export function useShortcuts(handlers: UseShortcutsHandlers): UseShortcutsResult {
-  const { onTalkStart, onTalkEnd, onOpenPalette, onPrevDoc, onNextDoc, onToggleHelp } = handlers;
+  const { onTalkStart, onTalkEnd, onOpenPalette, onPrevDoc, onNextDoc, onToggleHelp, onToggleMock } = handlers;
 
   // Space = push-to-talk (hold). keydown + keyup, guard auto-repeat, stop scroll.
   // Default-disabled on form tags so typing a space never triggers the mic.
@@ -113,6 +119,20 @@ export function useShortcuts(handlers: UseShortcutsHandlers): UseShortcutsResult
     },
     { enableOnFormTags: false },
     [onToggleHelp],
+  );
+
+  // M — emergency mock toggle. One key drops the session to scripted mock mode
+  // (or back to live) in ~1 second, giving the presenter an on-stage bail-out
+  // without touching the mouse. Disabled on form tags so typing in a field is
+  // never intercepted.
+  useHotkeys(
+    'm',
+    (e) => {
+      e.preventDefault();
+      onToggleMock?.();
+    },
+    { enableOnFormTags: false },
+    [onToggleMock],
   );
 
   return { isMac: detectMac() };

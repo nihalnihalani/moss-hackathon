@@ -29,6 +29,7 @@ function makeHandlers(): UseShortcutsHandlers & { [K in keyof UseShortcutsHandle
     onPrevDoc: vi.fn(),
     onNextDoc: vi.fn(),
     onToggleHelp: vi.fn(),
+    onToggleMock: vi.fn(),
   } as UseShortcutsHandlers & { [K in keyof UseShortcutsHandlers]: ReturnType<typeof vi.fn> };
 }
 
@@ -99,5 +100,23 @@ describe('useShortcuts scoping', () => {
 
     fireEvent.keyDown(document.body, { key: '/', code: 'Slash', shiftKey: true });
     expect(handlers.onToggleHelp).toHaveBeenCalledTimes(1);
+  });
+
+  it('toggles mock mode on M (body focus)', () => {
+    const handlers = makeHandlers();
+    render(<Harness handlers={handlers} />);
+
+    fireEvent.keyDown(document.body, { key: 'm', code: 'KeyM' });
+    expect(handlers.onToggleMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('does NOT fire mock toggle while typing m in an input', () => {
+    const handlers = makeHandlers();
+    render(<Harness handlers={handlers} />);
+    const field = screen.getByTestId('field');
+    field.focus();
+
+    fireEvent.keyDown(field, { key: 'm', code: 'KeyM' });
+    expect(handlers.onToggleMock).not.toHaveBeenCalled();
   });
 });

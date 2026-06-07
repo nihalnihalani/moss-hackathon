@@ -181,66 +181,50 @@ def _dispatch_is_active(dispatch: object, lk_api: object) -> bool:
 
 async def _ensure_agent_dispatch(
     settings: Settings, lk_api: object, room: str
-) -> str | None:
-    """Create or reuse the named LiveKit agent dispatch for ``room``.
+) -> None:
+    """Ensure the room exists and has a named agent dispatch attached.
 
-    LiveKit's current guidance favors explicit dispatch for production control.
-    The browser joins with a participant token, then this backend makes sure the
-    named worker has a job for that room. Older/minimal test fakes may not expose
-    the management client; in that case token minting still works.
+    Uses an idempotent ``create_room`` call with ``RoomAgentDispatch`` so the
+    room and its agent binding are both created in one step regardless of whether
+    the room already exists. This avoids the 404 that ``list_dispatch`` raises
+    when called before the room has been created (i.e. before any participant
+    has connected).
+
+    The previous list_dispatch → create_dispatch approach failed in production
+    because ``list_dispatch(room)`` returned a TwirpError(not_found, 404) when
+    called before the participant's first connect, which happens before the room
+    is lazily created by LiveKit Cloud.
+
+    ``create_room`` is idempotent — calling it on an already-existing room is a
+    no-op. getattr guards make this a no-op for test fakes that lack the real
+    SDK classes.
     """
     agent_name = settings.livekit_agent_name.strip()
     if not agent_name:
-        return None
+        return
 
     livekit_api_cls = getattr(lk_api, "LiveKitAPI", None)
-    create_request_cls = getattr(lk_api, "CreateAgentDispatchRequest", None)
-    if not callable(livekit_api_cls) or create_request_cls is None:
-        return None
+    create_room_cls = getattr(lk_api, "CreateRoomRequest", None)
+    room_agent_dispatch_cls = getattr(lk_api, "RoomAgentDispatch", None)
+    if not callable(livekit_api_cls) or create_room_cls is None or room_agent_dispatch_cls is None:
+        return
 
-    client = livekit_api_cls(
+    async with livekit_api_cls(
         _livekit_http_url(settings.livekit_url),
         settings.livekit_api_key,
         settings.livekit_api_secret,
+    ) as lk:
+        await lk.room.create_room(
+            create_room_cls(
+                name=room,
+                agents=[room_agent_dispatch_cls(agent_name=agent_name)],
+            )
+        )
+    logger.info(
+        "token.room_ensured room=%s agent_name=%s (named dispatch attached)",
+        room,
+        agent_name,
     )
-    try:
-        agent_dispatch = getattr(client, "agent_dispatch", None)
-        if agent_dispatch is None:
-            return None
-
-        list_dispatch = getattr(agent_dispatch, "list_dispatch", None)
-        if callable(list_dispatch):
-            for dispatch in await list_dispatch(room):
-                if getattr(dispatch, "agent_name", None) == agent_name and _dispatch_is_active(
-                    dispatch, lk_api
-                ):
-                    dispatch_id = str(getattr(dispatch, "id", "") or "")
-                    logger.info(
-                        "token.agent_dispatch_reused room=%s agent=%s dispatch=%s",
-                        room,
-                        agent_name,
-                        dispatch_id,
-                    )
-                    return dispatch_id
-
-        create_dispatch = getattr(agent_dispatch, "create_dispatch", None)
-        if not callable(create_dispatch):
-            return None
-        dispatch = await create_dispatch(
-            create_request_cls(room=room, agent_name=agent_name)
-        )
-        dispatch_id = str(getattr(dispatch, "id", "") or "")
-        logger.info(
-            "token.agent_dispatch_created room=%s agent=%s dispatch=%s",
-            room,
-            agent_name,
-            dispatch_id,
-        )
-        return dispatch_id
-    finally:
-        close = getattr(client, "aclose", None)
-        if callable(close):
-            await close()
 
 
 def _initial_index(settings: Settings) -> RetrievalIndex:
