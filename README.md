@@ -46,9 +46,11 @@
 
 ## 🎯 What it is
 
-**CrossExam is a real-time voice co-pilot that proves every answer on the page — live.** You interrogate a document out loud; it answers by voice and **snaps a verifiable highlight box onto the exact cited line** the instant the claim is spoken. The question, the spoken answer, and the source line all land on screen in the same moment.
+**CrossExam is a real-time voice co-pilot that cross-examines documents the way a trial lawyer cross-examines a witness — out loud, on the record, and with the proof on screen.** You ask a 900-page deposition a question by voice; it answers by voice and, in the same instant, **snaps a verifiable highlight box onto the exact cited line.** Question, spoken answer, and source line co-exist on screen the moment the claim is made.
 
-It is **not a notetaker.** It doesn't summarize after the call — it proves the answer *during* the call. And its hero move is the one a litigator lives for: **catching a contradiction.** Ask a follow-up and CrossExam surfaces a *second* box — on a page hundreds apart, or in an entirely different document — exposing the conflict (a contract that says *"Net-30"* against an email admitting *"Net-60"*) with an anchor banner naming the discrepancy. That is cross-examination, automated.
+It is **not a notetaker.** It never summarizes after the call — it proves the answer *during* the call. And its hero move is the one a litigator lives for: **catching the contradiction.** Push back with a follow-up and CrossExam surfaces a *second* box — on a page hundreds apart, or inside an entirely different file — and lays the two passages side by side: a contract that says *"Net-30"* against an email admitting *"Net-60,"* with an **anchor banner** naming the discrepancy (`CONFLICT — Anchor: §4.2`). The witness just impeached themselves, and you have the receipts on screen.
+
+The wedge is **verifiable co-presence**: in a live, high-stakes conversation, every claim is provable — and every contradiction is exposed — the instant it's spoken.
 
 | | |
 |---|---|
