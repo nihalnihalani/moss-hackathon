@@ -16,8 +16,16 @@ BACKEND   := $(ROOT)/backend
 PIPELINE  := $(ROOT)/pipeline
 FRONTEND  := $(ROOT)/frontend
 
-# Prefer python3, fall back to python.
-PY := $(shell command -v python3 2>/dev/null || command -v python 2>/dev/null)
+# Load local developer settings when present so Make variables such as API_PORT
+# stay in sync with Docker Compose. Do not export the whole file globally:
+# hermetic test targets intentionally exercise "no keys" branches.
+ifneq (,$(wildcard $(ROOT)/.env))
+include $(ROOT)/.env
+endif
+
+# Prefer the project venv when present, then fall back to python3/python.
+VENV_PY := $(ROOT)/.venv/bin/python
+PY := $(shell if [ -x "$(VENV_PY)" ]; then printf '%s\n' "$(VENV_PY)"; else command -v python3 2>/dev/null || command -v python 2>/dev/null; fi)
 NPM := $(shell command -v npm 2>/dev/null)
 
 # Where `make index` writes its intermediate chunk JSON and final index records.
@@ -28,6 +36,7 @@ INDEX_OUT    := $(PIPELINE)/build/index_records.json
 
 .PHONY: help setup setup-backend setup-pipeline setup-frontend \
         dev dev-live api verify-live test test-backend test-pipeline test-frontend \
+        install-moss test-moss \
         lint lint-py lint-frontend fmt typecheck typecheck-py typecheck-frontend \
         eval bench build index clean
 
@@ -77,6 +86,32 @@ setup-pipeline:
 setup-frontend:
 	$(call need_npm)
 	cd "$(FRONTEND)" && $(NPM) ci
+
+# =============================================================================
+# moss (real in-process retrieval SDK — OPTIONAL; mock path needs none of this)
+# =============================================================================
+## install-moss: install backend + pipeline WITH the real Moss SDK ([dev,moss]).
+## Resolves inferedge-moss + its prebuilt native core. The app still runs without
+## it (MockIndex fallback); install only for the LIVE retrieval path.
+install-moss:
+	$(call need_py)
+	@echo ">> installing crossexam-backend[dev,moss] + crossexam-pipeline[dev,moss]"
+	$(PY) -m pip install -e "$(BACKEND)[dev,moss]" -e "$(PIPELINE)[dev,moss]"
+
+## test-moss: run BOTH pytest suites with the real Moss SDK present.
+## Exercises the real-SDK tests gated by pytest.importorskip("inferedge_moss").
+## Needs NO API keys (those tests make no network calls). Run `make install-moss`
+## first (or use the project venv at .venv where moss is already installed).
+test-moss:
+	$(call need_py)
+	@if ! $(PY) -c "import inferedge_moss" >/dev/null 2>&1; then \
+		echo ">> inferedge_moss not importable. Run 'make install-moss' first"; \
+		echo "   (or activate the project venv: source .venv/bin/activate)."; \
+		exit 1; \
+	fi
+	@echo ">> backend + pipeline pytest WITH real Moss SDK (no keys needed)"
+	cd "$(BACKEND)"  && $(PY) -m pytest
+	cd "$(PIPELINE)" && $(PY) -m pytest
 
 # =============================================================================
 # dev
@@ -172,21 +207,51 @@ typecheck-frontend:
 # =============================================================================
 # verify-live
 # =============================================================================
-## verify-live: preflight (doctor) + best-effort curl of /healthz and /config.
-## Prints the READY/MISSING/MOCK table, then probes the API at $(API_BASE).
-## If the server is not up, it prints guidance (start it with `make api`) and
-## still exits 0 — this target is a read-out, not a hard gate.
+## verify-live: preflight (doctor) + a real Moss smoke when creds are present.
+## Prints the READY/MISSING/MOCK table; if MOSS_PROJECT_ID and MOSS_PROJECT_KEY
+## are in the env it adds `doctor --probe` (a REAL load_index/get_index round-trip,
+## needs the [moss] extra). With no creds it prints a clear note and still
+## exits 0 — this target is a read-out, not a hard gate. Then it probes
+## /healthz and /config at $(API_BASE). If an API is reachable but does not look
+## like CrossExam, it exits nonzero so a port conflict cannot masquerade as live.
 verify-live:
 	$(call need_py)
 	@echo ">> crossexam-backend preflight (doctor — no network calls):"
 	@cd "$(BACKEND)" && $(PY) -m crossexam_backend.doctor || true
 	@echo ""
+	@if [ -n "$(MOSS_PROJECT_ID)" ] && [ -n "$(MOSS_PROJECT_KEY)" ]; then \
+		echo ">> Moss creds present — running a REAL load_index probe (doctor --probe):"; \
+		cd "$(BACKEND)" && $(PY) -m crossexam_backend.doctor --probe || true; \
+	else \
+		echo ">> MOSS_PROJECT_ID / MOSS_PROJECT_KEY not set — skipping the live Moss probe."; \
+		echo "   Set them (and 'make install-moss', USE_MOCKS=false) to smoke the real index."; \
+	fi
+	@echo ""
 	@echo ">> probing HTTP API at $(API_BASE) (best-effort):"
 	@if ! command -v curl >/dev/null 2>&1; then \
 		echo "   curl not found — skipping endpoint probe (install curl to enable)."; \
-	elif curl -fsS --max-time 3 "$(API_BASE)/healthz" >/dev/null 2>&1; then \
-		echo "   GET /healthz ->"; curl -fsS --max-time 3 "$(API_BASE)/healthz"; echo ""; \
-		echo "   GET /config  ->"; curl -fsS --max-time 3 "$(API_BASE)/config"; echo ""; \
+	elif health="$$(curl -fsS --max-time 3 "$(API_BASE)/healthz" 2>/dev/null)"; then \
+		if ! config="$$(curl -fsS --max-time 3 "$(API_BASE)/config" 2>/dev/null)"; then \
+			echo "   GET /healthz -> $$health"; \
+			echo "   GET /config  -> FAILED"; \
+			echo "   A service is reachable at $(API_BASE), but it is not serving CrossExam /config."; \
+			echo "   Stop the conflicting service, run 'make api', or pass API_PORT=..."; \
+			exit 1; \
+		fi; \
+		if [[ "$$health" != *'"mode"'* || "$$health" != *'"livekit_configured"'* ]]; then \
+			echo "   GET /healthz -> $$health"; \
+			echo "   Unexpected /healthz payload. This does not look like crossexam-api."; \
+			echo "   Stop the conflicting service, run 'make api', or pass API_PORT=..."; \
+			exit 1; \
+		fi; \
+		if [[ "$$config" != *'"live"'* || "$$config" != *'"livekit_url"'* ]]; then \
+			echo "   GET /config  -> $$config"; \
+			echo "   Unexpected /config payload. This does not look like crossexam-api."; \
+			echo "   Stop the conflicting service, run 'make api', or pass API_PORT=..."; \
+			exit 1; \
+		fi; \
+		echo "   GET /healthz -> $$health"; \
+		echo "   GET /config  -> $$config"; \
 	else \
 		echo "   API not reachable at $(API_BASE)."; \
 		echo "   Start it with 'make api' (or 'make dev-live' / 'docker compose up'),"; \

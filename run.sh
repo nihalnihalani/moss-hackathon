@@ -99,12 +99,35 @@ else
   warn "no crossexam/.env — running in MOCK mode (UI works, no real voice/retrieval)"
 fi
 
+# Decide which extras to install. With Moss creds present we add the [moss] extra
+# so the LIVE retrieval path actually has the in-process SDK (inferedge-moss); with
+# no creds we stay on [api,voice] and the app falls back to the mock index.
+BACKEND_EXTRAS="api,voice"
+MOSS_READY=0
+if [ -n "${MOSS_PROJECT_ID:-}" ] && [ -n "${MOSS_PROJECT_KEY:-}" ]; then
+  BACKEND_EXTRAS="api,voice,moss"
+  MOSS_READY=1
+fi
+
 # backend importable?
 if "$PY" -c "import crossexam_backend.api, crossexam_backend.server" >/dev/null 2>&1; then
   ok "backend package imports"
 else
-  warn "backend not importable — attempting: pip install -e backend[api,voice]"
-  "$PY" -m pip install -e "$BACKEND[api,voice]" || die "backend install failed. See KEYS.md / 'make setup'."
+  warn "backend not importable — attempting: pip install -e backend[$BACKEND_EXTRAS]"
+  "$PY" -m pip install -e "$BACKEND[$BACKEND_EXTRAS]" || die "backend install failed. See KEYS.md / 'make setup'."
+fi
+
+# Moss creds present but the SDK isn't installed? Pull in the [moss] extra so the
+# live retrieval path is real (not silently mock). Skipped entirely in mock mode.
+if [ "$MOSS_READY" = "1" ]; then
+  if "$PY" -c "import inferedge_moss" >/dev/null 2>&1; then
+    ok "Moss SDK present — LIVE retrieval path available"
+  else
+    warn "Moss creds set but inferedge_moss missing — installing backend[moss]"
+    "$PY" -m pip install -e "$BACKEND[moss]" \
+      && ok "Moss SDK installed" \
+      || warn "Moss SDK install failed — backend will fall back to the mock index"
+  fi
 fi
 
 # frontend deps?

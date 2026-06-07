@@ -281,13 +281,18 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         action="store_true",
         help="Use RAGAS faithfulness when ragas + an LLM key are available.",
     )
+    parser.add_argument(
+        "--live",
+        action="store_true",
+        help="Use configured live retrieval instead of the offline mock fixture.",
+    )
     return parser.parse_args(argv)
 
 
 def run(argv: list[str] | None = None) -> int:
     """Run the eval, print the scorecard, and return a process exit code."""
     args = _parse_args(argv)
-    settings = get_settings()
+    settings = get_settings() if args.live else Settings(use_mocks=True)
     queries = load_eval_queries(args.dataset)
     index = get_index(settings)
 

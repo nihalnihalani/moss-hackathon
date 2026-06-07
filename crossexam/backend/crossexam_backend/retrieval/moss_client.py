@@ -7,7 +7,7 @@ SDK is guarded so this module is always importable (e.g. in tests) even without
 the dependency.
 
 ============================================================================
-VERIFIED MOSS SDK SURFACE (researched 2026-06-04)
+VERIFIED MOSS SDK SURFACE (introspected 2026-06-07, inferedge_moss 1.0.0b19)
 ============================================================================
 Sources:
   - PyPI:    https://pypi.org/project/inferedge-moss/
@@ -15,53 +15,87 @@ Sources:
   - GitHub:  https://github.com/usemoss/moss
   - Web:     https://www.moss.dev/
 
-PACKAGE-NAME INCONSISTENCY (documented per task requirement):
-  - The PyPI *distribution* is published as ``inferedge-moss``
-    (``pip install inferedge-moss``).
-  - The *import package* is reported as ``inferedge_moss`` by the docs site,
-    BUT the GitHub README (usemoss/moss) shows ``from moss import MossClient``
-    and ``pip install moss``. The npm sibling is ``@inferedge/moss``.
-  - The naming is genuinely inconsistent across the upstream sources, so we try
-    BOTH import names (``inferedge_moss`` first, then ``moss``) in
-    :func:`_load_moss_module`. On-site this becomes a one-line change if a
-    third name appears.
+PACKAGE NAME (verified by import introspection):
+  - ONLY ``inferedge_moss`` works. ``from moss import ...`` raises
+    ``ModuleNotFoundError``. The import candidates list retains ``moss`` as a
+    last-resort fallback in case a future distribution adds it.
 
-VERIFIED API SHAPE (high confidence — consistent across PyPI + docs + GitHub):
-    from inferedge_moss import MossClient, QueryOptions   # or: from moss import ...
+VERIFIED API SHAPE (introspected from inferedge_moss 1.0.0b19):
 
-    client = MossClient("your_project_id", "your_project_key")  # POSITIONAL args
-    await client.load_index("index-name")
-    results = await client.query(
-        "index-name",
-        "query text",
-        QueryOptions(top_k=3, alpha=0.6),   # alpha default 0.8; 0.0=keyword, 1.0=semantic
+    from inferedge_moss import (
+        MossClient, QueryOptions, GetDocumentsOptions,
+        SearchResult, QueryResultDocumentInfo, DocumentInfo,
     )
-    for doc in results.docs:                # results.docs is the ranked list
-        doc.id, doc.text, doc.score         # per-document fields
-    results.time_taken_ms                   # server-measured latency
 
-COULD-NOT-VERIFY (kept defensive, locked by recorded test):
-  - bbox / page / page_width / page_height: NONE of the public sources document
-    geometry fields on a Moss document. ``DocumentInfo`` is documented as
-    ``id`` + ``text`` + optional ``metadata`` (a dict). For PDF citations we
-    therefore assume bbox/page live inside ``doc.metadata`` (or as top-level
-    attributes if a future version adds them). :meth:`_to_citation` reads both
-    locations defensively. The exact key names are an ASSUMPTION and are locked
-    by ``tests/test_moss_adapter.py`` so a real-SDK swap is a fixture update,
-    not a rewrite.
-  - Whether ``query`` is sync or async: docs show ``await client.query(...)``,
-    so we treat it as awaitable but still tolerate a sync return.
+    client = MossClient("project_id", "project_key")  # POSITIONAL args
+
+    # load_index: downloads the index into memory for ~1-10ms in-process queries.
+    # Without it queries fall back to the cloud API (~100-500ms).
+    status: str = await client.load_index(
+        name,
+        auto_refresh=False,           # bool — poll for updates
+        polling_interval_in_seconds=600,  # int — polling cadence
+    )
+    # Returns a str (status), NOT a document list.
+
+    # query: SearchResult.docs is list[QueryResultDocumentInfo]
+    results: SearchResult = await client.query(
+        name, query_text,
+        QueryOptions(top_k=5, alpha=0.8, filter=...),
+    )
+    for doc in results.docs:          # QueryResultDocumentInfo
+        doc.id, doc.text, doc.score   # str, str, float
+        doc.metadata                  # dict[str, str]  — ALL VALUES ARE STRINGS
+    results.time_taken_ms             # float — server-measured latency
+
+    # get_docs: REAL enumeration of all documents in an index.
+    docs: list[DocumentInfo] = await client.get_docs(
+        name,
+        GetDocumentsOptions(doc_ids=None),  # None -> all docs
+    )
+    for d in docs:
+        d.id, d.text, d.metadata      # DocumentInfo attrs
+
+    QueryOptions fields: top_k, alpha, embedding
+    GetDocumentsOptions fields: doc_ids (list[str] | None)
+    SearchResult fields: docs, query, index_name, time_taken_ms
+    QueryResultDocumentInfo fields: id, text, metadata, score
+    DocumentInfo fields: id, text, metadata, embedding
+
+VERIFIED METADATA CONTRACT (confirmed from the running pipeline + SDK):
+  - Moss document metadata values are ALL STRINGS. The pipeline writes the
+    shared contract into ``doc.metadata`` with every value string-encoded:
+    ``documentId``, ``documentTitle`` (optional), ``scanned`` ("true"/"false"),
+    ``page`` (e.g. "3"), ``confidence`` (e.g. "0.97"), and the geometry
+    (``bbox``, ``words``, optional ``quads``) as JSON-ENCODED STRINGS.
+  - :meth:`_to_citation` is DUAL-TOLERANT: it parses BOTH the new string
+    contract (real Moss) AND the older nested-dict form used by DI / test
+    fakes. JSON-string geometry is ``json.loads``-decoded (malformed value
+    falls back to a safe default so a single bad turn never crashes the voice
+    loop); page/confidence/scanned are coerced tolerantly.
+
+VERIFIED FILTER GRAMMAR (from ``query`` docstring in the SDK):
+  - The public docs show the ``filter`` kwarg passed to ``client.query``:
+    ``client.query(name, text, QueryOptions(...), filter=predicate)``.
+  - Older/introspected SDK builds also accept ``filter`` on ``QueryOptions``:
+      ``{"$and": [{"field": "f", "condition": {"$eq": "v"}}, ...]}``
+    Confirmed operators: ``$and``, ``$eq``, ``$lt``.
+  - ``$or`` is NOT confirmed in the SDK docstring (only ``$and``/``$eq``/
+    ``$lt`` are shown). We therefore fall back to over-fetch + client-side
+    post-filter if the server raises on our ``$or``-based compound filter.
+  - The ``filter`` kwarg is ``filter=`` (singular, verified).
 
 ALL real-SDK touch points are isolated behind small methods
 (:func:`_load_moss_module`, :meth:`_make_client`, :meth:`_make_query_options`,
-:meth:`_raw_query`) so adapting to the exact installed version touches exactly
-those methods.
+:meth:`_raw_query`, :meth:`prewarm`, :meth:`refresh_document_ids`) so adapting
+to the exact installed version touches exactly those methods.
 ============================================================================
 """
 
 from __future__ import annotations
 
 import importlib
+import json
 import logging
 import time
 from types import ModuleType
@@ -77,7 +111,8 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Import-package names to try, in priority order. See the module docstring for
-# why there are several: the upstream naming is inconsistent.
+# why there are two: "moss" is a last-resort fallback; only "inferedge_moss"
+# is confirmed to exist as of 1.0.0b19.
 _MOSS_IMPORT_CANDIDATES: tuple[str, ...] = ("inferedge_moss", "moss")
 
 
@@ -97,8 +132,8 @@ class MossQueryError(RuntimeError):
 def _load_moss_module() -> ModuleType | None:
     """Import the Moss SDK if available, else return ``None``.
 
-    Tries each name in :data:`_MOSS_IMPORT_CANDIDATES` (the distribution name is
-    ``inferedge-moss`` but the import name is reported inconsistently upstream).
+    Tries each name in :data:`_MOSS_IMPORT_CANDIDATES`. Only ``inferedge_moss``
+    is confirmed to exist as of 1.0.0b19; ``moss`` is retained as a fallback.
 
     Returns:
         The imported module, or ``None`` when no candidate is installed.
@@ -147,13 +182,9 @@ class MossIndex(RetrievalIndex):
         # operator wired up Moss, a broken query should be loud, not silent.
         self._strict = settings.has_moss_credentials if strict is None else strict
         self._module: ModuleType | None = None
-        # Distinct documentIds observed so far. The Moss SDK does not document a
-        # "list all documents in an index" call, so we MAINTAIN this set: it is
-        # seeded from the loaded index when the SDK exposes a doc listing (see
-        # :meth:`prewarm`) and otherwise grows as query results stream in. This
-        # backs the :attr:`document_ids` property that multi-hop anchor-expansion
-        # reads (multihop.py) — without it, cross-document expansion silently
-        # finds no other docs to reach into.
+        # Distinct documentIds observed so far. Seeded in prewarm() via the
+        # real get_docs() enumeration, then grown by query results. Backs the
+        # document_ids property that multi-hop anchor-expansion reads.
         self._seen_document_ids: set[str] = set()
 
         if client is not None:
@@ -163,7 +194,7 @@ class MossIndex(RetrievalIndex):
             if module is None:
                 raise MossClientUnavailableError(
                     "moss SDK is not installed; cannot create a real MossIndex. "
-                    f"Install with: pip install inferedge-moss (tried imports: "
+                    f"Install with: pip install 'crossexam-backend[moss]' (tried: "
                     f"{', '.join(_MOSS_IMPORT_CANDIDATES)})"
                 )
             self._module = module
@@ -177,13 +208,10 @@ class MossIndex(RetrievalIndex):
         """Distinct document ids known to this index, in sorted order.
 
         Multi-hop anchor-expansion (``retrieval/multihop.py``) reads this via
-        ``getattr(index, "document_ids", [])`` to reach across OTHER documents
-        for a cross-document counter. The Moss SDK does not document an
-        enumerate-all-documents call, so this returns the ids OBSERVED so far
-        (seeded from the loaded index in :meth:`prewarm` when possible, plus any
-        seen as query results stream). It is therefore best-effort: it will be
-        complete once the relevant docs have been touched, which is sufficient
-        for the expansion heuristic. See the module docstring (COULD-NOT-VERIFY).
+        ``getattr(index, "document_ids", [])`` to reach across OTHER documents.
+        Seeded by :meth:`prewarm` via the real ``get_docs`` enumeration, then
+        grown by query results as a best-effort fallback. Call
+        :meth:`refresh_document_ids` to re-enumerate at any point.
         """
         return sorted(self._seen_document_ids)
 
@@ -194,6 +222,7 @@ class MossIndex(RetrievalIndex):
                 self._seen_document_ids.add(c.documentId)
 
     # -- real-SDK touch points (the ONLY places that know the SDK shape) -----
+
     @staticmethod
     def _make_client(module: ModuleType, settings: Settings) -> object:
         """Construct the real ``MossClient`` (verified positional-arg surface).
@@ -210,23 +239,41 @@ class MossIndex(RetrievalIndex):
             )
         return client_cls(settings.moss_project_id, settings.moss_project_key)
 
+    @staticmethod
+    def _build_doc_filter(doc_ids: list[str]) -> dict[str, Any]:
+        """Build the Moss filter predicate for a documentId allow-list.
+
+        Filter grammar (from SDK query docstring):
+          - ``$and`` / ``$eq`` / ``$lt`` are confirmed operators.
+          - ``$or`` is NOT confirmed, so multi-id filters use the same
+            ``$and``-wrapped ``$or`` shape, but callers must tolerate a server
+            rejection and fall back to client-side post-filter.
+
+          single id:  ``{"field": "documentId", "condition": {"$eq": id}}``
+          multi  ids: ``{"$and": [{"$or": [<per-id $eq clauses>]}]}``
+        """
+        clauses = [
+            {"field": "documentId", "condition": {"$eq": i}} for i in doc_ids
+        ]
+        if len(clauses) == 1:
+            return clauses[0]
+        return {"$and": [{"$or": clauses}]}
+
     def _make_query_options(
         self, top_k: int, alpha: float, *, doc_ids: list[str] | None = None
     ) -> Any | None:  # noqa: ANN401
-        """Build a ``QueryOptions(top_k=, alpha=)`` if the SDK exposes it.
+        """Build ``QueryOptions(top_k=, alpha=)`` if the SDK exposes it.
 
-        Verified surface: ``QueryOptions(top_k=3, alpha=0.6)``. Returns ``None``
-        when no module is loaded (DI/test path) so the caller can fall back to
-        keyword args on ``query``. Typed ``Any`` because the SDK class is not
-        importable at type-check time (optional dependency).
+        Verified fields: ``top_k``, ``alpha``, ``embedding``. The current public
+        docs put metadata filtering on ``client.query(..., filter=predicate)``;
+        ``QueryOptions(filter=...)`` is retained as an older-SDK fallback.
+        Returns ``None`` when no module is loaded (DI/test path) so the caller
+        falls back to keyword args on ``query``. Typed ``Any`` because the SDK
+        class is not importable at type-check time (optional dependency).
 
-        DOC FILTER (ASSUMED, not verified upstream): when ``doc_ids`` is given we
-        attempt to add a server-side candidate filter so Moss only ranks the
-        allowed documents (a real filter, not over-fetch). The exact kwarg name
-        is undocumented, so we try ``filter`` then ``where`` and DROP the filter
-        if neither is accepted by ``QueryOptions`` — the caller then falls back
-        to over-fetch + post-filter. The filter shape assumes a documentId-in
-        predicate; adjust here once the SDK's filter surface is confirmed.
+        When ``doc_ids`` is given, attaches the documentId filter
+        (see :meth:`_build_doc_filter`). Falls back to an unfiltered options
+        object on ``TypeError`` (older SDK without ``filter``).
         """
         if self._module is None:
             return None
@@ -235,52 +282,46 @@ class MossIndex(RetrievalIndex):
             return None
         if not doc_ids:
             return options_cls(top_k=top_k, alpha=alpha)
-        # Best-effort server-side filter. Try documented-ish kwarg names; on a
-        # TypeError (unknown kwarg) fall back to an unfiltered options object so
-        # query_multi can over-fetch + post-filter instead.
-        predicate = {"documentId": {"$in": list(doc_ids)}}
-        for kw in ("filter", "where", "metadata_filter"):
-            try:
-                return options_cls(top_k=top_k, alpha=alpha, **{kw: predicate})
-            except TypeError:
-                continue
-        return options_cls(top_k=top_k, alpha=alpha)
+        predicate = self._build_doc_filter(list(doc_ids))
+        try:
+            return options_cls(top_k=top_k, alpha=alpha, filter=predicate)
+        except TypeError:
+            # Older SDK or bad filter kwarg: degrade to unfiltered.
+            return options_cls(top_k=top_k, alpha=alpha)
 
     def _supports_server_filter(self) -> bool:
-        """Whether ``QueryOptions`` accepts a doc filter kwarg (assumed surface).
+        """Whether ``QueryOptions`` accepts the ``filter`` kwarg.
 
-        Used by :meth:`query_multi` to decide between a real server-side filter
-        and the over-fetch + post-filter fallback. Returns ``False`` whenever no
-        module is loaded (DI/test path) or the SDK does not accept any of the
-        candidate filter kwargs, so behaviour is unchanged on the verified path.
+        Used by :meth:`query_multi` to decide between attempting a server-side
+        filter (latency optimisation) and the over-fetch + post-filter fallback.
+        Returns ``False`` when no module is loaded (DI/test path).
         """
         if self._module is None:
             return False
         options_cls = getattr(self._module, "QueryOptions", None)
         if options_cls is None:
             return False
-        predicate = {"documentId": {"$in": ["__probe__"]}}
-        for kw in ("filter", "where", "metadata_filter"):
-            try:
-                options_cls(top_k=1, alpha=0.5, **{kw: predicate})
-                return True
-            except TypeError:
-                continue
-        return False
+        predicate = self._build_doc_filter(["__probe__"])
+        try:
+            options_cls(top_k=1, alpha=0.5, filter=predicate)
+            return True
+        except TypeError:
+            return False
 
     async def _raw_query(
         self, text: str, top_k: int, alpha: float, *, doc_ids: list[str] | None = None
     ) -> tuple[Sequence[object], float | None]:
         """Call the underlying Moss client; return ``(docs, server_latency_ms)``.
 
-        Verified surface:
-            ``results = await client.query(index, text, QueryOptions(...))``
-            then iterate ``results.docs`` and read ``results.time_taken_ms``.
+        Verified surface (inferedge_moss 1.0.0b19):
+            ``result: SearchResult = await client.query(name, text, QueryOptions(...))``
+            public docs show metadata filtering as
+            ``client.query(name, text, QueryOptions(...), filter=predicate)``
+            ``result.docs`` — list of ``QueryResultDocumentInfo``
+            ``result.time_taken_ms`` — float
 
-        Isolated so the SDK-specific call lives in exactly one place. Tolerates
-        a sync return, a ``.docs``/``.matches`` wrapper, or a bare list. When
-        ``doc_ids`` is given AND the SDK accepts a filter kwarg, the candidate
-        filter is pushed into ``QueryOptions`` (see :meth:`_make_query_options`).
+        Per-doc fields on ``QueryResultDocumentInfo``: id, text, metadata, score.
+        Tolerates a sync return, a ``.docs``/``.matches`` wrapper, or a bare list.
         """
         query_fn = getattr(self._client, "query", None) or getattr(
             self._client, "search", None
@@ -290,14 +331,37 @@ class MossIndex(RetrievalIndex):
                 "Moss client exposes neither query() nor search()"
             )
 
-        options = self._make_query_options(top_k, alpha, doc_ids=doc_ids)
+        predicate = self._build_doc_filter(list(doc_ids)) if doc_ids else None
+        # Prefer the public SDK docs path for metadata filtering:
+        # query(index, text, QueryOptions(...), filter=predicate). Keep the
+        # older/introspected QueryOptions(filter=...) path as a fallback.
+        options = self._make_query_options(top_k, alpha)
         if options is not None:
-            result = query_fn(self._index_name, text, options)
+            if predicate is not None:
+                try:
+                    result = query_fn(self._index_name, text, options, filter=predicate)
+                except TypeError:
+                    if self._supports_server_filter():
+                        options = self._make_query_options(
+                            top_k, alpha, doc_ids=doc_ids
+                        )
+                        result = query_fn(self._index_name, text, options)
+                    else:
+                        raise
+            else:
+                result = query_fn(self._index_name, text, options)
         else:
             # DI/test path or older SDK: fall back to keyword args.
-            result = query_fn(
-                self._index_name, text, top_k=top_k, alpha=alpha
-            )
+            if predicate is not None:
+                result = query_fn(
+                    self._index_name,
+                    text,
+                    top_k=top_k,
+                    alpha=alpha,
+                    filter=predicate,
+                )
+            else:
+                result = query_fn(self._index_name, text, top_k=top_k, alpha=alpha)
 
         if hasattr(result, "__await__"):
             result = await result
@@ -333,48 +397,104 @@ class MossIndex(RetrievalIndex):
             return obj.get(key, default)
         return getattr(obj, key, default)
 
+    # -- dual-tolerant coercion (real string contract OR nested dicts) ------
+    # The real Moss SDK returns ALL metadata values as STRINGS (geometry is
+    # JSON-encoded); DI/test fakes and older shapes use native dicts/ints. Each
+    # coercer accepts BOTH and never raises on a malformed value — a single bad
+    # turn must never crash the voice loop.
+    @staticmethod
+    def _coerce_json(value: Any, default: Any) -> Any:  # noqa: ANN401
+        """Decode a JSON-string container, pass through a dict/list, else default.
+
+        ``bbox``/``words``/``quads`` arrive as JSON strings on the real SDK and
+        as native dict/list on the test/DI path. A malformed JSON string falls
+        back to ``default`` (never raises) so geometry parsing is non-fatal.
+        """
+        if value is None:
+            return default
+        if isinstance(value, str):
+            try:
+                return json.loads(value)
+            except (ValueError, TypeError):
+                logger.debug("moss_index.coerce_json malformed value; using default")
+                return default
+        if isinstance(value, (dict, list)):
+            return value
+        return default
+
+    @staticmethod
+    def _coerce_int(value: Any, default: int) -> int:  # noqa: ANN401
+        """Coerce ``"3"`` / ``3`` / ``3.0`` to an int; ``default`` on failure."""
+        if value is None:
+            return default
+        try:
+            return int(value)
+        except (ValueError, TypeError):
+            return default
+
+    @staticmethod
+    def _coerce_float(value: Any, default: float) -> float:  # noqa: ANN401
+        """Coerce ``"0.97"`` / ``0.97`` to a float; ``default`` on failure."""
+        if value is None:
+            return default
+        try:
+            return float(value)
+        except (ValueError, TypeError):
+            return default
+
+    @staticmethod
+    def _coerce_bool(value: Any) -> bool:  # noqa: ANN401
+        """True for ``True``/``"true"``/``"True"``/``"1"``; False otherwise."""
+        return value in (True, "true", "True", "1")
+
     @classmethod
     def _to_citation(cls, match: object) -> Citation:
         """Convert one raw Moss document into a :class:`Citation`.
 
-        Tolerant of attribute-style and dict-style payloads. bbox/page geometry
-        is UNVERIFIED upstream (see module docstring): we look for it as a
-        top-level field first, then inside ``metadata``. The points + page dims
-        are carried straight through to :class:`BBox`.
+        DUAL-TOLERANT: parses BOTH the real Moss string contract
+        (``QueryResultDocumentInfo``: id/text/score are typed, metadata is
+        ``dict[str, str]`` with all values string-encoded; bbox/words/quads are
+        JSON-encoded strings) AND the older nested-dict form used by DI / test
+        fakes. Geometry, page, confidence and scanned are coerced tolerantly so
+        a malformed value never crashes the voice loop.
         """
         get = cls._get
         meta = get(match, "metadata", {}) or {}
 
-        # bbox may be top-level or nested in metadata; accept either.
-        bbox_raw = get(match, "bbox", None)
-        if bbox_raw is None:
-            bbox_raw = get(meta, "bbox", {}) or {}
+        # bbox may be top-level or nested in metadata, and either a JSON string
+        # (real SDK) or a native dict (test/DI). Coerce to a dict either way.
+        bbox_value = get(match, "bbox", None)
+        if bbox_value is None:
+            bbox_value = get(meta, "bbox", None)
+        bbox_raw = cls._coerce_json(bbox_value, {})
+        if not isinstance(bbox_raw, dict):
+            bbox_raw = {}
 
-        page = int(
-            get(match, "page", get(meta, "page", get(bbox_raw, "page", 1)))
+        page = cls._coerce_int(
+            get(match, "page", get(meta, "page", get(bbox_raw, "page", 1))), 1
         )
         bbox = BBox(
             page=page,
-            x0=float(get(bbox_raw, "x0", 0.0)),
-            y0=float(get(bbox_raw, "y0", 0.0)),
-            x1=float(get(bbox_raw, "x1", 0.0)),
-            y1=float(get(bbox_raw, "y1", 0.0)),
-            page_width=float(get(bbox_raw, "page_width", 612.0)),
-            page_height=float(get(bbox_raw, "page_height", 792.0)),
+            x0=cls._coerce_float(get(bbox_raw, "x0", 0.0), 0.0),
+            y0=cls._coerce_float(get(bbox_raw, "y0", 0.0), 0.0),
+            x1=cls._coerce_float(get(bbox_raw, "x1", 0.0), 0.0),
+            y1=cls._coerce_float(get(bbox_raw, "y1", 0.0), 0.0),
+            page_width=cls._coerce_float(get(bbox_raw, "page_width", 612.0), 612.0),
+            page_height=cls._coerce_float(get(bbox_raw, "page_height", 792.0), 792.0),
         )
         # Depth-v2 multi-doc / scanned-source metadata (optional; defaults keep
         # single-doc back-compat). documentId may be top-level or in metadata.
         document_id = get(match, "documentId", get(meta, "documentId", None))
         document_title = get(match, "documentTitle", get(meta, "documentTitle", None))
-        scanned = bool(get(match, "scanned", get(meta, "scanned", False)))
+        scanned = cls._coerce_bool(get(match, "scanned", get(meta, "scanned", False)))
 
         chunk_kwargs: dict[str, Any] = {
             "id": str(get(match, "id", get(meta, "id", "unknown"))),
             "text": str(get(match, "text", get(meta, "text", ""))),
             "page": page,
             "bbox": bbox,
-            "confidence": float(
-                get(match, "confidence", get(meta, "confidence", 1.0))
+            "confidence": cls._coerce_float(
+                get(match, "confidence", get(meta, "confidence", 1.0)), 1.0
             ),
             "documentTitle": document_title,
             "scanned": scanned,
@@ -382,7 +502,7 @@ class MossIndex(RetrievalIndex):
         if document_id is not None:
             chunk_kwargs["documentId"] = str(document_id)
         chunk = Chunk(**chunk_kwargs)
-        raw_score = float(get(match, "score", 0.0))
+        raw_score = cls._coerce_float(get(match, "score", 0.0), 0.0)
         # Clamp into [0, 1] in case Moss returns distances/logits.
         score = max(0.0, min(raw_score, 1.0))
         return Citation(
@@ -394,54 +514,116 @@ class MossIndex(RetrievalIndex):
         )
 
     # -- lifecycle ----------------------------------------------------------
+
     async def prewarm(self) -> None:
         """Open / warm the Moss index ahead of the first query.
 
-        Verified surface is ``await client.load_index(name)``; we also accept a
-        ``warm`` method for forward/backward compatibility. Prewarm never
-        crashes the worker — a warm failure degrades to a cold first query.
+        Calls ``await client.load_index(name, auto_refresh=...,
+        polling_interval_in_seconds=...)`` using the settings values.
+        ``load_index`` returns a ``str`` (status) — NOT a document list.
+
+        Falls back to ``load_index(name)`` only on ``TypeError`` so older SDK
+        versions without the keyword args still work.
+
+        After loading, seeds ``_seen_document_ids`` via the real
+        ``get_docs(name, GetDocumentsOptions(doc_ids=None))`` enumeration (all
+        documents in the index). Any failure is caught and logged — prewarm must
+        never crash the worker.
         """
-        warm = (
-            getattr(self._client, "load_index", None)
-            or getattr(self._client, "warm", None)
+        load_fn = getattr(self._client, "load_index", None) or getattr(
+            self._client, "warm", None
         )
-        if callable(warm):
-            try:
-                result = warm(self._index_name)
-                if hasattr(result, "__await__"):
-                    result = await result
-            except Exception:  # noqa: BLE001 - prewarm must never crash worker
-                logger.exception("moss_index.prewarm failed; continuing")
-            else:
-                # Best-effort: seed document_ids from the loaded index when the
-                # SDK exposes a doc list on the load result (ASSUMED — the SDK
-                # does not document an enumerate-all call; see the property
-                # docstring). Any shape mismatch is ignored; ids still accrue
-                # from query results.
-                self._seed_document_ids(result)
-
-    def _seed_document_ids(self, loaded: object) -> None:
-        """Seed observed-doc ids from a loaded-index handle, if it lists docs.
-
-        Looks for a ``documents``/``docs`` collection on the load result and
-        records each entry's documentId (top-level or in ``metadata``). Purely
-        best-effort and exception-safe: this is an ASSUMED SDK surface.
-        """
-        if loaded is None:
+        if not callable(load_fn):
             return
+
+        # --- step 1: load_index ---
         try:
-            docs = self._get(loaded, "documents", None)
-            if docs is None:
-                docs = self._get(loaded, "docs", None)
-            if not docs:
-                return
-            for d in docs:
-                meta = self._get(d, "metadata", {}) or {}
-                doc_id = self._get(d, "documentId", self._get(meta, "documentId", None))
-                if doc_id:
-                    self._seen_document_ids.add(str(doc_id))
-        except Exception:  # noqa: BLE001 - seeding is best-effort only
-            logger.debug("moss_index.seed_document_ids skipped (unrecognized shape)")
+            try:
+                result = load_fn(
+                    self._index_name,
+                    auto_refresh=self._settings.moss_auto_refresh,
+                    polling_interval_in_seconds=self._settings.moss_refresh_interval_s,
+                )
+            except TypeError:
+                # Older signature without keyword args.
+                logger.debug(
+                    "moss_index.prewarm load_index kwargs rejected; retrying plain"
+                )
+                result = load_fn(self._index_name)
+            if hasattr(result, "__await__"):
+                result = await result
+            logger.info(
+                "moss_index.prewarm loaded index=%s status=%r",
+                self._index_name,
+                result,
+            )
+        except Exception:  # noqa: BLE001 - prewarm must never crash worker
+            logger.exception(
+                "moss_index.prewarm load_index failed index=%s; continuing cold",
+                self._index_name,
+            )
+            return
+
+        # --- step 2: seed document_ids via real get_docs enumeration ---
+        await self._seed_document_ids_from_get_docs()
+
+    async def _seed_document_ids_from_get_docs(self) -> None:
+        """Enumerate all documents in the index via ``get_docs`` and seed ids.
+
+        Uses the REAL ``client.get_docs(name, GetDocumentsOptions(doc_ids=None))``
+        call (verified in inferedge_moss 1.0.0b19). Each returned
+        ``DocumentInfo.id`` is added to ``_seen_document_ids``. Best-effort
+        and exception-safe: if the SDK version does not expose ``get_docs`` or
+        ``GetDocumentsOptions``, we skip silently.
+        """
+        get_docs_fn = getattr(self._client, "get_docs", None)
+        if not callable(get_docs_fn):
+            logger.debug("moss_index.seed_docs get_docs not available; skipping")
+            return
+
+        # GetDocumentsOptions(doc_ids=None) -> all docs in the index.
+        options: object | None = None
+        if self._module is not None:
+            gdo_cls = getattr(self._module, "GetDocumentsOptions", None)
+            if gdo_cls is not None:
+                try:
+                    options = gdo_cls(doc_ids=None)
+                except Exception:  # noqa: BLE001 - keep best-effort
+                    logger.debug("moss_index.seed_docs GetDocumentsOptions() failed")
+
+        try:
+            if options is not None:
+                docs_result = get_docs_fn(self._index_name, options)
+            else:
+                docs_result = get_docs_fn(self._index_name)
+            if hasattr(docs_result, "__await__"):
+                docs_result = await docs_result
+            if docs_result:
+                for d in docs_result:
+                    doc_id = self._get(d, "id", None)
+                    if doc_id:
+                        self._seen_document_ids.add(str(doc_id))
+            logger.info(
+                "moss_index.seed_docs seeded %d document ids from get_docs",
+                len(self._seen_document_ids),
+            )
+        except Exception:  # noqa: BLE001 - seeding is always best-effort
+            logger.debug(
+                "moss_index.seed_docs get_docs enumeration failed; ids will "
+                "accumulate from query results",
+                exc_info=True,
+            )
+
+    async def refresh_document_ids(self) -> None:
+        """Re-enumerate all documents via ``get_docs`` and repopulate the id set.
+
+        Clears ``_seen_document_ids`` and re-seeds from the real index, giving an
+        accurate snapshot after an offline pipeline build or a document deletion.
+        Best-effort: on failure the existing set is left intact and a warning is
+        logged so the multi-hop expansion path degrades gracefully.
+        """
+        self._seen_document_ids.clear()
+        await self._seed_document_ids_from_get_docs()
 
     async def query(
         self,
@@ -454,7 +636,8 @@ class MossIndex(RetrievalIndex):
         In *strict* mode a query failure raises :class:`MossQueryError`. In
         *lenient* mode it is logged and an empty result is returned so the turn
         continues. ``latency_ms`` prefers Moss's server-measured
-        ``time_taken_ms`` and falls back to a wall-clock measurement.
+        ``time_taken_ms`` (``SearchResult.time_taken_ms``) and falls back to a
+        wall-clock measurement.
         """
         start = time.perf_counter()
         try:
@@ -499,52 +682,55 @@ class MossIndex(RetrievalIndex):
     ) -> RetrievalResult:
         """Query Moss across one or more documents (see base class).
 
-        When the SDK's ``QueryOptions`` accepts a candidate-filter kwarg (ASSUMED
-        surface — see :meth:`_make_query_options`), the documentId allow-list is
-        pushed SERVER-SIDE so Moss only ranks the allowed docs (a real filter).
-        When it does not (the verified-only path, DI/test, or older SDK), we fall
-        back to over-fetching and filtering the returned citations by
-        ``documentId`` client-side. With ``doc_ids=None`` it is identical to
-        :meth:`query`.
+        Strategy:
+          1. ATTEMPT a server-side documentId filter using the public SDK shape
+             ``query(..., QueryOptions(...), filter=predicate)``. Older SDKs
+             that only accept ``QueryOptions(filter=...)`` are also supported.
+             The ``$or`` operator is not confirmed everywhere, so the filtered
+             query is wrapped in a broad ``except`` that falls through to
+             over-fetch rather than raising on a filter-shape rejection.
+          2. CLIENT-SIDE POST-FILTER is ALWAYS applied as the authoritative
+             correctness guarantee, regardless of whether the server filter
+             succeeded. Post-filter is the truth; server-filter is a speed hint.
+          3. If no server-filter support or the filtered query raises ANY
+             exception, fall back to over-fetching (top_k * 4) and post-filtering
+             client-side. MossClientUnavailableError always re-raises.
+
+        With ``doc_ids=None`` this is identical to :meth:`query`.
         """
         if doc_ids is None:
             return await self.query(text, top_k=top_k, alpha=alpha)
         allow = set(doc_ids)
 
-        if self._supports_server_filter():
-            # Real server-side candidate filter: ask Moss for exactly top_k from
-            # the allow-set. Still post-filter defensively in case the assumed
-            # filter shape is a no-op on some SDK version.
-            start = time.perf_counter()
-            try:
-                docs, server_latency = await self._raw_query(
-                    text, top_k=top_k, alpha=alpha, doc_ids=list(doc_ids)
-                )
-            except MossClientUnavailableError:
-                raise
-            except Exception as exc:  # noqa: BLE001 - mode decides raise vs degrade
-                logger.exception(
-                    "moss_index.query_multi failed text=%r strict=%s",
-                    text,
-                    self._strict,
-                )
-                if self._strict:
-                    raise MossQueryError(
-                        f"Moss query failed for index {self._index_name!r}: {exc}"
-                    ) from exc
-                latency_ms = (time.perf_counter() - start) * 1000.0
-                return RetrievalResult(query=text, citations=[], latency_ms=latency_ms)
+        start = time.perf_counter()
+        try:
+            docs, server_latency = await self._raw_query(
+                text, top_k=top_k, alpha=alpha, doc_ids=list(doc_ids)
+            )
+        except MossClientUnavailableError:
+            raise
+        except Exception:  # noqa: BLE001
+            # Server filter rejected or network error — fall through to
+            # over-fetch path. Do NOT propagate: $or may not be supported.
+            logger.debug(
+                "moss_index.query_multi server filter failed; "
+                "falling back to over-fetch text=%r",
+                text,
+            )
+        else:
+            # Server-filtered result received. Post-filter is still applied as
+            # the AUTHORITATIVE correctness guarantee (server filter is a
+            # latency optimisation; may be a no-op on some SDK versions).
             citations = [self._to_citation(m) for m in list(docs)]
             self._record_document_ids(citations)
             filtered = [c for c in citations if c.documentId in allow][:top_k]
             wall_ms = (time.perf_counter() - start) * 1000.0
             latency_ms = server_latency if server_latency is not None else wall_ms
-            return RetrievalResult(
-                query=text, citations=filtered, latency_ms=latency_ms
-            )
+            return RetrievalResult(query=text, citations=filtered, latency_ms=latency_ms)
 
-        # Fallback (verified-only path): over-fetch so post-filtering still
-        # yields up to top_k from the allow-set.
+        # Over-fetch + client-side post-filter (verified-safe path): fetch
+        # top_k * 4 to ensure the allow-set has enough candidates after filtering.
+        # CLIENT-SIDE POST-FILTER is authoritative — it is applied here too.
         wide = await self.query(text, top_k=max(top_k * 4, top_k), alpha=alpha)
         filtered = [c for c in wide.citations if c.documentId in allow][:top_k]
         return RetrievalResult(

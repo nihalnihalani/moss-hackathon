@@ -48,8 +48,17 @@ both the worker and the API service.
 | `MOSS_PROJECT_ID` | Moss project to query/upsert against |
 | `MOSS_PROJECT_KEY` | Single key used by BOTH backend (query) and pipeline (upsert) |
 | `MOSS_INDEX_NAME` | Index name (has a default: `crossexam-documents`) |
+| `MOSS_MODEL_ID` | Embedding model (optional; default `moss-minilm`) — backend (query) and pipeline (build) must agree |
+| `MOSS_AUTO_REFRESH` | Re-pull the index from the cloud on an interval so live-upserted docs become queryable without a manual reload (default `false`) |
+| `MOSS_REFRESH_INTERVAL_S` | Refresh cadence when `MOSS_AUTO_REFRESH=true` (default `600`) |
+| `MOSS_JOB_TIMEOUT_S` | Bound on the async create-index / add-docs job poll loop (default `120`) |
+| `MOSS_JOB_POLL_INTERVAL_S` | Poll interval for that job loop (default `1`) |
 | `USE_MOCKS=false` | **Flips off the mock fallback** so the real path is used |
 
+- **Install:** the live path uses the **in-process Moss SDK** (NOT a REST
+  endpoint, so there is no `MOSS_BASE_URL`): `pip install '.[moss]'` (resolves the
+  `inferedge-moss` distribution + its prebuilt native core `inferedge-moss-core`).
+  The import package is `inferedge_moss` (the adapter also tries `moss`).
 - **Account:** a Moss / InferEdge project (sub-10ms in-process semantic retrieval).
 - **With keys + `USE_MOCKS=false`:** `POST /documents` upserts parsed chunks into
   Moss and the agent retrieves real citations from it.
@@ -60,6 +69,38 @@ both the worker and the API service.
 > Important: setting the Moss keys alone auto-resolves to live, but set
 > `USE_MOCKS=false` explicitly to make the real path unambiguous and to make
 > `make verify-live` report MISSING (not MOCK) if a credential is absent.
+
+### Going live with Moss (runbook)
+
+The real retrieval path is an **in-process SDK**, not a service you point a URL at.
+You build the index **offline** first, then start the live stack against it:
+
+```bash
+cd crossexam
+cp .env.example .env                              # 1. fill MOSS_PROJECT_ID/KEY
+#    set USE_MOCKS=false in .env
+
+make install-moss                                 # 2. install [moss] (backend + pipeline)
+
+make verify-live                                  # 3. real load_index probe (creds present)
+#    -> prints READY + a live get_index/load_index round-trip via doctor --probe
+
+# 4. PRE-BUILD the index offline from your PDFs (one-shot job):
+cd pipeline
+python -m crossexam_pipeline.cli parse       --input mydoc.pdf --out build/chunks.json
+python -m crossexam_pipeline.cli build-index --input build/chunks.json \
+       --index-name "$MOSS_INDEX_NAME"
+#    (or containerized: docker build -t crossexam-pipeline ./pipeline && \
+#     docker run --rm --env-file ../.env -v "$PWD/build:/work" crossexam-pipeline \
+#       build-index --input /work/chunks.json --index-name "$MOSS_INDEX_NAME")
+
+# 5. start the live worker + API + UI against the real index:
+cd .. && ./run.sh                                 # or: make dev-live / docker compose up
+```
+
+`run.sh` auto-installs the `[moss]` extra when it sees `MOSS_PROJECT_ID`/`KEY` in
+the loaded `.env`, so the live path always has the SDK. With no creds everything
+above degrades cleanly to the mock index — no Moss, no SDK, no keys needed.
 
 ---
 

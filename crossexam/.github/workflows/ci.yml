@@ -92,6 +92,34 @@ jobs:
         run: pytest
 
   # ---------------------------------------------------------------------------
+  moss:
+    name: moss SDK integration (real inferedge-moss)
+    runs-on: ubuntu-latest
+    # Proves the REAL Moss SDK integrates: installs the [moss] extra (resolves
+    # inferedge-moss + its prebuilt manylinux native core wheel) and runs both
+    # pytest suites with the SDK importable. This exercises the real-SDK tests
+    # gated by pytest.importorskip("inferedge_moss"). It requires NO API keys —
+    # those tests make NO network calls (no MOSS_PROJECT_ID/KEY in the env).
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install (both packages with [dev,moss])
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e "crossexam/backend[dev,moss]" -e "crossexam/pipeline[dev,moss]"
+      - name: Verify the real SDK is importable
+        run: python -c "import inferedge_moss; print('inferedge_moss', getattr(inferedge_moss, '__version__', '?'))"
+      - name: Pytest — backend (with real SDK present)
+        working-directory: crossexam/backend
+        run: pytest
+      - name: Pytest — pipeline (with real SDK present)
+        working-directory: crossexam/pipeline
+        run: pytest
+
+  # ---------------------------------------------------------------------------
   frontend:
     name: frontend (node)
     runs-on: ubuntu-latest

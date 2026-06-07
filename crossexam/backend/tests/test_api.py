@@ -356,3 +356,147 @@ async def test_documents_then_queryable_via_index(client: TestClient) -> None:
     index = client.app.state.index  # type: ignore[attr-defined]
     result = await index.query("Harbor Street warehouse", top_k=3)
     assert len(result.citations) > 0
+
+
+# --------------------------------------------------------------------------- #
+# /documents — live (Moss) path                                               #
+# --------------------------------------------------------------------------- #
+class _FakeLiveIndex:
+    """Stand-in live MossIndex that records prewarm/refresh invocations."""
+
+    def __init__(self) -> None:
+        self.prewarm_calls = 0
+        self.refresh_calls = 0
+
+    async def prewarm(self) -> None:
+        self.prewarm_calls += 1
+
+    async def refresh_document_ids(self) -> None:
+        self.refresh_calls += 1
+
+
+def _live_settings(tmp_path: Path) -> Settings:
+    """Settings that resolve to the live Moss path (creds set, mocks off)."""
+    return Settings(
+        moss_project_id="proj",
+        moss_project_key="key",
+        moss_index_name="crossexam-test",
+        use_mocks=False,
+        mock_fixture_path=str(tmp_path / "chunks.json"),
+        _env_file=None,  # type: ignore[call-arg]
+    )
+
+
+@pytest.mark.skipif(
+    not (_HAVE_REPORTLAB and _HAVE_PDFPLUMBER),
+    reason="needs reportlab (to synthesize a PDF) and pdfplumber (to parse it)",
+)
+def test_documents_live_moss_path_invokes_prewarm(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A successful real-Moss upsert reports mode=moss and reloads the index.
+
+    Patches ``_moss_import_available`` so the live path is taken without the SDK
+    installed, replaces ``build_index_async`` with an async fake returning a moss
+    summary, and asserts the live MossIndex's prewarm/refresh were invoked.
+    """
+    import crossexam_backend.api as api_mod
+
+    monkeypatch.setattr(api_mod, "_moss_import_available", lambda: "inferedge_moss")
+
+    captured: dict[str, object] = {}
+
+    async def _fake_build_index_async(
+        chunks: list[object], index_name: str | None = None, **_: object
+    ) -> dict[str, object]:
+        captured["index_name"] = index_name
+        captured["n"] = len(chunks)
+        return {"mode": "moss", "chunk_count": len(chunks)}
+
+    fake_pipeline = types.ModuleType("crossexam_pipeline")
+    fake_build = types.ModuleType("crossexam_pipeline.build_index")
+    fake_build.build_index_async = _fake_build_index_async  # type: ignore[attr-defined]
+    fake_models = types.ModuleType("crossexam_pipeline.models")
+
+    class _ParsedChunk:
+        def __init__(self, **kwargs: object) -> None:
+            self.__dict__.update(kwargs)
+
+        @classmethod
+        def model_validate(cls, rec: dict[str, object]) -> _ParsedChunk:
+            return cls(**rec)
+
+    fake_models.ParsedChunk = _ParsedChunk  # type: ignore[attr-defined]
+    fake_pipeline.build_index = fake_build  # type: ignore[attr-defined]
+    fake_pipeline.models = fake_models  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "crossexam_pipeline", fake_pipeline)
+    monkeypatch.setitem(sys.modules, "crossexam_pipeline.build_index", fake_build)
+    monkeypatch.setitem(sys.modules, "crossexam_pipeline.models", fake_models)
+
+    app = create_app(_live_settings(tmp_path))
+    fake_index = _FakeLiveIndex()
+    app.state.index = fake_index  # type: ignore[attr-defined]
+
+    with TestClient(app) as c:
+        resp = c.post(
+            "/documents",
+            files={"file": ("sample.pdf", _make_pdf_bytes(), "application/pdf")},
+        )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["mode"] == "moss"
+    assert body["chunks_indexed"] > 0
+    assert captured["index_name"] == "crossexam-test"
+    # The live index must be reloaded so the freshly-upserted doc is queryable.
+    assert fake_index.prewarm_calls == 1
+    assert fake_index.refresh_calls == 1
+
+
+@pytest.mark.skipif(
+    not (_HAVE_REPORTLAB and _HAVE_PDFPLUMBER),
+    reason="needs reportlab + pdfplumber",
+)
+def test_documents_live_moss_failure_degrades_to_mock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A raising build_index_async degrades to mock (HTTP 200), never 500s."""
+    import crossexam_backend.api as api_mod
+
+    monkeypatch.setattr(api_mod, "_moss_import_available", lambda: "inferedge_moss")
+
+    async def _boom(
+        chunks: list[object], index_name: str | None = None, **_: object
+    ) -> dict[str, object]:
+        raise RuntimeError("simulated Moss SDK runtime error")
+
+    fake_pipeline = types.ModuleType("crossexam_pipeline")
+    fake_build = types.ModuleType("crossexam_pipeline.build_index")
+    fake_build.build_index_async = _boom  # type: ignore[attr-defined]
+    fake_models = types.ModuleType("crossexam_pipeline.models")
+
+    class _ParsedChunk:
+        def __init__(self, **kwargs: object) -> None:
+            self.__dict__.update(kwargs)
+
+        @classmethod
+        def model_validate(cls, rec: dict[str, object]) -> _ParsedChunk:
+            return cls(**rec)
+
+    fake_models.ParsedChunk = _ParsedChunk  # type: ignore[attr-defined]
+    fake_pipeline.build_index = fake_build  # type: ignore[attr-defined]
+    fake_pipeline.models = fake_models  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "crossexam_pipeline", fake_pipeline)
+    monkeypatch.setitem(sys.modules, "crossexam_pipeline.build_index", fake_build)
+    monkeypatch.setitem(sys.modules, "crossexam_pipeline.models", fake_models)
+
+    app = create_app(_live_settings(tmp_path))
+    with TestClient(app) as c:
+        resp = c.post(
+            "/documents",
+            files={"file": ("sample.pdf", _make_pdf_bytes(), "application/pdf")},
+        )
+    # Graceful degrade: 200 with mode=mock, NOT a 500.
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["mode"] == "mock"
+    assert body["chunks_indexed"] > 0

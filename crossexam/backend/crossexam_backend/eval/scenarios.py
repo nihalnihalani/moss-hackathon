@@ -17,6 +17,7 @@ from __future__ import annotations
 import importlib.util
 import os
 from dataclasses import dataclass
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -110,11 +111,13 @@ async def _run_with_livekit(
         from crossexam_backend.agent import CrossExamAgent
         from crossexam_backend.config import get_settings
         from crossexam_backend.retrieval.factory import get_index
+        from crossexam_backend.server import _build_llm
     except Exception as exc:  # noqa: BLE001
         return [("livekit-import", False, f"unavailable: {exc}")]
 
     settings = get_settings()
     index = get_index(settings)
+    judge_llm = _build_llm(settings)
 
     results: list[tuple[str, bool, str]] = []
     for sc in scenarios:
@@ -122,10 +125,10 @@ async def _run_with_livekit(
             agent = CrossExamAgent(index, top_k=settings.top_k, alpha=settings.alpha)
             async with AgentSession() as session:
                 await session.start(agent)
-                result = await session.run(user_input=sc.user_turn)
+                result: Any = await session.run(user_input=sc.user_turn)
                 await result.expect.next_event().is_message(
                     role="assistant"
-                ).judge(instructions=sc.judge_instructions)
+                ).judge(judge_llm, intent=sc.judge_instructions)
             results.append((sc.name, True, "judge passed"))
         except Exception as exc:  # noqa: BLE001
             results.append((sc.name, False, str(exc)))

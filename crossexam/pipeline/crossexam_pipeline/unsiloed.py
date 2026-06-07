@@ -5,14 +5,22 @@ completes, and normalizes the response into
 :class:`~crossexam_pipeline.models.ParsedChunk` records carrying page numbers,
 bounding boxes, word-level citations, and confidence scores.
 
+Real API (prod.visionapi.unsiloed.ai):
+- Auth: ``api-key: <key>`` request header (NOT ``Authorization: Bearer``).
+- Submit: ``POST /parse`` — multipart upload, field name ``file``.
+  Form param ``ocr_strategy="force_ocr"`` for scanned docs, omitted otherwise.
+- Poll: ``GET /parse/{job_id}`` until ``status == "Succeeded"`` (case-insensitive).
+- Result: top-level ``chunks`` array; each chunk has a ``segments`` sub-array.
+  Each segment carries ``content``, ``page_number``, ``bbox`` (left/top/width/height),
+  ``ocr`` (word list), ``confidence``, and ``segment_id``.
+
 This path only runs when ``UNSILOED_API_KEY`` is set. When the key is missing,
 :meth:`UnsiloedParser.from_env` raises a clear error instructing the caller to
 use ``--dry-run`` (which routes to the deterministic fallback instead).
 
-The Unsiloed response schema is treated defensively: the normalizer tolerates a
-range of field names (``bbox``/``bounding_box``, ``confidence``/``score``,
-fractional or absolute coordinates) so a real API rollout does not require code
-changes here.
+The normalizer is defensive: it accepts both the current segment-based schema and
+the legacy flat-chunk shape so fixture variants and future minor renames do not
+require code changes.
 """
 
 from __future__ import annotations
@@ -21,6 +29,7 @@ import asyncio
 import hashlib
 import logging
 import os
+import time
 from pathlib import Path
 from typing import Any
 
@@ -36,7 +45,7 @@ from crossexam_pipeline.models import (
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_BASE_URL = "https://api.unsiloed.ai/v1"
+DEFAULT_BASE_URL = "https://prod.visionapi.unsiloed.ai"
 ENV_API_KEY = "UNSILOED_API_KEY"
 ENV_BASE_URL = "UNSILOED_BASE_URL"
 
@@ -61,6 +70,8 @@ class UnsiloedParser:
         poll_interval: Seconds between job-status polls.
         timeout: Total seconds to wait for a job before giving up.
         client: Optional pre-built ``httpx.AsyncClient`` (mainly for tests).
+        document_id: Source document id stamped on every chunk.
+        document_title: Human label for the doc switcher.
     """
 
     def __init__(
@@ -88,7 +99,7 @@ class UnsiloedParser:
         self.document_title = document_title
 
     @classmethod
-    def from_env(cls, **kwargs: Any) -> UnsiloedParser:  # noqa: ANN401 - forwarded verbatim to __init__, whose params are typed
+    def from_env(cls, **kwargs: Any) -> UnsiloedParser:  # noqa: ANN401
         """Build a parser from environment variables.
 
         Reads ``UNSILOED_API_KEY`` and optionally ``UNSILOED_BASE_URL``.
@@ -109,8 +120,12 @@ class UnsiloedParser:
         return cls(api_key=api_key, base_url=base_url, **kwargs)
 
     def _headers(self) -> dict[str, str]:
-        """Return auth headers for API requests."""
-        return {"Authorization": f"Bearer {self.api_key}", "Accept": "application/json"}
+        """Return auth headers for API requests.
+
+        The real Unsiloed API uses a bare ``api-key`` header, not
+        ``Authorization: Bearer``.
+        """
+        return {"api-key": self.api_key, "Accept": "application/json"}
 
     async def _acquire_client(self) -> tuple[httpx.AsyncClient, bool]:
         """Return an async client and whether the caller owns its lifecycle.
@@ -128,8 +143,8 @@ class UnsiloedParser:
 
         Args:
             input_path: Path to the source document (e.g. a PDF).
-            scanned: If ``True``, use the VISION/scan path (OCR region boxes) and
-                mark the resulting chunks ``scanned=True`` (feat 3).
+            scanned: If ``True``, send ``ocr_strategy="force_ocr"`` and mark
+                the resulting chunks ``scanned=True``.
 
         Returns:
             Normalized :class:`ParsedChunk` records.
@@ -146,13 +161,12 @@ class UnsiloedParser:
         try:
             job_id = await self._submit(client, path, scanned=scanned)
             logger.info(
-                "Submitted Unsiloed %s job %s for %s",
-                "vision/scan" if scanned else "parse",
+                "Submitted Unsiloed parse job %s for %s (scanned=%s)",
                 job_id,
                 path.name,
+                scanned,
             )
-            endpoint = "vision" if scanned else "parse"
-            result = await self._poll(client, job_id, endpoint=endpoint)
+            result = await self._poll(client, job_id)
             chunks = self.normalize(
                 result,
                 scanned=scanned,
@@ -166,11 +180,10 @@ class UnsiloedParser:
                 await client.aclose()
 
     async def parse_scanned(self, input_path: Path | str) -> list[ParsedChunk]:
-        """Parse a scanned/image-only document via the Unsiloed VISION path.
+        """Parse a scanned/image-only document via OCR.
 
-        Convenience wrapper for ``parse(..., scanned=True)``: submits the scan to
-        the OCR/vision endpoint, polls, normalizes to region-box quads, and marks
-        every chunk ``scanned=True``.
+        Convenience wrapper for ``parse(..., scanned=True)``: sends
+        ``ocr_strategy="force_ocr"`` and marks every chunk ``scanned=True``.
 
         Args:
             input_path: Path to the scanned source document.
@@ -185,10 +198,13 @@ class UnsiloedParser:
     ) -> str:
         """Upload the document and return the created job id.
 
+        Always posts to ``POST /parse`` (multipart, field name ``file``).
+        Sends ``ocr_strategy="force_ocr"`` when ``scanned`` is ``True``.
+
         Args:
             client: Async HTTP client.
             path: Document to upload.
-            scanned: Route to the vision/OCR endpoint when ``True``.
+            scanned: When ``True``, request OCR mode via form param.
 
         Returns:
             The Unsiloed job identifier.
@@ -197,17 +213,9 @@ class UnsiloedParser:
             UnsiloedError: If the API does not return a job id.
         """
         files = {"file": (path.name, path.read_bytes(), "application/pdf")}
-        # The vision/scan path asks the API to OCR an image-only document and
-        # return region boxes; the born-digital path extracts the text layer.
-        endpoint = "vision" if scanned else "parse"
-        data = {
-            "extract_bbox": "true",
-            "extract_words": "true",
-            "ocr": "true" if scanned else "false",
-            "mode": "vision" if scanned else "text",
-        }
+        data: dict[str, str] = {"ocr_strategy": "force_ocr"} if scanned else {}
         resp = await client.post(
-            f"{self.base_url}/{endpoint}",
+            f"{self.base_url}/parse",
             headers=self._headers(),
             files=files,
             data=data,
@@ -217,20 +225,22 @@ class UnsiloedParser:
         job_id = payload.get("job_id") or payload.get("id")
         if not job_id:
             raise UnsiloedError(
-                f"Unsiloed /{endpoint} returned no job id: {payload!r}"
+                f"Unsiloed /parse returned no job id: {payload!r}"
             )
         return str(job_id)
 
     async def _poll(
-        self, client: httpx.AsyncClient, job_id: str, endpoint: str = "parse"
+        self, client: httpx.AsyncClient, job_id: str
     ) -> dict[str, Any]:
-        """Poll a job until it completes, fails, or times out.
+        """Poll ``GET /parse/{job_id}`` until the job completes, fails, or times out.
+
+        The completed response carries the result at top level (no ``result``
+        wrapper); ``payload.get("result", payload)`` is used as a defensive
+        fallback for both shapes.
 
         Args:
             client: Async HTTP client.
             job_id: Job to poll.
-            endpoint: API endpoint the job was submitted to (``parse`` or
-                ``vision``); polled at ``/{endpoint}/{job_id}``.
 
         Returns:
             The completed job's result payload.
@@ -238,10 +248,10 @@ class UnsiloedParser:
         Raises:
             UnsiloedError: If the job fails or polling times out.
         """
-        elapsed = 0.0
-        while elapsed <= self.timeout:
+        start = time.monotonic()
+        while time.monotonic() - start <= self.timeout:
             resp = await client.get(
-                f"{self.base_url}/{endpoint}/{job_id}", headers=self._headers()
+                f"{self.base_url}/parse/{job_id}", headers=self._headers()
             )
             resp.raise_for_status()
             payload = resp.json()
@@ -255,7 +265,6 @@ class UnsiloedParser:
                     f"{payload.get('error', 'no detail')}"
                 )
             await asyncio.sleep(self.poll_interval)
-            elapsed += self.poll_interval
         raise UnsiloedError(
             f"Unsiloed job {job_id} did not complete within {self.timeout}s."
         )
@@ -270,11 +279,16 @@ class UnsiloedParser:
     def _coerce_bbox(cls, raw: dict[str, Any], page: int) -> BBox:
         """Coerce a raw bbox dict into a points-space :class:`BBox`.
 
-        Accepts ``x0/y0/x1/y1`` or ``left/top/right/bottom`` keys. Coordinates
-        are kept in absolute PDF points (the canonical end-to-end unit). If the
-        API reports fractional ``[0, 1]`` coordinates (max coord <= 1.0) they
-        are scaled up by the page dimensions to recover points. ``page_width``/
-        ``page_height`` are carried through (US Letter 612x792 when unknown).
+        Accepts three shapes:
+
+        * ``{left, top, width, height}`` — new Unsiloed schema; converts as
+          ``x0=left, y0=top, x1=left+width, y1=top+height``.
+        * ``{x0, y0, x1, y1}`` — previous / legacy shape.
+        * ``{left, top, right, bottom}`` — alternative legacy shape.
+
+        Coordinates are absolute PDF points — the Unsiloed API always returns
+        absolute points, never fractional [0, 1] values. ``page_width``/
+        ``page_height`` default to US Letter (612x792) when unknown.
 
         Args:
             raw: Raw bounding-box mapping from the API.
@@ -283,20 +297,23 @@ class UnsiloedParser:
         Returns:
             A :class:`BBox` with coordinates and page dims in points.
         """
-        x0 = float(raw.get("x0", raw.get("left", 0.0)))
-        y0 = float(raw.get("y0", raw.get("top", 0.0)))
-        x1 = float(raw.get("x1", raw.get("right", x0)))
-        y1 = float(raw.get("y1", raw.get("bottom", y0)))
-
         page_w = float(raw.get("page_width", 0.0) or 0.0) or cls._DEFAULT_PAGE_W
         page_h = float(raw.get("page_height", 0.0) or 0.0) or cls._DEFAULT_PAGE_H
 
-        # If the source reports fractional [0, 1] coordinates, scale them up to
-        # absolute points using the page dimensions.
-        coords = (x0, y0, x1, y1)
-        if coords and max(abs(c) for c in coords) <= 1.0:
-            x0, x1 = x0 * page_w, x1 * page_w
-            y0, y1 = y0 * page_h, y1 * page_h
+        # New schema: {left, top, width, height}
+        if "width" in raw and "height" in raw:
+            left = float(raw.get("left", 0.0))
+            top = float(raw.get("top", 0.0))
+            x0 = left
+            y0 = top
+            x1 = left + float(raw["width"])
+            y1 = top + float(raw["height"])
+        else:
+            # Legacy: {x0,y0,x1,y1} or {left,top,right,bottom}
+            x0 = float(raw.get("x0", raw.get("left", 0.0)))
+            y0 = float(raw.get("y0", raw.get("top", 0.0)))
+            x1 = float(raw.get("x1", raw.get("right", x0)))
+            y1 = float(raw.get("y1", raw.get("bottom", y0)))
 
         if x1 < x0:
             x0, x1 = x1, x0
@@ -320,6 +337,10 @@ class UnsiloedParser:
     @classmethod
     def _coerce_words(cls, raw_words: list[dict[str, Any]], page: int) -> list[WordCitation]:
         """Coerce raw per-word entries into :class:`WordCitation` records.
+
+        Accepts ``ocr`` list entries (new schema:
+        ``{text, confidence, bbox:{left,top,width,height}}``)
+        or legacy ``words`` list entries (``{text, bbox:{x0,...}, confidence}``).
 
         Args:
             raw_words: Raw word entries from the API.
@@ -352,12 +373,11 @@ class UnsiloedParser:
         bbox: BBox,
         page: int,
     ) -> list[BBox]:
-        """Build per-line quad boxes for a chunk (feat 2).
+        """Build per-line quad boxes for a chunk.
 
         Resolution order:
 
-        * Explicit ``quads``/``lines``/``regions`` on the raw chunk (the vision
-          path returns OCR region boxes here) -> coerce each to points.
+        * Explicit ``quads``/``lines``/``regions`` on the raw entry — coerce each to points.
         * Otherwise group the word boxes into physical lines by their top edge.
         * Otherwise fall back to the union ``bbox`` as a single quad.
         """
@@ -397,6 +417,78 @@ class UnsiloedParser:
         return [bbox]
 
     @classmethod
+    def _normalize_segment(
+        cls,
+        seg: dict[str, Any],
+        chunk_id: str,
+        seg_idx: int,
+        scanned: bool,
+        document_id: str,
+        document_title: str | None,
+    ) -> ParsedChunk | None:
+        """Normalize a single segment dict into a :class:`ParsedChunk`.
+
+        Reads ``content`` (preferred) or ``markdown`` for text; ``page_number``
+        for page; ``bbox`` for the bounding box (``{left,top,width,height}``);
+        ``ocr`` (new) or ``words`` (legacy) for word entries; ``confidence``
+        for the score; and ``segment_id`` for the id.
+
+        Args:
+            seg: Raw segment (or legacy flat chunk) dict.
+            chunk_id: Parent chunk id, used as fallback when ``segment_id`` is absent.
+            seg_idx: Positional index within the chunk, used for synthetic ids.
+            scanned: Whether the document was parsed in OCR/scan mode.
+            document_id: Source document id.
+            document_title: Human-readable document label.
+
+        Returns:
+            A :class:`ParsedChunk`, or ``None`` if the segment has no text.
+        """
+        # Text: prefer content (plain text) over markdown.
+        text = str(
+            seg.get("content", seg.get("text", seg.get("markdown", "")))
+        ).strip()
+        if not text:
+            return None
+
+        # Page: new schema uses page_number (1-indexed); legacy uses page.
+        page = int(seg.get("page_number", seg.get("page", 1)))
+
+        # Bounding box.
+        bbox_raw = seg.get("bbox") or seg.get("bounding_box") or {}
+        bbox = cls._coerce_bbox(bbox_raw, page)
+
+        # Words: new schema uses `ocr`; legacy uses `words`.
+        raw_words: list[dict[str, Any]] = seg.get("ocr") or seg.get("words") or []
+        words = cls._coerce_words(raw_words, page)
+
+        # Quads (region boxes).
+        quads = cls._quads_for(seg, words, bbox, page)
+
+        # Confidence.
+        conf = seg.get("confidence", seg.get("score"))
+        if conf is None and words:
+            conf = sum(w.confidence for w in words) / len(words)
+        confidence = max(0.0, min(1.0, float(conf if conf is not None else 1.0)))
+
+        # ID: segment_id > parent chunk_id-segN > synthetic.
+        seg_id = seg.get("segment_id") or f"{chunk_id}-s{seg_idx}"
+
+        return ParsedChunk(
+            id=seg_id,
+            text=text,
+            page=page,
+            bbox=bbox,
+            confidence=round(confidence, 4),
+            document_id=document_id,
+            document_title=document_title,
+            scanned=bool(scanned or seg.get("scanned", False)),
+            quads=quads,
+            words=words,
+            source="unsiloed",
+        )
+
+    @classmethod
     def normalize(
         cls,
         result: dict[str, Any],
@@ -406,17 +498,20 @@ class UnsiloedParser:
     ) -> list[ParsedChunk]:
         """Normalize a completed Unsiloed result into :class:`ParsedChunk`.
 
+        Iterates ``result["chunks"]``; for each chunk, iterates
+        ``chunk["segments"]`` (new schema) or treats the chunk itself as a
+        single segment (legacy fallback). Each segment is mapped to one
+        :class:`ParsedChunk`.
+
         Args:
-            result: The job's result payload. Expected to contain a ``chunks``
-                (or ``blocks``/``elements``) list, each with ``text``, ``page``,
-                a bounding box, an optional ``words``/``quads`` list, and a
-                confidence.
-            scanned: Mark every chunk ``scanned=True`` (vision/OCR path, feat 3).
-            document_id: Source document id stamped on every chunk (feat 1).
-            document_title: Human label for the doc switcher (feat 1).
+            result: The job's result payload. Must contain a ``chunks``
+                (or ``blocks``/``elements``) list.
+            scanned: Mark every chunk ``scanned=True`` (OCR path).
+            document_id: Source document id stamped on every chunk.
+            document_title: Human label for the doc switcher.
 
         Returns:
-            Normalized chunks, skipping any entry without text.
+            Normalized chunks, skipping any segment without text.
 
         Raises:
             UnsiloedError: If no chunk list can be found in the result.
@@ -432,35 +527,29 @@ class UnsiloedParser:
             )
 
         chunks: list[ParsedChunk] = []
-        for idx, rc in enumerate(raw_chunks):
-            text = str(rc.get("text", rc.get("content", ""))).strip()
-            if not text:
-                continue
-            page = int(rc.get("page", rc.get("page_number", 1)))
-            bbox_raw = rc.get("bbox") or rc.get("bounding_box") or {}
-            bbox = cls._coerce_bbox(bbox_raw, page)
-            words = cls._coerce_words(list(rc.get("words", [])), page)
-            quads = cls._quads_for(rc, words, bbox, page)
-            conf = rc.get("confidence", rc.get("score"))
-            if conf is None and words:
-                conf = sum(w.confidence for w in words) / len(words)
-            confidence = max(0.0, min(1.0, float(conf if conf is not None else 1.0)))
-            chunk_id = str(rc.get("id", f"unsiloed-{idx}-p{page}"))
-            chunks.append(
-                ParsedChunk(
-                    id=chunk_id,
-                    text=text,
-                    page=page,
-                    bbox=bbox,
-                    confidence=round(confidence, 4),
+        for chunk_idx, rc in enumerate(raw_chunks):
+            # Derive a stable base id for this chunk.
+            chunk_id = str(
+                rc.get("chunk_id", rc.get("id", f"unsiloed-{chunk_idx}"))
+            )
+
+            # New schema: chunk has a `segments` array.
+            # Defensive fallback: if no `segments`, treat the chunk itself as
+            # a single segment (legacy flat-chunk shape).
+            segments: list[dict[str, Any]] = rc.get("segments") or [rc]
+
+            for seg_idx, seg in enumerate(segments):
+                parsed = cls._normalize_segment(
+                    seg=seg,
+                    chunk_id=chunk_id,
+                    seg_idx=seg_idx,
+                    scanned=scanned,
                     document_id=document_id,
                     document_title=document_title,
-                    scanned=bool(scanned or rc.get("scanned", False)),
-                    quads=quads,
-                    words=words,
-                    source="unsiloed",
                 )
-            )
+                if parsed is not None:
+                    chunks.append(parsed)
+
         return chunks
 
 
@@ -485,15 +574,14 @@ def _scan_confidence(text: str, floor: float = 0.62, ceiling: float = 0.82) -> f
 class ScannedFallbackParser:
     """Deterministic, network-free parser for scanned/image-only documents.
 
-    This is the offline counterpart of the Unsiloed VISION path (feat 3). A real
-    scan has no clean text layer, so this parser does NOT try to read glyphs:
-    it marks the document ``scanned=True`` and lays out one region box per
-    "OCR'd" line, using those region boxes as the chunk ``quads`` (and their
-    union as the chunk ``bbox``). It is fully deterministic so the fixture and
-    tests are reproducible.
+    This is the offline counterpart of the Unsiloed OCR path. A real scan has
+    no clean text layer, so this parser does NOT try to read glyphs: it marks
+    the document ``scanned=True`` and lays out one region box per "OCR'd" line,
+    using those region boxes as the chunk ``quads`` (and their union as the chunk
+    ``bbox``). It is fully deterministic so the fixture and tests are reproducible.
 
-    The recovered text is supplied by the caller (``lines``) -- in the offline
-    demo this stands in for what an OCR engine would have returned -- defaulting
+    The recovered text is supplied by the caller (``lines``) — in the offline
+    demo this stands in for what an OCR engine would have returned — defaulting
     to a small set of handwritten field-note lines that match the synthetic
     scanned sample produced by :func:`make_sample_pdf.make_scanned_pdf`.
 

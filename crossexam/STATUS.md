@@ -13,14 +13,14 @@ possible" given that **no live sponsor API keys exist in this environment.**
 > now **strict** CI gates. The demo fixture is **byte-identically regenerable** from the sample PDF.
 
 ## ✅ Done & verified (runs with mocks, no keys)
-- **Backend** (LiveKit voice agent + Moss retrieval) — 219 tests green.
+- **Backend** (LiveKit voice agent + Moss retrieval) — 277 tests green.
   - `on_user_turn_completed` (a LiveKit hook) injects Moss top-k as a `system` message — "no dead air".
   - Publishes structured citations over the LiveKit data channel in the exact shape the frontend parses.
   - `AgentSession` wired with guarded STT/LLM/TTS providers (clear error, never a silent no-op).
   - `MockIndex` fallback → app + tests run with zero API keys.
-- **Pipeline** (Unsiloed parse → Moss index) — 39 tests green.
+- **Pipeline** (Unsiloed parse → Moss index) — 99 tests green.
   - Deterministic network-free fallback; typer CLI (`parse`, `build-index`) with `--dry-run`.
-- **Frontend** (React voice UI + PDF bbox snap) — 62 tests green, `tsc` clean, `vite build` clean, eslint clean.
+- **Frontend** (React voice UI + PDF bbox snap) — 100 tests green, `tsc` clean, `vite build` clean, eslint clean.
   - Pure, unit-tested `lib/bbox.ts` (the demo-deciding transform); mock-mode runs the full 90s demo with no backend.
   - **Live-by-default**: reads `VITE_API_URL` (default `http://localhost:8000`), fetches `/config`,
     connects live when keys are present, and falls back to mock UI otherwise. Includes a PDF upload widget.
@@ -35,13 +35,14 @@ possible" given that **no live sponsor API keys exist in this environment.**
 - **Infra** — Dockerfiles (backend + frontend), docker-compose (boots in mock mode without `.env`),
   Makefile, GitHub Actions CI (green without keys), `.env.example`, runbook README.
 
-**Total: 320 automated tests passing.**
+**Total: 476 automated tests passing.**
 
 ## ✅ Resolved since the first cut (the completion round)
 - Real **sample-deposition.pdf** generated (admission p12, contradiction p41) + a pdfplumber
   text-layer parser; the 419-chunk fixture is regenerated from it (`make fixture`).
-- Moss + LiveKit provider surfaces **verified against docs and pinned**; recorded-response adapter
-  tests lock the shape; Moss errors fail **loudly** when keys are present (no silent empty results).
+- Moss + LiveKit provider surfaces **verified against docs and pinned**; LiveKit/OpenAI now
+  prefers the documented Responses API path, recorded-response adapter tests lock the shape,
+  and Moss errors fail **loudly** when keys are present (no silent empty results).
 - `crossexam-doctor` preflight reports READY/MISSING/MOCK without network calls — now ALSO
   covers HTTP API readiness (fastapi/pdfplumber importable) and the `/token` minting leg
   (livekit-api import + LiveKit creds). `make verify-live` runs it and probes `/healthz` + `/config`.
@@ -57,7 +58,7 @@ The external API *shapes* are verified against docs but cannot be exercised with
 | Item | File | Action at the event |
 |---|---|---|
 | **Moss SDK call** (constructor/`query`/result shape; bbox-in-metadata assumption) | `backend/.../retrieval/moss_client.py` | Run `crossexam-doctor`; swap creds; the recorded test documents the expected shape |
-| **Unsiloed REST surface** (`/v1/parse`, response keys) | `pipeline/.../unsiloed.py` | Validate against live Unsiloed docs (offline `--text-layer` path needs no key) |
+| **Unsiloed REST surface** (`POST /parse`, `GET /parse/{job_id}`, response keys) | `pipeline/.../unsiloed.py` | Validate against live Unsiloed with a real key (offline `--text-layer` path needs no key) |
 | **Moss package name** inconsistent across npm/PyPI | install step | Adapter tries `inferedge_moss` then `moss`; confirm the working import |
 | **Provider plugins** (Deepgram/OpenAI/Cartesia) + keys | `[voice]` extra + `.env` | `pip install '.[voice]'` (Docker does this) + set keys |
 

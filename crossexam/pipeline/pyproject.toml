@@ -24,6 +24,9 @@ pdf = [
     "pypdf>=4.0,<6.0",
     "pdfplumber>=0.11,<1.0",
 ]
+# Real Moss index build. The in-process SDK (no REST surface). Kept optional so
+# the offline disk/mock path and CI run without it. See build_index._create_moss_index.
+moss = ["inferedge-moss>=1.0.0b19"]
 dev = [
     "pytest>=8.0,<10.0",
     "ruff==0.15.0",

@@ -42,7 +42,9 @@ class Settings(BaseSettings):
     """
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        # Support both direct package runs from `crossexam/backend` and the
+        # documented project-root `crossexam/.env` used by Makefile/Compose.
+        env_file=("../.env", ".env"),
         env_file_encoding="utf-8",
         extra="ignore",
         case_sensitive=False,
@@ -52,6 +54,22 @@ class Settings(BaseSettings):
     moss_project_id: str | None = Field(default=None)
     moss_project_key: str | None = Field(default=None)
     moss_index_name: str = Field(default="crossexam-documents")
+    # Embedding model the Moss index is built/queried with. Default is Moss's
+    # edge model; "moss-mediumlm" trades latency for accuracy. Pipeline (build)
+    # and backend (query) must agree, so both read this single value.
+    moss_model_id: str = Field(default="moss-minilm")
+    # load_index tuning: when auto_refresh is on, Moss re-pulls the index from
+    # the cloud every refresh_interval_s so a live-upserted doc becomes
+    # queryable without an explicit reload. Off by default (deterministic demo).
+    moss_auto_refresh: bool = Field(default=False)
+    moss_refresh_interval_s: int = Field(default=600, ge=30, le=86400)
+    # create_index / add_docs return an async JOB; we poll get_job_status until
+    # COMPLETED. These bound that poll loop (timeout + interval, seconds).
+    moss_job_timeout_s: float = Field(default=120.0, ge=1.0, le=3600.0)
+    # ge=0.0 so a 0 interval is valid (poll as fast as the deadline allows —
+    # used by tests; the deadline still bounds the loop). The pipeline reads the
+    # MOSS_JOB_POLL_INTERVAL_S env var directly, so this bound must not reject 0.
+    moss_job_poll_interval_s: float = Field(default=1.0, ge=0.0, le=60.0)
 
     # --- LiveKit ------------------------------------------------------------
     livekit_url: str | None = Field(default=None)
@@ -71,6 +89,19 @@ class Settings(BaseSettings):
     deepgram_api_key: str | None = Field(default=None)
     openai_api_key: str | None = Field(default=None)
     cartesia_api_key: str | None = Field(default=None)
+
+    # Explicit model/voice pins for the live voice stack. Pinned (not left to
+    # plugin defaults) so a dependency bump can't silently change the model.
+    # `gpt-4.1` is LiveKit's direct-OpenAI example model and OpenAI's strongest
+    # non-reasoning model; for deeper but slower/costlier reasoning, override
+    # OPENAI_MODEL to a current GPT-5.x model after live latency testing.
+    deepgram_model: str = Field(default="nova-3")
+    deepgram_language: str = Field(default="en-US")
+    openai_model: str = Field(default="gpt-4.1")
+    cartesia_model: str = Field(default="sonic-3")
+    # Cartesia "Katie" — a voice Cartesia documents as tuned for voice agents.
+    cartesia_voice: str = Field(default="f786b574-daa5-4673-aa0c-cbe3e8534c02")
+    cartesia_language: str = Field(default="en")
 
     # --- Retrieval tuning ---------------------------------------------------
     top_k: int = Field(default=5, ge=1, le=50)

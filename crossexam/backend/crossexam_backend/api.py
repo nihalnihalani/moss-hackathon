@@ -173,27 +173,43 @@ def _index_to_mock_fixture(
     return len(records), new_index
 
 
-def _index_to_moss(
+async def _index_to_moss(
     settings: Settings, records: list[dict[str, Any]]
 ) -> tuple[int, str]:
-    """Upsert ``records`` into Moss via the pipeline's real ``build_index``.
+    """Upsert ``records`` into Moss via the pipeline's real ``build_index_async``.
+
+    RECOMMENDED path: pre-build the Moss index OFFLINE via ``crossexam-pipeline``
+    and keep live-upload as best-effort enrichment only. Live-upload is provided
+    for hackathon demos where offline pre-build is impractical.
 
     Imported lazily and guarded: if the pipeline package is not installed we
-    raise a clear error rather than silently falling back, because the caller has
+    raise a clear 503 rather than silently falling back, because the caller has
     already decided (real Moss creds present) that this is the live path.
 
-    ``build_index`` itself may fall back to writing the on-disk fixture when its
-    own credential check fails (e.g. a partially-filled env). We therefore read
-    the summary's ``mode`` and surface it honestly to the caller instead of
-    always reporting ``"moss"`` — a disk fallback must NOT be reported as
-    "indexed to Moss".
+    ``build_index_async`` is natively async — it ``await``s the in-process Moss
+    SDK (create-or-upsert, then polls the job to COMPLETED) without ever spinning
+    its own event loop — so we ``await`` it DIRECTLY on the FastAPI event loop.
+    This is the production-correct fix for the prior thread/WASM concern: the
+    earlier ``asyncio.to_thread(build_index, ...)`` hop ran the SDK off-loop,
+    which could clash with the SDK's in-process (WASM-backed) runtime. There is
+    no blocking work to offload, so no thread is needed.
+
+    If ``build_index_async`` raises (e.g. SDK runtime error) we log the failure
+    and DEGRADE gracefully to the on-disk fixture path — the endpoint returns
+    ``mode="mock"`` instead of 500-ing, so the demo stays up. The caller reloads
+    the mock index from the fixture, meaning the freshly-uploaded document is
+    still searchable offline.
+
+    ``build_index_async`` itself may also fall back internally when its own
+    credential check fails. We read the summary's ``mode`` and surface it
+    honestly rather than always reporting ``"moss"``.
 
     Returns:
         ``(chunks_indexed, mode)`` where ``mode`` is ``"moss"`` only when the
         pipeline actually upserted to Moss; ``"mock"`` when it wrote the fixture.
     """
     try:
-        from crossexam_pipeline.build_index import build_index
+        from crossexam_pipeline.build_index import build_index_async
         from crossexam_pipeline.models import ParsedChunk
     except ImportError as exc:
         raise HTTPException(
@@ -205,12 +221,53 @@ def _index_to_moss(
             ),
         ) from exc
     chunks = [ParsedChunk.model_validate(r) for r in records]
-    summary = build_index(chunks, index_name=settings.moss_index_name)
+    # build_index_async is natively async (awaits the in-process SDK and polls
+    # the job to completion) -> await it directly; no thread hop, no nested loop.
+    try:
+        summary = await build_index_async(chunks, index_name=settings.moss_index_name)
+    except Exception:  # noqa: BLE001 - Moss runtime error must not 500 the upload
+        logger.exception(
+            "documents.moss_upsert_failed index=%s chunk_count=%d; "
+            "degrading to on-disk fixture (mode=mock)",
+            settings.moss_index_name,
+            len(chunks),
+        )
+        # Degrade: write the fixture and let the caller reload MockIndex.
+        count, _new_index = _index_to_mock_fixture(settings, records)
+        return count, "mock"
     count = int(summary.get("chunk_count", len(records)))
-    # build_index reports mode in {"moss", "disk", "dry-run"}; only "moss" is a
-    # real upsert. Anything else means it wrote the disk fixture as a fallback.
+    # build_index_async reports mode in {"moss", "disk", "dry-run"}; only "moss"
+    # is a real upsert. Anything else means it wrote the disk fixture as fallback.
     mode = "moss" if summary.get("mode") == "moss" else "mock"
     return count, mode
+
+
+async def _reload_live_index(index: RetrievalIndex) -> None:
+    """Re-prewarm a live MossIndex so a freshly-upserted document is queryable.
+
+    A loaded Moss index does not automatically see documents upserted after it
+    was warmed, so we call ``await index.prewarm()`` (which re-runs
+    ``load_index`` and re-seeds the document-id set) followed by
+    ``refresh_document_ids()`` to snapshot the new corpus.
+
+    Guarded and best-effort: only runs when ``index`` actually exposes a
+    ``prewarm`` coroutine (the mock path does not need it), and any failure is
+    logged and swallowed so a reload error never 500s the upload — the document
+    is already upserted server-side and will surface on the next refresh.
+    """
+    prewarm = getattr(index, "prewarm", None)
+    if not callable(prewarm):
+        return
+    try:
+        await prewarm()
+        refresh = getattr(index, "refresh_document_ids", None)
+        if callable(refresh):
+            await refresh()
+    except Exception:  # noqa: BLE001 - reload failure must not 500 the upload
+        logger.exception(
+            "documents.live_reload_failed; upserted doc will surface on next "
+            "refresh cycle (upload still succeeds)"
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -354,10 +411,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         pages = ingest.page_count(records)
         if _moss_configured(settings):
-            chunks_indexed, mode = _index_to_moss(settings, records)
+            chunks_indexed, mode = await _index_to_moss(settings, records)
             if mode == "moss":
                 # Refresh the live index so the worker queries the new docs.
-                app.state.index = get_index(settings)
+                # The running app.state.index is a live MossIndex whose loaded
+                # copy won't see the freshly-upserted document until it reloads,
+                # so re-prewarm it (load_index + re-seed document ids) in place.
+                # Best-effort: a reload failure must NOT 500 the upload — the doc
+                # is already upserted server-side and becomes queryable on the
+                # next refresh cycle.
+                await _reload_live_index(app.state.index)
             else:
                 # build_index fell back to the disk fixture (it did NOT upsert to
                 # Moss). Reload the mock index from that fixture so queries see

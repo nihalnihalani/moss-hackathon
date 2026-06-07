@@ -101,12 +101,16 @@ Sources: [PyPI `inferedge-moss`](https://pypi.org/project/inferedge-moss/),
 [GitHub `usemoss/moss`](https://github.com/usemoss/moss),
 [moss.dev](https://www.moss.dev/).
 
+**Install (live path):** the real retrieval path is the in-process Moss SDK,
+**not a REST endpoint** — install it with `pip install '.[moss]'` (resolves the
+`inferedge-moss` distribution). The mock/test path needs nothing.
+
 **Package-name inconsistency (documented):** the PyPI *distribution* is
-`inferedge-moss` (`pip install inferedge-moss`), but the *import package* is
-reported as `inferedge_moss` by the docs site while the GitHub README shows
-`from moss import MossClient` / `pip install moss` (the npm sibling is
-`@inferedge/moss`). Because upstream is genuinely inconsistent, the adapter tries
-both import names (`inferedge_moss`, then `moss`) in `_load_moss_module()`.
+`inferedge-moss` (`pip install '.[moss]'`), but the *import package* is reported
+as `inferedge_moss` by the docs site while the GitHub README shows
+`from moss import MossClient` (the npm sibling is `@inferedge/moss`). Because
+upstream is genuinely inconsistent, the adapter tries both import names
+(`inferedge_moss`, then `moss`) in `_load_moss_module()`.
 
 **Verified surface (high confidence — consistent across PyPI + docs + GitHub):**
 
@@ -116,19 +120,32 @@ client = MossClient("project_id", "project_key")      # POSITIONAL args
 await client.load_index("index-name")
 results = await client.query(
     "index-name", "query text",
-    QueryOptions(top_k=3, alpha=0.6),  # alpha default 0.8; 0.0=keyword 1.0=semantic
+    QueryOptions(top_k=3, alpha=0.6),  # alpha default 0.8
+    filter=...,  # optional metadata predicate
 )
 for doc in results.docs:               # ranked list
-    doc.id, doc.text, doc.score        # per-doc fields
+    doc.id, doc.text, doc.score, doc.metadata  # per-doc fields
 results.time_taken_ms                  # server-measured latency
 ```
 
-**Could NOT verify (kept defensive, locked by `tests/test_moss_adapter.py`):**
-no public source documents bbox/page/page_width/page_height fields on a Moss
-document — `DocumentInfo` is `id` + `text` + optional `metadata` dict. For PDF
-citations the adapter therefore reads bbox/page from `doc.metadata` (or top-level
-attributes if a future version adds them). The exact key names are an assumption
-and are locked by a recorded-response test so a real swap is a fixture update.
+**Verified metadata contract:** Moss document metadata values are **all
+strings**. The pipeline writes `documentId`, `documentTitle` (optional),
+`scanned` (`"true"`/`"false"`), `page` (e.g. `"3"`), `confidence` (e.g.
+`"0.97"`), and the geometry (`bbox`, `words`, optional `quads`) as
+**JSON-encoded strings**. `_to_citation` is **dual-tolerant**: it parses both the
+real string contract and the older nested-dict form (DI/test fakes), JSON-decodes
+string geometry with a safe fallback so a malformed value never crashes the turn,
+and coerces page/confidence/scanned tolerantly. Locked by
+`tests/test_moss_adapter.py`.
+
+**Verified filter grammar:** the public SDK docs pass metadata filters as the
+`filter=` kwarg on `client.query(...)`; older/introspected SDK builds also
+accept `QueryOptions(filter=...)`, so the adapter supports both. Single field is
+`{"field": "documentId", "condition": {"$eq": id}}`; compound is
+`{"$and": [{"$or": [<per-id $eq clauses>]}]}`. The kwarg is `filter=` (singular).
+`query_multi` attempts the server-side filter and always applies an
+authoritative client-side post-filter, falling back to over-fetch + post-filter
+when the SDK rejects the filter shape.
 
 **Strict vs lenient mode:** `MossIndex` defaults to **strict** when Moss
 credentials are present — a query failure raises `MossQueryError` so a broken
@@ -138,24 +155,39 @@ always raises `MossClientUnavailableError`.
 
 ### LiveKit Agents provider plugins — `server.py`
 
-Source: [`livekit/agents`](https://github.com/livekit/agents) (via context7).
-Confirmed import paths and constructors (provider-key path, not LiveKit
-Inference):
+Sources: current LiveKit Agents 1.x documentation for `AgentSession`, Deepgram
+STT, OpenAI LLM, Cartesia TTS, Silero VAD, and the multilingual turn detector.
+CrossExam uses the provider-key plugin path rather than LiveKit Inference so the
+existing sponsor/provider keys in `.env` are honored.
 
 ```python
 from livekit.plugins import deepgram, openai, cartesia, silero
-stt = deepgram.STT(model="nova-3")        # livekit-plugins-deepgram
-llm = openai.LLM(model="gpt-4.1-mini")    # livekit-plugins-openai
-tts = cartesia.TTS(model="sonic-3", voice="...")  # livekit-plugins-cartesia
-vad = silero.VAD.load()                   # livekit-plugins-silero
-session = AgentSession(stt=stt, llm=llm, tts=tts, vad=vad)
+from livekit.plugins.turn_detector.multilingual import MultilingualModel
+
+stt = deepgram.STT(model="nova-3", language="en-US")
+llm = openai.responses.LLM(model="gpt-4.1")  # Responses API; default is env-overridable
+tts = cartesia.TTS(model="sonic-3", voice="...", language="en")
+vad = silero.VAD.load()
+session = AgentSession(
+    stt=stt,
+    llm=llm,
+    tts=tts,
+    vad=vad,
+    turn_handling=TurnHandlingOptions(turn_detection=MultilingualModel()),
+)
 ```
 
-The agent's `on_user_turn_completed(turn_ctx, new_message)` hook and
-`turn_ctx.add_message(role=, content=)` match LiveKit Agents `0.12.x`
-(the pinned `livekit-agents>=0.12,<1.0` range). LiveKit `1.0+` switched to
-`AgentServer` + `@server.rtc_session()`; if you upgrade, update `server.py`'s
-worker bootstrap accordingly.
+`server.py` prefers `openai.responses.LLM()` for direct OpenAI usage and falls
+back to `openai.LLM()` only for older `livekit-plugins-openai` builds that do
+not expose the `responses` namespace. The worker uses LiveKit Agents 1.x:
+`AgentSession`, `WorkerOptions`, `on_user_turn_completed`, `TurnHandlingOptions`,
+and `livekit.plugins.turn_detector.multilingual.MultilingualModel`.
+
+The default `OPENAI_MODEL=gpt-4.1` is intentional for a realtime voice agent:
+it is the model used in LiveKit's direct-OpenAI Responses example and is a fast
+non-reasoning option. OpenAI's current model docs recommend newer GPT-5.x models
+for more complex reasoning; set `OPENAI_MODEL` (for example to a GPT-5 mini /
+frontier model) only after validating live latency, cost and account access.
 
 ## Preflight / doctor
 
@@ -206,6 +238,11 @@ tests run with only `pydantic` + stdlib.
 | `MOSS_PROJECT_ID` | – | Required for the real Moss client |
 | `MOSS_PROJECT_KEY` | – | Required for the real Moss client |
 | `MOSS_INDEX_NAME` | `crossexam-documents` | Moss index to query |
+| `MOSS_MODEL_ID` | `moss-minilm` | Embedding model (optional); backend (query) and pipeline (build) must agree |
+| `MOSS_AUTO_REFRESH` | `false` | Re-pull the index on an interval so live-upserted docs become queryable without a manual reload |
+| `MOSS_REFRESH_INTERVAL_S` | `600` | Refresh cadence when `MOSS_AUTO_REFRESH=true` (30–86400) |
+| `MOSS_JOB_TIMEOUT_S` | `120` | Timeout for the async create-index / add-docs job poll loop |
+| `MOSS_JOB_POLL_INTERVAL_S` | `1` | Poll interval for that job loop |
 | `LIVEKIT_URL` | – | e.g. `wss://your-project.livekit.cloud` |
 | `LIVEKIT_API_KEY` | – | |
 | `LIVEKIT_API_SECRET` | – | |

@@ -35,11 +35,11 @@ dev = [
 # turn-detector model (livekit.plugins.turn_detector.multilingual) ships in the
 # livekit-plugins-turn-detector package (1.5.x) used by server.py.
 voice = [
-    "livekit-plugins-deepgram>=1.0,<2.0",
-    "livekit-plugins-openai>=1.0,<2.0",
-    "livekit-plugins-cartesia>=1.0,<2.0",
-    "livekit-plugins-silero>=1.0,<2.0",
-    "livekit-plugins-turn-detector>=1.0,<2.0",
+    "livekit-plugins-deepgram>=1.5,<2.0",
+    "livekit-plugins-openai>=1.5,<2.0",
+    "livekit-plugins-cartesia>=1.5,<2.0",
+    "livekit-plugins-silero>=1.5,<2.0",
+    "livekit-plugins-turn-detector>=1.5,<2.0",
 ]
 # HTTP API service (token minting + document upload). Optional so the worker /
 # test path installs without web deps; required to run `crossexam-api`. The
@@ -53,6 +53,14 @@ api = [
     # PyPI livekit-api 1.1.x). Provides `from livekit import api` -> AccessToken.
     "livekit-api>=1.0,<2.0",
     "pdfplumber>=0.10,<1.0",
+]
+# Real Moss retrieval SDK (sub-10ms in-process hybrid retrieval). Optional: the
+# mock/test path runs fully WITHOUT it (deterministic MockIndex). Install + set
+# MOSS_PROJECT_ID/MOSS_PROJECT_KEY only for the live retrieval path. The import
+# package is resolved as `inferedge_moss` then `moss`. Install with:
+# pip install 'crossexam-backend[moss]'.
+moss = [
+    "inferedge-moss>=1.0.0b19",
 ]
 # Optional cross-encoder reranker. The default LexicalReranker is zero-dependency
 # and always available; install this extra only to enable CrossEncoderReranker

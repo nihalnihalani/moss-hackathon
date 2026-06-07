@@ -19,7 +19,7 @@ export const DEFAULT_API_URL = 'http://localhost:8000';
 /** Resolve the configured backend base URL (trailing slash trimmed). */
 export function apiBaseUrl(): string {
   const env = import.meta.env as { VITE_API_URL?: string };
-  const raw = env.VITE_API_URL ?? DEFAULT_API_URL;
+  const raw = env.VITE_API_URL?.trim() || DEFAULT_API_URL;
   return raw.replace(/\/+$/, '');
 }
 
